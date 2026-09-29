@@ -1,11 +1,15 @@
-import { h, svg, $, todayIn, addDays, longDate, relativeDay, prefersReducedMotion, IST } from "./util.js";
+import { h, svg, $, todayIn, addDays, longDate, dayLabel, relativeDay, prefersReducedMotion, isDarkTheme, ago, IST } from "./util.js";
 import { icons, art } from "./icons.js";
-import { api, weatherAt } from "./api.js";
+import { api, weatherAt, ApiError } from "./api.js";
 import { createFlipDate } from "./flip.js";
+import { createLoader } from "./loader.js";
 import { renderTrain } from "./train.js";
 import { renderFlight } from "./flight.js";
 
 const today = () => todayIn(IST);
+const THEME_LABEL = { light: "Light", dark: "Dark", auto: "Match device" };
+const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
+const fmtFlight = (no) => no.replace(/^([A-Z0-9]{2})(\d)/, "$1 $2");
 
 const MODES = {
   train: {
@@ -15,9 +19,13 @@ const MODES = {
     hint: "5 digits, like 12786.",
     inputmode: "numeric",
     maxlength: 5,
-    valid: (v) => /^\d{5}$/.test(v),
     clean: (v) => v.replace(/\D/g, "").slice(0, 5),
-    error: "Train numbers have 5 digits.",
+    check: (v) => {
+      const d = v.replace(/\D/g, "");
+      if (!d) return "Enter your train's 5-digit number, like 12786.";
+      if (d.length !== 5) return `Train numbers have exactly 5 digits. That one has ${d.length}.`;
+      return null;
+    },
     dateQ: "When did it leave its first station?",
     dateHelp: "Pick the day it started its run, even if you board later. Live status covers the last 4 days.",
     cta: "Check live status",
@@ -28,14 +36,23 @@ const MODES = {
     title: "Which flight?",
     label: "Flight number",
     placeholder: "6E 6252",
-    hint: "Airline code and number, like 6E 6252 or AI 101.",
+    hint: "Airline code and number, like 6E 6252. The space is optional.",
     inputmode: "text",
     maxlength: 8,
-    valid: (v) => /^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(v.replace(/\s/g, "")),
-    clean: (v) => v.toUpperCase().replace(/[^A-Z0-9 ]/g, "").slice(0, 8),
-    error: "Flight numbers look like 6E 6252 or AI 101.",
+    // "6e6252" becomes "6E 6252" as you type
+    clean: (v) => {
+      const x = v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 7);
+      return x.length > 2 ? `${x.slice(0, 2)} ${x.slice(2)}` : x;
+    },
+    check: (v) => {
+      const x = v.replace(/\s/g, "");
+      if (!x) return "Enter a flight number, like 6E 6252.";
+      if (/^\d+$/.test(x)) return "Add the airline's 2-character code first. For example 6E 6252 or AI 101.";
+      if (!/^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(x)) return "That doesn't look like a flight number. Try something like 6E 6252 or AI 101.";
+      return null;
+    },
     dateQ: "Departure date",
-    dateHelp: "Local date at the departure airport.",
+    dateHelp: "Local date at the airport the flight leaves from.",
     cta: "Track flight",
     range: () => [addDays(today(), -2), addDays(today(), 7)],
     refreshMs: 90000,
@@ -93,16 +110,15 @@ qInput.addEventListener("input", () => {
 form.addEventListener("submit", (e) => {
   e.preventDefault();
   const { mode } = current();
-  const cfg = MODES[mode];
-  const value = qInput.value.trim();
-  if (!cfg.valid(value)) {
+  const problem = MODES[mode].check(qInput.value.trim());
+  if (problem) {
     qInput.setAttribute("aria-invalid", "true");
-    qError.textContent = cfg.error;
+    qError.textContent = problem;
     qError.hidden = false;
     qInput.focus();
     return;
   }
-  navigate({ m: mode, no: value.replace(/\s/g, ""), d: flip.value });
+  navigate({ m: mode, no: qInput.value.replace(/\s/g, ""), d: flip.value });
 });
 
 document.addEventListener("click", (e) => {
@@ -121,8 +137,64 @@ window.addEventListener("popstate", () => route());
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && session?.data && Date.now() - session.loadedAt > MODES[session.mode].refreshMs) load({ silent: true });
 });
+window.addEventListener("online", () => {
+  if (session?.error) retryNow();
+});
 
+$("#home-credit").append(credit());
+setupTheme();
 route();
+
+/* ------------------------------------------------------------------ */
+/* Appearance                                                          */
+/* ------------------------------------------------------------------ */
+
+function setupTheme() {
+  $("#theme-btn").addEventListener("click", () => {
+    const order = ["light", "dark", "auto"];
+    const next = order[(order.indexOf(document.documentElement.dataset.theme) + 1) % order.length];
+    setTheme(next);
+    toast(`Appearance: ${THEME_LABEL[next]}`);
+  });
+  for (const b of document.querySelectorAll("#theme-seg button")) {
+    b.prepend(svg(icons[THEME_ICON[b.dataset.theme]]));
+    b.addEventListener("click", () => setTheme(b.dataset.theme));
+  }
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (document.documentElement.dataset.theme === "auto") themeChanged();
+  });
+  syncThemeUI();
+}
+
+function setTheme(choice) {
+  document.documentElement.dataset.theme = choice;
+  try {
+    localStorage.setItem("theme", choice);
+  } catch {
+    /* private mode: the choice lasts for this visit */
+  }
+  themeChanged();
+}
+
+function themeChanged() {
+  syncThemeUI();
+  // Map colours are baked in when it loads, so redraw an open map.
+  if (session?.data && session.mapCtl) {
+    session.mapCtl.destroy();
+    session.mapCtl = null;
+    session.mapEl = null;
+    paint();
+  }
+}
+
+function syncThemeUI() {
+  const c = document.documentElement.dataset.theme || "light";
+  const btn = $("#theme-btn");
+  btn.replaceChildren(svg(icons[THEME_ICON[c]]));
+  btn.setAttribute("aria-label", `Appearance: ${THEME_LABEL[c]}. Tap to change.`);
+  for (const b of document.querySelectorAll("#theme-seg button")) b.setAttribute("aria-checked", String(b.dataset.theme === c));
+  $('meta[name="theme-color"]').setAttribute("content", isDarkTheme() ? "#16181d" : "#faf7f2");
+}
 
 /* ------------------------------------------------------------------ */
 /* Routing: the URL is the only state                                  */
@@ -142,9 +214,14 @@ function current() {
 function navigate(params, opts = {}) {
   const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v));
   const qs = new URLSearchParams(clean).toString();
-  const url = qs ? `?${qs}` : location.pathname;
-  history[opts.replace ? "replaceState" : "pushState"](null, "", url);
+  history[opts.replace ? "replaceState" : "pushState"](null, "", qs ? `?${qs}` : location.pathname);
   route(opts);
+}
+
+function backToSearch() {
+  const r = current();
+  prefill = { mode: r.mode, no: r.no, date: r.date };
+  navigate({ m: r.mode });
 }
 
 function route(opts = {}) {
@@ -157,8 +234,7 @@ function route(opts = {}) {
     if (target === "search") setupSearch(r);
     if (target === "status") openStatus(r);
     if (target === "home") document.title = "Track a train or flight";
-    const focusTarget = views[target].querySelector("[data-focus]");
-    focusTarget?.focus({ preventScroll: true });
+    views[target].querySelector("[data-focus]")?.focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: "instant" });
   };
 
@@ -204,8 +280,7 @@ function setupSearch(r) {
   qInput.autocapitalize = r.mode === "flight" ? "characters" : "off";
   const carry = prefill && prefill.mode === r.mode ? prefill : null;
   prefill = null;
-  const no = carry ? carry.no : "";
-  qInput.value = no ? cfg.clean(r.mode === "flight" ? no.replace(/^([A-Z0-9]{2})(\d)/, "$1 $2") : no) : "";
+  qInput.value = carry?.no ? cfg.clean(carry.no) : "";
   qInput.removeAttribute("aria-invalid");
   qError.hidden = true;
 
@@ -227,7 +302,8 @@ function setupSearch(r) {
 function stopSession() {
   if (!session) return;
   clearTimeout(session.timer);
-  clearTimeout(session.slowTimer);
+  clearInterval(session.retryTick);
+  session.loader?.destroy();
   session.io?.disconnect();
   session.mapCtl?.destroy();
   jumpBtn.classList.remove("show");
@@ -242,51 +318,85 @@ function openStatus(r) {
     return;
   }
   stopSession();
-  session = { ...r, data: null, loadedAt: 0, foldOpen: false, mapCtl: null, mapEl: null };
-  $("#status-title").textContent = r.mode === "train" ? `Train ${r.no}` : r.no.replace(/^([A-Z0-9]{2})(\d)/, "$1 $2");
+  session = { ...r, data: null, error: null, loadedAt: 0, foldOpen: false, mapCtl: null, mapEl: null, loader: null };
+  $("#status-title").textContent = r.mode === "train" ? `Train ${r.no}` : fmtFlight(r.no);
   $("#status-sub").textContent = longDate(r.date || today());
-  paintSkeleton();
   load();
 }
 
 $("#status-back").addEventListener("click", (e) => {
   e.preventDefault();
-  const r = current();
-  prefill = { mode: r.mode, no: r.no, date: r.date };
-  navigate({ m: r.mode });
+  backToSearch();
 });
-$("#status-refresh").addEventListener("click", () => load({ manual: true }));
+$("#status-refresh").addEventListener("click", () => (session?.data ? load({ manual: true }) : retryNow()));
 $("#status-share").addEventListener("click", share);
 jumpBtn.addEventListener("click", () => session?.currentRow?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "center" }));
+
+function showLoader(s) {
+  s.loader?.destroy();
+  s.loader = createLoader(s.mode, s.mode === "train" ? s.no : fmtFlight(s.no));
+  const bar = (w, hgt) => {
+    const el = h("span", { class: "skel" });
+    el.style.width = w;
+    el.style.height = hgt;
+    return el;
+  };
+  statusRoot.setAttribute("aria-busy", "true");
+  statusRoot.replaceChildren(
+    s.loader.el,
+    h("div", { class: "card skel-card", "aria-hidden": "true" }, bar("40%", "12px"), bar("65%", "26px"), bar("45%", "54px")),
+    h("div", { class: "card skel-card", "aria-hidden": "true" }, [80, 60, 72].map((w) => bar(`${w}%`, "14px")))
+  );
+}
 
 async function load({ silent = false, manual = false } = {}) {
   const s = session;
   if (!s) return;
   clearTimeout(s.timer);
+  clearInterval(s.retryTick);
   const btn = $("#status-refresh");
   btn.classList.add("spinning");
   btn.setAttribute("aria-busy", "true");
-  if (!s.data) s.slowTimer = setTimeout(() => session === s && paintSlowNote(), 6000);
+  if (!s.data) showLoader(s);
+
   try {
-    const data = await api(`/api/${s.mode}`, { no: s.no, date: s.date || today() });
+    if (!navigator.onLine) throw new ApiError("offline", "You're offline.");
+    const data = await api(`/api/${s.mode}`, { no: s.no, date: s.date || today() }, { timeout: s.mode === "train" ? 25000 : 20000, retries: 1 });
     if (session !== s) return;
+    if (s.loader) {
+      await s.loader.finish();
+      if (session !== s) return;
+      s.loader.destroy();
+      s.loader = null;
+    }
     s.data = data;
     s.loadedAt = Date.now();
+    s.error = null;
     paint();
     if (manual) toast("Updated just now");
   } catch (err) {
     if (session !== s) return;
-    if (s.data && (silent || manual)) toast("Could not refresh. Showing the last update.");
+    s.loader?.destroy();
+    s.loader = null;
+    s.error = err;
+    if (s.data) showRefreshProblem(err, manual || !silent);
     else paintError(err);
   } finally {
     if (session === s) {
-      clearTimeout(s.slowTimer);
       btn.classList.remove("spinning");
       btn.removeAttribute("aria-busy");
-      const done = s.data && ((s.mode === "train" && s.data.status?.phase === "arrived") || (s.mode === "flight" && ["landed", "cancelled"].includes(s.data.status?.phase)));
-      if (!done) s.timer = setTimeout(() => load({ silent: true }), MODES[s.mode].refreshMs);
+      const phase = s.data?.status?.phase;
+      const finished = (s.mode === "train" && phase === "arrived") || (s.mode === "flight" && ["landed", "cancelled"].includes(phase));
+      if (s.data && !finished) s.timer = setTimeout(() => load({ silent: true }), MODES[s.mode].refreshMs);
     }
   }
+}
+
+function retryNow() {
+  const s = session;
+  if (!s) return;
+  clearInterval(s.retryTick);
+  load();
 }
 
 function paint() {
@@ -302,7 +412,16 @@ function paint() {
           onPickStop: (code) => {
             const r = current();
             navigate({ m: r.mode, no: r.no, d: r.date, s: code }, { replace: true });
-            toast("Your stop is updated");
+            const name = s.data.stops.find((x) => x.code === code)?.name;
+            toast(name ? `${name} is now your stop` : "Your stop is updated");
+            window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+          },
+          onChangeStop: () => {
+            const card = $("#timeline-card");
+            if (!card) return;
+            card.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+            card.classList.add("picking");
+            setTimeout(() => card.classList.remove("picking"), 2600);
           },
           onToggleFold: () => {
             s.foldOpen = true;
@@ -328,7 +447,8 @@ function paint() {
     s.mode === "train"
       ? h("p", { class: "legend-note", text: "Small grey times are scheduled. Bold times are actual, or expected for stops ahead. Running data is crowd-sourced and can shift." })
       : null,
-    h("button", { type: "button", class: "link-quiet", "data-open": "sources", text: "Sources and credits" })
+    h("button", { type: "button", class: "link-quiet", "data-open": "sources", text: "Sources and credits" }),
+    credit()
   );
   statusRoot.replaceChildren(view.node, footer);
   statusRoot.setAttribute("aria-busy", "false");
@@ -339,11 +459,10 @@ function paint() {
   }
   if (before.size) window.scrollTo({ top: scrollY, behavior: "instant" });
 
-  const name = s.mode === "train" ? `${s.no} ${s.data.name || ""}` : `${s.data.number} ${s.data.departure?.code}-${s.data.arrival?.code}`;
   $("#status-sub").textContent = s.mode === "train" ? s.data.name : `${s.data.departure.code} to ${s.data.arrival.code}`;
-  document.title = name.trim();
+  document.title = (s.mode === "train" ? `${s.no} ${s.data.name || ""}` : `${s.data.number} ${s.data.departure?.code}-${s.data.arrival?.code}`).trim();
 
-  if (view.weatherPlace) weatherAt(view.weatherPlace.lat, view.weatherPlace.lon).then(view.addWeather).catch(() => {});
+  for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
 
   s.currentRow = view.currentRow;
   s.io?.disconnect();
@@ -377,70 +496,166 @@ function mountWhenVisible(s, spec) {
   io.observe(s.mapEl);
 }
 
-function paintSkeleton() {
-  const bar = (w, hgt) => {
-    const el = h("span", { class: "skel" });
-    el.style.width = w;
-    el.style.height = hgt;
-    return el;
-  };
-  statusRoot.setAttribute("aria-busy", "true");
-  statusRoot.replaceChildren(
-    h("div", { class: "card skel-card", "aria-hidden": "true" }, bar("40%", "12px"), bar("65%", "26px"), bar("45%", "54px"), bar("100%", "8px")),
-    h("div", { class: "card skel-card", "aria-hidden": "true" }, [80, 60, 72, 55, 66].map((w) => bar(`${w}%`, "14px"))),
-    h("p", { class: "sr-only", text: "Loading live status" })
-  );
-}
+/* ------------------------------------------------------------------ */
+/* Errors people can act on                                            */
+/* ------------------------------------------------------------------ */
 
-function paintSlowNote() {
-  if (session?.data) return;
-  statusRoot.append(
-    h(
-      "div",
-      { class: "card slow-note", role: "status" },
-      svg(art.slow),
-      h("div", {}, h("strong", { text: "Live data is slow right now" }), h("p", { class: "field-hint", text: "Taking longer than usual. Still trying." }))
-    )
-  );
+function describe(err, s) {
+  const r = current();
+  const [min, max] = MODES[s.mode].range();
+  const date = r.date || today();
+  const when = longDate(date);
+  const short = (d) => dayLabel(`${d}T12:00:00+05:30`);
+  const edit = { label: "Edit number or date", secondary: true, run: backToSearch };
+  const tryNow = { label: "Try again now", run: retryNow };
+  const goDate = (d) => ({ label: s.mode === "train" ? `Try the run that started ${short(d)}` : `Try ${short(d)}`, run: () => navigate({ m: r.mode, no: r.no, d }) });
+  const isTrain = s.mode === "train";
+
+  switch (err.code) {
+    case "offline":
+      return {
+        icon: icons.offline,
+        title: "You're offline",
+        body: "Check your internet connection. This page will load by itself the moment you're back.",
+        actions: [tryNow],
+      };
+    case "not_found": {
+      if (isTrain) {
+        const prev = addDays(date, -1);
+        return {
+          art: art.empty,
+          title: `No run of train ${s.no} on ${when}`,
+          body: "It may not run that day, or the number has a typo. Long-distance trains often start the day before you board.",
+          actions: [prev >= min ? goDate(prev) : null, edit],
+        };
+      }
+      const prev = addDays(date, -1);
+      const next = addDays(date, 1);
+      return {
+        icon: icons.plane2,
+        title: `No ${fmtFlight(s.no)} on ${when}`,
+        body: "Check the date. It's the departure date, in local time at the airport the flight leaves from.",
+        actions: [prev >= min ? goDate(prev) : null, next <= max ? { ...goDate(next), secondary: true } : null, edit],
+      };
+    }
+    case "invalid_train":
+    case "invalid_flight":
+    case "invalid_date":
+    case "date_out_of_range":
+      return { icon: icons.info, title: "That doesn't look quite right", body: err.message, actions: [edit] };
+    case "rate_limited":
+      return {
+        icon: icons.timer,
+        title: "That's a lot of checking",
+        body: "You've refreshed quite a bit in the last minute. Take a breath, we'll try again by ourselves.",
+        retryIn: 60,
+        actions: [edit],
+      };
+    case "quota_exhausted":
+      return {
+        icon: icons.plane2,
+        title: "Flight lookups are out for this month",
+        body: "Flights run on a free data plan with a monthly limit, and it's used up. It resets at the start of next month. Trains aren't affected.",
+        actions: [{ label: "Track a train instead", run: () => navigate({ m: "train" }) }],
+      };
+    case "flights_not_configured":
+      return {
+        icon: icons.plane2,
+        title: "Flights are almost ready",
+        body: "Flight tracking isn't switched on for this site yet. Train tracking works right now.",
+        actions: [{ label: "Track a train instead", run: () => navigate({ m: "train" }) }],
+      };
+    case "forbidden":
+    case "not_configured":
+      return {
+        icon: icons.info,
+        title: "This page can't reach live data",
+        body: "The site isn't connected to its data service yet. If this is your site, check ALLOWED_ORIGINS in the Worker settings.",
+        actions: [],
+      };
+    case "timeout":
+    case "network":
+    case "upstream_unavailable":
+      return {
+        icon: icons.signal,
+        title: "Live data is taking a moment",
+        body: isTrain
+          ? "The railway feeds didn't answer in time. It happens at busy hours and usually clears within a minute."
+          : "The flight data service didn't answer in time. It usually clears within a minute.",
+        retryIn: 30,
+        actions: [tryNow, edit],
+      };
+    default:
+      return {
+        icon: icons.info,
+        title: "Something went sideways",
+        body: "We hit an unexpected snag on our side. Trying again usually fixes it.",
+        retryIn: 30,
+        actions: [tryNow, edit],
+      };
+  }
 }
 
 function paintError(err) {
   const s = session;
-  const r = current();
-  const cfg = MODES[s.mode];
-  const [min] = cfg.range();
-  const actions = [];
-  let title = "Could not load live status";
-  let body = err.message || "Something went wrong.";
+  const d = describe(err, s);
+  const visual = d.art ? svg(d.art) : h("span", { class: "err-icon" }, svg(d.icon));
+  const empty = h("div", { class: "empty", role: "alert" }, visual, h("h2", { class: "display", text: d.title }), h("p", { text: d.body }));
 
-  if (err.code === "not_found") {
-    title = s.mode === "train" ? "No run found" : "Flight not found";
-    const yesterday = addDays(r.date || today(), -1);
-    if (s.mode === "train" && yesterday >= min)
-      actions.push(h("button", { type: "button", class: "cta", text: "Try the run that started a day earlier", on: { click: () => navigate({ m: r.mode, no: r.no, d: yesterday }) } }));
-  } else if (err.code === "flights_not_configured") {
-    title = "Flight tracking is not switched on yet";
-    body = "Add a flight data key to the Worker to turn it on. Train tracking works without it.";
-  } else if (err.code === "forbidden") {
-    title = "This site is not connected yet";
-    body = "Add this site's address to ALLOWED_ORIGINS in the Worker settings.";
-  } else if (err.code === "rate_limited") {
-    title = "Too many checks";
-    body = "Wait a minute, then try again.";
-  } else if (["timeout", "network", "upstream_unavailable"].includes(err.code)) {
-    title = "Live data is slow right now";
-    body = "The live source did not answer in time. Trying again in a minute.";
-    actions.push(h("button", { type: "button", class: "cta", text: "Try again now", on: { click: () => (paintSkeleton(), load()) } }));
+  if (d.retryIn) {
+    const ring = h("span", { class: "retry-ring", "aria-hidden": "true" });
+    const label = h("span", { text: `Trying again in ${d.retryIn}s` });
+    empty.append(h("p", { class: "retry-note" }, ring, label));
+    let left = d.retryIn;
+    s.retryTick = setInterval(() => {
+      left -= 1;
+      ring.style.setProperty("--k", String(left / d.retryIn));
+      label.textContent = left > 0 ? `Trying again in ${left}s` : "Trying again now";
+      if (left <= 0) retryNow();
+    }, 1000);
   }
-  actions.push(h("button", { type: "button", class: "cta secondary", text: "Change number or date", on: { click: () => navigate({ m: r.mode }) } }));
 
+  const actions = d.actions
+    .filter(Boolean)
+    .map((a) => h("button", { type: "button", class: `cta${a.secondary ? " secondary" : ""}`, text: a.label, on: { click: a.run } }));
   statusRoot.setAttribute("aria-busy", "false");
-  statusRoot.replaceChildren(h("div", { class: "empty", role: "alert" }, svg(art.empty), h("h2", { class: "display", text: title }), h("p", { text: body })), h("div", { class: "actions" }, actions));
+  statusRoot.replaceChildren(empty, h("div", { class: "actions" }, actions));
+}
+
+function showRefreshProblem(err, loud) {
+  statusRoot.querySelector(".refresh-banner")?.remove();
+  const when = ago(new Date(session.loadedAt).toISOString());
+  const text =
+    err.code === "offline"
+      ? `You're offline. Showing the update from ${when}. It refreshes when you're back online.`
+      : `Couldn't refresh just now. Showing the update from ${when}. Trying again shortly.`;
+  statusRoot.prepend(h("div", { class: "banner refresh-banner", role: "status" }, svg(icons.info), h("span", { text })));
+  if (loud) toast("Couldn't refresh. Showing the last update.");
+  session.timer = setTimeout(() => load({ silent: true }), err.code === "rate_limited" ? 60000 : 30000);
 }
 
 /* ------------------------------------------------------------------ */
 /* Small things                                                        */
 /* ------------------------------------------------------------------ */
+
+function credit() {
+  const a = (href, text) => h("a", { href, target: "_blank", rel: "noopener noreferrer", text });
+  return h(
+    "div",
+    { class: "credit" },
+    h("p", { class: "credit-meta", text: "No ads · No tracking · No sign-ups" }),
+    h(
+      "p",
+      { class: "credit-by" },
+      "Built with ",
+      svg(icons.heart),
+      " (and coffee and Claude) by ",
+      a("https://parth8.github.io/portfolio/", "Parth"),
+      ", because life's too short for trackers that fire 266 requests to show you one train."
+    ),
+    h("p", { class: "credit-links" }, a("https://linkedin.com/in/aggarwalparth", "LinkedIn ↗"), a("https://parth8.github.io/portfolio/", "Portfolio ↗"))
+  );
+}
 
 async function share() {
   const title = document.title;
@@ -451,7 +666,7 @@ async function share() {
       toast("Link copied");
     }
   } catch {
-    /* user closed the share sheet */
+    /* share sheet closed */
   }
 }
 

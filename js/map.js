@@ -1,4 +1,4 @@
-import { h, svg, splitLine } from "./util.js";
+import { h, svg, splitLine, isDarkTheme } from "./util.js";
 import { icons } from "./icons.js";
 
 const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
@@ -15,7 +15,7 @@ function loadLibrary() {
 function palette() {
   const css = getComputedStyle(document.body);
   const v = (name) => css.getPropertyValue(name).trim();
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = isDarkTheme();
   return {
     land: dark ? "#1c1f26" : "#f4efe6",
     landAlt: dark ? "#20242c" : "#efe8db",
@@ -96,7 +96,8 @@ export async function mountMap(container, opts) {
       type: "FeatureCollection",
       features: [line[0], line.at(-1)].map((p) => ({ type: "Feature", geometry: { type: "Point", coordinates: p }, properties: {} })),
     });
-    marker.setLngLat(pos).addTo(map);
+    if (o.hideMarker) marker.remove();
+    else marker.setLngLat(pos).addTo(map);
     if (o.mode === "flight" && Number.isFinite(o.trackDeg)) marker.setRotation(o.trackDeg);
     if (!fitted) {
       const b = new LngLatBounds(line[0], line[0]);

@@ -192,3 +192,17 @@ export function pointAtKm(stations, km) {
 }
 
 export const prefersReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** True when the page is showing its dark palette (explicit choice or matching the device). */
+export function isDarkTheme() {
+  const t = document.documentElement.dataset.theme;
+  return t === "dark" || (t === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+}
+
+/** Initial compass bearing in degrees from a to b ([lon, lat]). */
+export function bearing(a, b) {
+  const [l1, p1, l2, p2] = [rad(a[0]), rad(a[1]), rad(b[0]), rad(b[1])];
+  const y = Math.sin(l2 - l1) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(l2 - l1);
+  return (deg(Math.atan2(y, x)) + 360) % 360;
+}

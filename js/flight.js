@@ -1,156 +1,178 @@
-import { h, svg, clock, dayLabel, duration, ago, delayChip, fmtMin, tzOffset, greatCircle } from "./util.js";
-import { icons, weatherLook } from "./icons.js";
+import { h, svg, clock, dayLabel, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing } from "./util.js";
+import { icons, weatherLook, bodyType } from "./icons.js";
 
 /**
- * Build the flight status screen. The layout changes with the phase:
- * before takeoff the gate leads, in the air the map leads, after landing the belt leads.
+ * Flight status screen. The order changes with the phase:
+ * before takeoff the departure leads, in the air the map leads, after landing the belt leads.
  */
-export function renderFlight(f, ctx = {}) {
+export function renderFlight(f) {
   const dep = f.departure;
   const arr = f.arrival;
   const depTz = dep.tz || "UTC";
   const arrTz = arr.tz || "UTC";
   const phase = f.status.phase;
   const t12 = (iso, tz) => clock(iso, tz, true);
+  const depCity = dep.city || dep.code;
+  const arrCity = arr.city || arr.code;
 
   const depTime = dep.revised || dep.sched;
   const arrTime = (phase === "landed" && (arr.actual || arr.revised)) || arr.revised || arr.sched;
-  const now = Date.now();
-  const node = h("div", { class: "status-body" });
-
-  node.append(
-    h(
-      "header",
-      { class: "flight-head" },
-      h("p", { class: "field-hint tn", text: `${f.airline.name}, ${dayLabel(dep.sched, depTz)}` }),
-      h("h2", { class: "display hero-place", text: `${dep.city || dep.code} to ${arr.city || arr.code}` })
-    )
-  );
-
-  /* ---------------- live position (air) ---------------- */
-  let map = null;
-  let fraction = 0;
-  const haveGeo = [dep.lat, dep.lon, arr.lat, arr.lon].every(Number.isFinite);
   const takeoff = dep.actual || depTime;
+  const now = Date.now();
+  const reported = !!(f.position && Number.isFinite(f.position.lat));
+  const live = reported && f.position.source === "live";
+
+  let fraction = phase === "landed" ? 1 : 0;
   if (phase === "air" && takeoff && arrTime) {
     fraction = Math.min(0.99, Math.max(0.01, (now - Date.parse(takeoff)) / (Date.parse(arrTime) - Date.parse(takeoff))));
   }
-  if (phase === "air" && haveGeo) {
+
+  const blocks = {};
+
+  /* ---------------- header ---------------- */
+  blocks.head = h(
+    "header",
+    { class: "flight-head" },
+    h("p", { class: "field-hint tn", text: `${f.airline.name}, ${dayLabel(dep.sched, depTz)}` }),
+    h("h2", { class: "display hero-place", text: `${depCity} to ${arrCity}` })
+  );
+
+  /* ---------------- map (every phase) ---------------- */
+  let map = null;
+  const haveGeo = [dep.lat, dep.lon, arr.lat, arr.lon].every(Number.isFinite);
+  if (haveGeo) {
     const line = greatCircle([dep.lon, dep.lat], [arr.lon, arr.lat], 96);
-    const live = f.position && Number.isFinite(f.position.lat);
-    const el = h("div", { class: "map-box tall", role: "img", "aria-label": `Map of the flight from ${dep.code} to ${arr.code}` });
-    node.append(
-      h(
-        "section",
-        { class: "card map-card" },
-        h("span", { class: `map-badge${live ? "" : " estimated"}` }, h("i"), live ? "Live position" : "Estimated position"),
-        el,
-        live ? null : h("p", { class: "map-note", text: "No live signal right now. Position is estimated from the schedule." })
-      )
-    );
-    map = {
+    const startBearing = bearing(line[0], line[1]);
+    const endBearing = bearing(line.at(-2), line.at(-1));
+    let badge = { text: "Route", cls: "estimated" };
+    let note = null;
+    const opts = { mode: "flight", line, fraction, position: null, trackDeg: startBearing };
+
+    if (phase === "pre") {
+      badge = { text: `Waiting at ${dep.code}`, cls: "estimated" };
+      note = "Your route. The plane moves along it once it takes off.";
+      opts.position = line[0];
+    } else if (phase === "air") {
+      if (reported) {
+        badge = live ? { text: "Live position", cls: "" } : { text: "Reported position", cls: "" };
+        opts.position = [f.position.lon, f.position.lat];
+        opts.trackDeg = Number.isFinite(f.position.trackDeg) ? f.position.trackDeg : startBearing;
+      } else {
+        badge = { text: "Estimated position", cls: "estimated" };
+        note = "No receiver has picked up this plane in the last 10 minutes, so its position is estimated from the schedule.";
+      }
+    } else if (phase === "landed") {
+      badge = { text: `Landed at ${arr.code}`, cls: "" };
+      opts.position = line.at(-1);
+      opts.trackDeg = endBearing;
+    } else {
+      badge = { text: phase === "cancelled" ? "Cancelled" : "Diverted", cls: "estimated" };
+      opts.hideMarker = !reported;
+      if (reported) opts.position = [f.position.lon, f.position.lat];
+    }
+
+    const el = h("div", { class: `map-box${phase === "air" ? " tall" : ""}`, role: "img", "aria-label": `Map of the route from ${depCity} to ${arrCity}` });
+    blocks.map = h(
+      "section",
+      { class: "card map-card" },
+      h("span", { class: `map-badge ${badge.cls}` }, h("i"), badge.text),
       el,
-      opts: {
-        mode: "flight",
-        line,
-        fraction,
-        position: live ? [f.position.lon, f.position.lat] : null,
-        trackDeg: live ? f.position.trackDeg : null,
-      },
-    };
-    const stat = (label, value) => h("div", { class: "card stat" }, h("span", { text: label }), h("strong", { text: value }));
-    node.append(
-      h(
-        "div",
-        { class: "stat-grid" },
-        stat("Altitude", live && f.position.altFt ? `${Math.round(f.position.altFt).toLocaleString("en-IN")} ft` : "--"),
-        stat("Speed", live && f.position.speedKmh ? `${f.position.speedKmh} km/h` : "--"),
-        stat("Signal", live ? ago(f.position.at) : "Estimated")
-      )
+      note ? h("p", { class: "map-note", text: note }) : null
     );
+    map = { el, opts };
+  }
+
+  /* ---------------- in-air numbers ---------------- */
+  if (phase === "air") {
+    const stat = (label, value) => h("div", { class: "card stat" }, h("span", { text: label }), h("strong", { class: "tn", text: value }));
+    const left = f.distanceKm ? `${Math.round(f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km` : "--";
+    blocks.stats = reported
+      ? h(
+          "div",
+          { class: "stat-grid" },
+          stat("Altitude", f.position.altFt ? `${Math.round(f.position.altFt).toLocaleString("en-IN")} ft` : "Climbing"),
+          stat("Speed", f.position.speedKmh ? `${f.position.speedKmh} km/h` : "--"),
+          stat("Signal", f.position.ageSec != null && f.position.ageSec < 60 ? "Live now" : ago(f.position.at))
+        )
+      : h(
+          "div",
+          { class: "stat-grid" },
+          stat("In the air", duration(now - Date.parse(takeoff))),
+          stat("Distance left", left),
+          stat("Live signal", "Out of range")
+        );
   }
 
   /* ---------------- phase banner ---------------- */
   const banner = h("section", { class: "phase-banner", "aria-live": "polite" });
-  const setTone = (d) => banner.classList.add(d == null ? "tone" : d >= 15 ? "warn" : d <= 5 ? "good" : "tone");
+  const tone = (d) => banner.classList.add(d == null ? "tone" : d >= 15 ? "warn" : d <= 5 ? "good" : "tone");
   const lead = (t) => h("p", { class: "lead", text: t });
-  const big = (t, k) => h("p", { class: "big", "data-k": k, text: t });
+  const big = (t) => h("p", { class: "big", "data-k": "banner", text: t });
   const sub = (t) => h("p", { class: "sub", text: t });
 
   if (phase === "cancelled") {
     banner.classList.add("bad");
-    banner.append(lead("Flight status"), big("Cancelled", "b"), sub(`Check with ${f.airline.name} about rebooking.`));
+    banner.append(lead("Flight status"), big("Cancelled"), sub(`Check with ${f.airline.name} about rebooking or a refund.`));
   } else if (phase === "diverted") {
     banner.classList.add("warn");
-    banner.append(lead("Flight status"), big("Diverted", "b"), sub(`${f.airline.name} will share the new plan.`));
+    banner.append(lead("Flight status"), big("Diverted"), sub(`${f.airline.name} will share the new plan. We'll keep checking.`));
   } else if (phase === "pre") {
     const d = f.status.delayDep;
-    setTone(d);
+    tone(d);
     const until = Date.parse(depTime) - now;
     const dc = delayChip(d);
     const statusWord = /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
     banner.append(
       lead(until > 0 ? "Departs in" : "Departure"),
-      big(until > 0 ? duration(until) : t12(depTime, depTz), "b"),
+      big(until > 0 ? duration(until) : t12(depTime, depTz)),
       sub([statusWord, dc && dc.cls === "late" ? `Delayed ${fmtMin(d)}, now ${t12(depTime, depTz)}` : `On time at ${t12(depTime, depTz)}`].filter(Boolean).join(". "))
     );
   } else if (phase === "air") {
     const d = f.status.delayArr;
-    setTone(d);
+    tone(d);
     const dc = delayChip(d);
     const left = Math.max(0, Date.parse(arrTime) - now);
-    const total = f.distanceKm;
     banner.append(
       lead("Lands in"),
-      big(duration(left), "b"),
-      sub(`${t12(arrTime, arrTz)}, ${dc ? dc.text.toLowerCase() : "on schedule"}`),
+      big(duration(left)),
+      sub(`${t12(arrTime, arrTz)} in ${arrCity}, ${dc ? dc.text.toLowerCase() : "on schedule"}`),
       h("div", { class: "progress", "aria-hidden": "true" }, h("i")),
       h(
         "div",
         { class: "progress-legend tn" },
         h("span", { text: `${duration(now - Date.parse(takeoff))} flown` }),
-        h("span", { text: total ? `${Math.round(total * (1 - fraction)).toLocaleString("en-IN")} km to go` : `${duration(left)} left` })
+        h("span", { text: `${Math.round(fraction * 100)}% of the way` })
       )
     );
     banner.querySelector(".progress i").style.width = `${fraction * 100}%`;
+    if (f.status.inferred) banner.append(sub("Spotted in the air before the airline updated its status."));
   } else {
     const d = f.status.delayArr;
-    setTone(d);
+    tone(d);
     const dc = delayChip(d);
-    banner.append(
-      lead("Landed"),
-      big(t12(arrTime, arrTz), "b"),
-      sub(`${dc ? dc.text : "On time"}, ${ago(arrTime)}. ${arr.actual && dep.actual ? `${duration(Date.parse(arr.actual) - Date.parse(dep.actual))} in the air.` : ""}`.trim())
-    );
+    banner.append(lead(`Landed in ${arrCity}`), big(t12(arrTime, arrTz)), sub(`${dc ? dc.text : "On time"}, ${ago(arrTime)}.`));
   }
-  node.append(banner);
+  blocks.banner = banner;
 
-  /* ---------------- belt hero after landing ---------------- */
+  /* ---------------- after landing ---------------- */
   if (phase === "landed" && arr.belt) {
-    node.append(
-      h(
-        "section",
-        { class: "belt-hero" },
-        h("span", { class: "belt-num tn", text: arr.belt }),
-        h("div", {}, h("span", {}, "Baggage belt"), h("strong", { text: `Your bags arrive on belt ${arr.belt}` }))
-      )
+    blocks.belt = h(
+      "section",
+      { class: "belt-hero" },
+      h("span", { class: "belt-num tn", text: arr.belt }),
+      h("div", {}, h("span", {}, "Baggage belt"), h("strong", { text: `Your bags arrive on belt ${arr.belt}` }))
     );
   }
   if (phase === "landed" && navigator.share) {
-    node.append(
-      h(
-        "button",
-        {
-          type: "button",
-          class: "cta secondary",
-          on: {
-            click: () =>
-              navigator.share({ text: `Landed in ${arr.city || arr.code} at ${t12(arrTime, arrTz)}. ${f.number}` }).catch(() => {}),
-          },
-        },
-        svg(icons.message),
-        "Tell someone you've landed"
-      )
+    blocks.share = h(
+      "button",
+      {
+        type: "button",
+        class: "cta secondary",
+        on: { click: () => navigator.share({ text: `Landed in ${arrCity} at ${t12(arrTime, arrTz)}. ${f.number}` }).catch(() => {}) },
+      },
+      svg(icons.message),
+      "Tell someone you've landed"
     );
   }
 
@@ -165,11 +187,10 @@ export function renderFlight(f, ctx = {}) {
       neutral = true;
     }
     if (!isDep && phase === "landed") note = late ? `Landed ${late.text.toLowerCase()}` : "Landed";
-    const gateChips = [];
-    if (m.gate) gateChips.push(h("span", { class: "gate-chip" }, svg(icons.gate), m.gate, h("small", { text: "Gate" })));
-    if (m.terminal) gateChips.push(h("span", { class: "chip quiet", text: `Terminal ${m.terminal}` }));
-    if (!isDep && m.belt && phase !== "landed") gateChips.push(h("span", { class: "gate-chip" }, svg(icons.belt), m.belt, h("small", { text: "Belt" })));
-    if (isDep && m.checkIn && phase === "pre") gateChips.push(h("span", { class: "chip quiet", text: `Check-in ${m.checkIn}` }));
+    const chips = [];
+    if (m.gate) chips.push(h("span", { class: "gate-chip" }, svg(icons.gate), m.gate, h("small", { text: "Gate" })));
+    if (m.terminal) chips.push(h("span", { class: "chip quiet", text: `Terminal ${m.terminal}` }));
+    if (!isDep && m.belt && phase !== "landed") chips.push(h("span", { class: "gate-chip" }, svg(icons.belt), m.belt, h("small", { text: "Belt" })));
     return h(
       "div",
       { class: "leg" },
@@ -180,101 +201,175 @@ export function renderFlight(f, ctx = {}) {
         h("p", { class: "leg-time" }, h("span", { "data-k": `${side}-t`, text: t12(time, tz) }), changed ? h("s", { text: t12(m.sched, tz) }) : null),
         h("p", { class: `leg-note ${neutral ? "neutral" : late && late.cls === "late" ? "t-late" : "t-early"}`, text: note })
       ),
-      h("div", { class: "leg-chips" }, gateChips)
+      h("div", { class: "leg-chips" }, chips)
     );
   };
-  const flightMins = depTime && arrTime ? Date.parse(arrTime) - Date.parse(depTime) : null;
-  node.append(
+  const blockMins = depTime && arrTime ? Date.parse(arrTime) - Date.parse(depTime) : null;
+  blocks.route = h(
+    "section",
+    { class: "card" },
+    legBlock("dep", dep, depTz, depTime, f.status.delayDep, true),
     h(
-      "section",
-      { class: "card" },
-      legBlock("dep", dep, depTz, depTime, f.status.delayDep, true),
-      h(
-        "div",
-        { class: "leg-mid" },
-        h("span", { class: "tn", text: [flightMins ? duration(flightMins) : null, f.distanceKm ? `${f.distanceKm.toLocaleString("en-IN")} km` : null].filter(Boolean).join(", ") }),
-        h("i")
-      ),
-      legBlock("arr", arr, arrTz, arrTime, f.status.delayArr, false)
-    )
+      "div",
+      { class: "leg-mid" },
+      h("span", { class: "tn", text: [blockMins ? duration(blockMins) : null, f.distanceKm ? `${f.distanceKm.toLocaleString("en-IN")} km` : null].filter(Boolean).join(", ") }),
+      h("i")
+    ),
+    legBlock("arr", arr, arrTz, arrTime, f.status.delayArr, false)
   );
 
-  /* ---------------- good to know ---------------- */
+  /* ---------------- good to know: icon tiles ---------------- */
   const gtkTitle = h("h2", { class: "section-title display", text: "Good to know" });
-  const gtk = h("section", { class: "gtk" });
-  const items = [];
-  const depOff = tzOffset(depTz, new Date(arrTime || now));
-  const arrOff = tzOffset(arrTz, new Date(arrTime || now));
-  if (depOff !== arrOff && arrTime) {
-    const diff = arrOff - depOff;
-    const sign = diff > 0 ? "+" : "-";
+  const facts = h("section", { class: "facts", "aria-label": "Good to know" });
+  const tile = (icon, tint, label, value, small, wide = false) =>
+    wide
+      ? h(
+          "div",
+          { class: "card fact wide" },
+          h("span", { class: `fact-icon ${tint}` }, svg(icon)),
+          h("div", {}, h("span", { text: label }), h("strong", { text: value }), small ? h("small", { text: small }) : null)
+        )
+      : h(
+          "div",
+          { class: "card fact" },
+          h("span", { class: `fact-icon ${tint}` }, svg(icon)),
+          h("span", { text: label }),
+          h("strong", { text: value }),
+          small ? h("small", { text: small }) : null
+        );
+
+  const fixed = [];
+  const body = bodyType(f.aircraft?.model);
+  if (body) fixed.push(tile(body.icon, "", body.label, f.aircraft.model, f.aircraft.reg ? `Registration ${f.aircraft.reg}` : null));
+  if (phase === "landed" && dep.actual && arr.actual) {
+    fixed.push(tile(icons.timer, "", "Time in the air", duration(Date.parse(arr.actual) - Date.parse(dep.actual)), "Runway to runway"));
+  } else if (blockMins) {
+    fixed.push(tile(icons.timer, "", "Flight time", duration(blockMins), "Gate to gate"));
+  }
+  if (f.distanceKm) fixed.push(tile(icons.route, "", "Distance", `${f.distanceKm.toLocaleString("en-IN")} km`, "As the crow flies"));
+  if (phase === "pre" && dep.checkIn) fixed.push(tile(icons.desk, "lav", "Check-in", `Desks ${dep.checkIn}`, `At ${dep.code}`));
+  if (dep.terminal || arr.terminal)
+    fixed.push(tile(icons.terminal, "lav", "Terminals", `${dep.terminal ? `T${dep.terminal}` : dep.code} to ${arr.terminal ? `T${arr.terminal}` : arr.code}`, null));
+
+  const wide = [];
+  const refTime = new Date(arrTime || now);
+  const diff = tzOffset(arrTz, refTime) - tzOffset(depTz, refTime);
+  if (diff && arrTime) {
     const hh = Math.floor(Math.abs(diff) / 60);
     const mm = Math.abs(diff) % 60;
-    const label = `${sign}${hh ? `${hh} h` : ""}${hh && mm ? " " : ""}${mm ? `${mm} min` : ""}`;
-    items.push(
-      gtkItem(icons.clock, "cool", `${label} time change`, `${t12(arrTime, arrTz)} arrival is ${t12(arrTime, depTz)} ${dep.city || dep.code} time.`)
-    );
-    if (phase === "landed") items.push(gtkItem(icons.clock, "", "Local time now", `${t12(new Date().toISOString(), arrTz)} in ${arr.city || arr.code}.`));
-  }
-  if (f.aircraft && (f.aircraft.model || f.aircraft.reg)) {
-    items.push(gtkItem(icons.plane2, "", "Your aircraft", [f.aircraft.model, f.aircraft.reg].filter(Boolean).join(", ")));
+    const label = `${diff > 0 ? "+" : "-"}${hh ? `${hh} h` : ""}${hh && mm ? " " : ""}${mm ? `${mm} min` : ""}`;
+    wide.push(tile(icons.globe, "lav", "Time change", `${label} in ${arrCity}`, `${t12(arrTime, arrTz)} arrival is ${t12(arrTime, depTz)} ${depCity} time.`, true));
+    if (phase === "landed") wide.push(tile(icons.clock, "", "Local time now", `${t12(new Date().toISOString(), arrTz)} in ${arrCity}`, null, true));
   }
 
-  function paint(extra = []) {
-    const all = [...extra, ...items];
-    gtk.replaceChildren(...all);
-    gtkTitle.hidden = all.length === 0;
+  const slots = { arr: null, dep: null, sun: null };
+  function paint() {
+    const all = [slots.arr, slots.dep, ...fixed].filter(Boolean);
+    // an odd tile out stretches across instead of leaving a hole
+    all.forEach((el, i) => el.classList.toggle("stretch", all.length % 2 === 1 && i === all.length - 1));
+    facts.replaceChildren(...all, ...wide, ...(slots.sun ? [slots.sun] : []));
+    gtkTitle.hidden = !facts.childElementCount;
   }
   paint();
-  node.append(gtkTitle, gtk);
 
-  function addWeather(w) {
-    if (!w || !w.hourly || !arrTime) return;
-    const extra = [];
-    const atLocal = (s) => Date.parse(`${s}:00Z`) - (w.offsetSec || 0) * 1000;
-    const t = Date.parse(arrTime);
-    let temp = w.current.temp;
-    let code = w.current.code;
-    let isDay = w.current.isDay;
-    if (phase !== "landed") {
-      let best = -1;
-      let gap = Infinity;
-      w.hourly.time.forEach((ts, k) => {
-        const g = Math.abs(atLocal(ts) - t);
-        if (g < gap) {
-          gap = g;
-          best = k;
-        }
-      });
-      if (best >= 0 && gap < 90 * 60000) {
-        temp = w.hourly.temp[best];
-        code = w.hourly.code[best];
+  const atLocal = (w, s) => Date.parse(`${s}:00Z`) - (w.offsetSec || 0) * 1000;
+  function nearest(w, t) {
+    let best = -1;
+    let gap = Infinity;
+    w.hourly.time.forEach((ts, k) => {
+      const g = Math.abs(atLocal(w, ts) - t);
+      if (g < gap) {
+        gap = g;
+        best = k;
       }
-      const day = new Intl.DateTimeFormat("en-CA", { timeZone: arrTz }).format(new Date(t));
-      const d = w.daily.date.indexOf(day);
-      if (d >= 0) {
-        const rise = atLocal(w.daily.sunrise[d]);
-        const set = atLocal(w.daily.sunset[d]);
-        isDay = t > rise && t < set;
-        if (t > set) extra.push(gtkItem(icons.sunset, "warm", "Landing after dark", `Sunset in ${arr.city || arr.code} is at ${t12(new Date(set).toISOString(), arrTz)}.`));
-        else if (t < rise) extra.push(gtkItem(icons.sunset, "warm", "Landing before sunrise", `Sunrise in ${arr.city || arr.code} is at ${t12(new Date(rise).toISOString(), arrTz)}.`));
-      }
-    }
-    if (temp != null) {
-      const look = weatherLook(code, isDay);
-      extra.unshift(gtkItem(look.icon, "", phase === "landed" ? `Weather in ${arr.city || arr.code}` : "Arrival weather", `${Math.round(temp)}°C and ${look.label}${phase === "landed" ? " right now" : ""}`));
-    }
-    paint(extra);
+    });
+    return gap < 90 * 60000 ? best : -1;
+  }
+  function sunAt(w, t, tz) {
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(t));
+    const d = w.daily.date.indexOf(day);
+    if (d < 0) return { isDay: true, rise: null, set: null };
+    const rise = atLocal(w, w.daily.sunrise[d]);
+    const set = atLocal(w, w.daily.sunset[d]);
+    return { isDay: t > rise && t < set, rise, set };
   }
 
-  return { node, map, currentRow: null, weatherPlace: Number.isFinite(arr.lat) ? { lat: arr.lat, lon: arr.lon } : null, addWeather };
+  const weather = [];
+  if (Number.isFinite(arr.lat)) {
+    weather.push({
+      lat: arr.lat,
+      lon: arr.lon,
+      apply: (w) => {
+        if (!w?.hourly) return;
+        const t = Date.parse(arrTime || new Date().toISOString());
+        const sun = sunAt(w, t, arrTz);
+        let temp = w.current.temp;
+        let code = w.current.code;
+        let isDay = w.current.isDay;
+        let when = "Right now";
+        if (phase !== "landed") {
+          const k = nearest(w, t);
+          if (k >= 0) {
+            temp = w.hourly.temp[k];
+            code = w.hourly.code[k];
+            isDay = sun.isDay;
+            when = "At landing";
+          }
+          if (sun.set && t > sun.set)
+            slots.sun = tile(icons.sunset, "warm", "Landing after dark", `Sunset in ${arrCity} is ${t12(new Date(sun.set).toISOString(), arrTz)}`, null, true);
+          else if (sun.rise && t < sun.rise)
+            slots.sun = tile(icons.sunset, "warm", "Landing before sunrise", `Sunrise in ${arrCity} is ${t12(new Date(sun.rise).toISOString(), arrTz)}`, null, true);
+        }
+        if (temp == null) return;
+        const look = weatherLook(code, isDay);
+        slots.arr = tile(look.icon, "", `Weather in ${arrCity}`, `${Math.round(temp)}°C`, `${cap(look.label)}. ${when}`);
+        paint();
+      },
+    });
+  }
+  if (phase === "pre" && Number.isFinite(dep.lat)) {
+    weather.push({
+      lat: dep.lat,
+      lon: dep.lon,
+      apply: (w) => {
+        if (!w?.hourly) return;
+        const t = Date.parse(depTime);
+        const k = nearest(w, t);
+        const temp = k >= 0 ? w.hourly.temp[k] : w.current.temp;
+        const code = k >= 0 ? w.hourly.code[k] : w.current.code;
+        if (temp == null) return;
+        const look = weatherLook(code, sunAt(w, t, depTz).isDay);
+        slots.dep = tile(look.icon, "", `Weather in ${depCity}`, `${Math.round(temp)}°C`, `${cap(look.label)}. At take-off`);
+        paint();
+      },
+    });
+  }
+
+  const link = (href, text) => h("a", { href, target: "_blank", rel: "noopener noreferrer", text });
+  const credit = h(
+    "p",
+    { class: "data-credit" },
+    "Flight data by ",
+    link("https://aerodatabox.com", "AeroDataBox"),
+    ". Live positions from ",
+    link("https://adsb.lol", "adsb.lol"),
+    " and ",
+    link("https://adsb.fi", "adsb.fi"),
+    "."
+  );
+
+  /* ---------------- order by phase ---------------- */
+  const order =
+    {
+      pre: ["head", "banner", "route", "map"],
+      air: ["head", "map", "stats", "banner", "route"],
+      landed: ["head", "banner", "belt", "share", "route", "map"],
+      cancelled: ["head", "banner", "route", "map"],
+      diverted: ["head", "banner", "map", "route"],
+    }[phase] || ["head", "banner", "route", "map"];
+
+  const node = h("div", { class: "status-body" }, order.map((k) => blocks[k]).filter(Boolean), gtkTitle, facts, credit);
+  return { node, map, currentRow: null, weather };
 }
 
-function gtkItem(icon, tone, title, subText) {
-  return h(
-    "div",
-    { class: "card gtk-item" },
-    h("span", { class: `gtk-icon ${tone}` }, svg(icon)),
-    h("div", {}, h("strong", { text: title }), h("span", { text: subText }))
-  );
-}
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);

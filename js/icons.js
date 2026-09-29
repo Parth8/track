@@ -66,3 +66,35 @@ export function weatherLook(code, isDay = true) {
   if (code <= 86) return { label: "snow showers", icon: icons.snow };
   return { label: "thunderstorms", icon: icons.storm };
 }
+
+const t = (body) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+
+Object.assign(icons, {
+  themeLight: t('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2.5 12h2M19.5 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/>'),
+  themeDark: t('<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>'),
+  themeAuto: t('<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor" stroke="none"/>'),
+  // aircraft seen from above, nose up
+  jetNarrow: t('<path d="M12 2.5c.8 0 1.3 1.4 1.3 2.6v4.6l7.2 4.1v1.9l-7.2-2.2v4.6l2.3 1.7v1.5L12 20.3l-3.6 1v-1.5l2.3-1.7v-4.6l-7.2 2.2v-1.9l7.2-4.1V5.1c0-1.2.5-2.6 1.3-2.6z"/>'),
+  jetWide: t('<path d="M12 2c1.2 0 1.9 1.6 1.9 3v4.3l8.1 4.3v2.1l-8.1-2.3v4.4l2.6 1.9v1.6L12 20.2l-4.5 1.1v-1.6l2.6-1.9v-4.4L2 15.7v-2.1l8.1-4.3V5c0-1.4.7-3 1.9-3z"/><path d="M6.2 12.1v1.6M17.8 12.1v1.6"/>'),
+  turboprop: t('<path d="M12 3c.7 0 1.1 1.2 1.1 2.2v4.4h7.4v2h-7.4v5.3l2.2 1.6v1.4L12 19l-3.3.9v-1.4l2.2-1.6v-5.3H3.5v-2h7.4V5.2C10.9 4.2 11.3 3 12 3z"/><path d="M5.5 8.2v3M18.5 8.2v3"/>'),
+  route: t('<circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M7 18h6a3 3 0 0 0 0-6h-2a3 3 0 0 1 0-6h6"/>'),
+  timer: t('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 1.5M9.5 2.5h5"/>'),
+  desk: t('<path d="M3 11h18M5 11v8M19 11v8M8 7h8l1 4H7l1-4z"/>'),
+  terminal: t('<path d="M3 20h18M5 20V9l7-4 7 4v11M9 20v-5h6v5"/>'),
+  globe: t('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
+  offline: t('<path d="M2 8.8a15 15 0 0 1 4.2-2.6M9.3 5.3A15 15 0 0 1 22 8.8M5 12.4a10 10 0 0 1 4-2.1M15 10.4a10 10 0 0 1 4 2M8.5 16a5 5 0 0 1 7 0M12 20h.01M3 3l18 18"/>'),
+  signal: t('<path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01M2 9a15 15 0 0 1 20 0"/>'),
+  tap: t('<path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11M12 10.5V9a1.5 1.5 0 0 1 3 0v2M15 10.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-.6a6 6 0 0 1-4.9-2.6L4 14.8a1.5 1.5 0 0 1 2.4-1.8L9 15"/>'),
+  heart: t('<path d="M12 20s-7.5-4.6-7.5-10.1A4.2 4.2 0 0 1 12 7.3a4.2 4.2 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"/>'),
+});
+
+/** Rough body type from an aircraft model string. */
+export function bodyType(model) {
+  const m = (model || "").toUpperCase();
+  if (!m) return null;
+  if (/ATR|Q400|DASH ?8|DHC|TURBOPROP|SAAB|KING AIR|CARAVAN|TWIN OTTER|DO ?228/.test(m)) return { label: "Turboprop", icon: icons.turboprop };
+  if (/A3[3-8]\d|A350|A380|747|767|777|787|A300|A310|MD-11|IL-96/.test(m)) return { label: "Wide-body jet", icon: icons.jetWide };
+  if (/E1[79]\d|EMBRAER|CRJ|ERJ|SUPERJET|SSJ|E-JET/.test(m)) return { label: "Regional jet", icon: icons.jetNarrow };
+  return { label: "Narrow-body jet", icon: icons.jetNarrow };
+}

@@ -51,7 +51,7 @@ export function renderTrain(j, ctx) {
       "div",
       { class: "hero-row" },
       h("span", { class: "eyebrow-pin" }, svg(icons.pin), mineIsOrigin ? "Your start" : "Your stop"),
-      h("button", { class: "pill-btn", type: "button", text: "Change", on: { click: () => document.getElementById("timeline")?.scrollIntoView({ behavior: "smooth" }) } })
+      h("button", { class: "pill-btn", type: "button", text: "Change", "aria-label": "Change your stop", on: { click: () => ctx.onChangeStop?.() } })
     ),
     h("h2", { class: "hero-place display", id: "hero-place", text: mine.name }),
     h(
@@ -61,6 +61,12 @@ export function renderTrain(j, ctx) {
       h("div", { class: "hero-when" }, h("span", { text: dayLabel(mineTime) }), h("strong", { class: "tn", "data-k": "hero-when", text: whenText }))
     ),
     h("div", { class: "hero-chips" }, chips.map((c) => h("span", { class: `chip ${c.cls}`, text: c.text }))),
+    h(
+      "p",
+      { class: "stop-hint" },
+      svg(icons.tap),
+      mine === dest ? "Getting off earlier? Tap your station in the list below." : "Not your stop? Tap any station in the list below."
+    ),
     h(
       "div",
       { class: "ribbon", role: "img", "aria-label": `${kmDone} of ${kmTotal} km covered` },
@@ -145,8 +151,11 @@ export function renderTrain(j, ctx) {
 
   /* ---------------- timeline ---------------- */
   node.append(h("h2", { class: "section-title display", id: "timeline", text: "Stops" }));
-  const tl = h("section", { class: "card timeline", "aria-label": "Stops on this journey" });
-  tl.append(h("div", { class: "tl-head", "aria-hidden": "true" }, h("span", { text: "Station" }), h("span", { text: "Arr" }), h("span", { text: "Dep" })));
+  const tl = h("section", { class: "card timeline", id: "timeline-card", "aria-label": "Stops on this journey" });
+  tl.append(
+    h("p", { class: "tl-hint" }, svg(icons.tap), "Tap a station to make it your stop"),
+    h("div", { class: "tl-head", "aria-hidden": "true" }, h("span", { text: "Station" }), h("span", { text: "Arr" }), h("span", { text: "Dep" }))
+  );
 
   const hiddenIdx = new Set();
   if (!ctx.foldOpen && phase !== "not_started") {
@@ -319,7 +328,7 @@ export function renderTrain(j, ctx) {
     paintGtk(extra);
   }
 
-  return { node, map, currentRow, weatherPlace: mine.lat != null ? { lat: mine.lat, lon: mine.lon } : null, addWeather };
+  return { node, map, currentRow, weather: mine.lat != null ? [{ lat: mine.lat, lon: mine.lon, apply: addWeather }] : [] };
 }
 
 function rail(up, down, isHere = false) {
