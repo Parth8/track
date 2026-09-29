@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+  <!-- 1. Your Worker address. Edit here AND in connect-src below if it changes. -->
+  <meta name="api-base" content="https://journey-api.8parthaggarwal1999.workers.dev">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://journey-api.8parthaggarwal1999.workers.dev https://tiles.openfreemap.org; worker-src 'self' blob:; child-src blob:; object-src 'none'; base-uri 'none'; form-action 'none'; upgrade-insecure-requests">
+  <meta name="referrer" content="no-referrer">
+
+  <title>Track a train or flight</title>
+  <meta name="description" content="Live train running status and flight tracking. Calm, fast, and free of ads.">
+  <meta name="theme-color" content="#faf7f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#16181d" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/jakarta.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/fraunces.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body data-mode="home">
+  <a class="skip" href="#app">Skip to content</a>
+
+  <main id="app">
+    <!-- ============ Home ============ -->
+    <section id="view-home" class="view" aria-labelledby="home-title">
+      <header class="home-head">
+        <p class="greet" id="greet">Hello</p>
+        <h1 class="display" id="home-title" tabindex="-1" data-focus>What are we tracking?</h1>
+      </header>
+
+      <nav class="mode-cards" aria-label="Choose what to track">
+        <a class="mode-card train" href="?m=train" data-mode="train">
+          <span class="mode-art" id="art-train"></span>
+          <span class="mode-foot">
+            <span>
+              <span class="mode-name display">Train</span>
+              <span class="mode-hint">Live position, platforms and delays by train number</span>
+            </span>
+            <span class="mode-go" data-icon="next"></span>
+          </span>
+        </a>
+        <a class="mode-card flight" href="?m=flight" data-mode="flight">
+          <span class="mode-art" id="art-flight"></span>
+          <span class="mode-foot">
+            <span>
+              <span class="mode-name display">Flight</span>
+              <span class="mode-hint">Gates, delays, live map and your baggage belt</span>
+            </span>
+            <span class="mode-go" data-icon="next"></span>
+          </span>
+        </a>
+      </nav>
+
+      <footer class="home-foot">
+        <button type="button" class="link-quiet" data-open="sources">Sources and credits</button>
+      </footer>
+    </section>
+
+    <!-- ============ Search ============ -->
+    <section id="view-search" class="view" hidden aria-labelledby="search-title">
+      <div class="topbar">
+        <a class="icon-btn" id="search-back" href="./" aria-label="Back" data-icon="back"></a>
+      </div>
+      <form id="search-form" class="search-form" novalidate>
+        <h1 class="display" id="search-title" tabindex="-1" data-focus>Which train?</h1>
+
+        <label class="field-label" for="q" id="q-label">Train number</label>
+        <input class="q-input" id="q" name="q" autocomplete="off" spellcheck="false" enterkeyhint="go"
+               aria-describedby="q-hint q-error">
+        <p class="field-hint" id="q-hint"></p>
+        <p class="field-error" id="q-error" role="alert" hidden></p>
+
+        <fieldset class="date-set">
+          <legend class="fieldset-legend" id="date-q">When did it leave its first station?</legend>
+          <p class="field-hint" id="date-help"></p>
+          <div class="flips" id="flip"></div>
+          <p class="date-readout" aria-live="polite">
+            <span id="date-long"></span>
+            <span class="chip accent" id="date-rel"></span>
+          </p>
+        </fieldset>
+
+        <button class="cta" type="submit"><span id="cta-text">Check live status</span><span data-icon="next"></span></button>
+      </form>
+    </section>
+
+    <!-- ============ Status ============ -->
+    <section id="view-status" class="view" hidden aria-labelledby="status-title">
+      <div class="topbar">
+        <a class="icon-btn" id="status-back" href="./" aria-label="Back to search" data-icon="back"></a>
+        <div class="topbar-title">
+          <strong id="status-title" tabindex="-1" data-focus></strong>
+          <span id="status-sub"></span>
+        </div>
+        <button type="button" class="icon-btn" id="status-share" aria-label="Share this page" data-icon="share"></button>
+        <button type="button" class="icon-btn" id="status-refresh" aria-label="Refresh now" data-icon="refresh"></button>
+      </div>
+      <div id="status-root" aria-live="polite" aria-busy="true"></div>
+    </section>
+  </main>
+
+  <button type="button" class="jump" id="jump"><i></i>Jump to train</button>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <!-- ============ Sources and credits ============ -->
+  <dialog class="sheet" id="sources" aria-labelledby="sources-title">
+    <div class="sheet-inner">
+      <span class="sheet-grab" aria-hidden="true"></span>
+      <div class="sheet-head">
+        <h2 class="display" id="sources-title">Sources and credits</h2>
+        <button type="button" class="icon-btn" id="sources-close" aria-label="Close" data-icon="close"></button>
+      </div>
+      <div class="src-row"><span>Train running status</span><span>Crowd-sourced and public railway data</span></div>
+      <div class="src-row"><span>Flight schedules and gates</span><span>AeroDataBox</span></div>
+      <div class="src-row"><span>Live aircraft positions</span><span>adsb.lol</span></div>
+      <div class="src-row"><span>Maps</span><span>OpenFreeMap, OpenMapTiles, OpenStreetMap</span></div>
+      <div class="src-row"><span>Weather</span><span>Open-Meteo, CC BY 4.0</span></div>
+      <p>Aircraft positions from <a href="https://adsb.lol" rel="noopener noreferrer" target="_blank">adsb.lol</a> (ODbL). Map data © <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> contributors. Weather by <a href="https://open-meteo.com" rel="noopener noreferrer" target="_blank">Open-Meteo</a>.</p>
+      <p>Not affiliated with Indian Railways, any airline, or the providers above. Times can be wrong, so confirm at the station or with your airline.</p>
+    </div>
+  </dialog>
+</body>
+</html>
