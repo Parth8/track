@@ -369,7 +369,47 @@ export function renderFlight(f) {
     }[phase] || ["head", "banner", "route", "map"];
 
   const node = h("div", { class: "status-body" }, order.map((k) => blocks[k]).filter(Boolean), gtkTitle, facts, credit);
-  return { node, map, currentRow: null, weather };
+
+  const shareTone = ["bad", "warn", "good"].find((c) => banner.classList.contains(c)) || "tone";
+  const shareTiles = [];
+  // tiles add something the big number above them doesn't already say
+  if (phase === "pre") {
+    if (dep.gate) shareTiles.push({ label: "Gate", value: dep.gate });
+    if (dep.terminal) shareTiles.push({ label: "Terminal", value: dep.terminal });
+    if (dep.checkIn) shareTiles.push({ label: "Check-in", value: dep.checkIn });
+    if (!shareTiles.length && blockMins) shareTiles.push({ label: "Flight time", value: duration(blockMins) });
+  } else if (phase === "air") {
+    if (reported && f.position.altFt) shareTiles.push({ label: "Altitude", value: `${Math.round(f.position.altFt / 1000)}k ft` });
+    if (reported && f.position.speedKmh) shareTiles.push({ label: "Speed", value: `${f.position.speedKmh} km/h` });
+    if (f.distanceKm) shareTiles.push({ label: "To go", value: `${Math.round(f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km` });
+  } else if (phase === "landed") {
+    if (arr.belt) shareTiles.push({ label: "Belt", value: arr.belt });
+    if (arr.terminal) shareTiles.push({ label: "Terminal", value: arr.terminal });
+    if (dep.actual && arr.actual) shareTiles.push({ label: "In the air", value: duration(Date.parse(arr.actual) - Date.parse(dep.actual)) });
+  }
+  const share = {
+    mode: "flight",
+    kicker: f.number,
+    subtitle: `${f.airline.name}, ${dayLabel(dep.sched, depTz)}`,
+    from: dep.code,
+    to: arr.code,
+    fromCity: depCity,
+    toCity: arrCity,
+    fraction,
+    tone: shareTone,
+    lead: banner.querySelector(".lead")?.textContent,
+    big: banner.querySelector(".big")?.textContent,
+    sub: banner.querySelector(".sub")?.textContent,
+    tiles: shareTiles,
+    updated: `Updated ${t12(new Date().toISOString(), depTz)}`,
+    text:
+      phase === "landed"
+        ? `${f.number} landed in ${arrCity} at ${t12(arrTime, arrTz)}. Live:`
+        : phase === "air"
+          ? `${f.number} lands in ${arrCity} at ${t12(arrTime, arrTz)}. Live:`
+          : `${f.number} from ${depCity} to ${arrCity}. Live:`,
+  };
+  return { node, map, currentRow: null, weather, share };
 }
 
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);

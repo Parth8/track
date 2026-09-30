@@ -3,6 +3,7 @@ import { icons, art } from "./icons.js";
 import { api, weatherAt, ApiError } from "./api.js";
 import { createFlipDate } from "./flip.js";
 import { createLoader } from "./loader.js";
+import { renderShareImage } from "./share-card.js";
 import { renderTrain } from "./train.js";
 import { renderFlight } from "./flight.js";
 
@@ -30,7 +31,7 @@ const MODES = {
     dateHelp: "Pick the day it started its run, even if you board later. Live status covers the last 4 days.",
     cta: "Check live status",
     range: () => [addDays(today(), -3), today()],
-    refreshMs: 60000,
+    refreshMs: () => 30000,
   },
   flight: {
     title: "Which flight?",
@@ -55,7 +56,8 @@ const MODES = {
     dateHelp: "Local date at the airport the flight leaves from.",
     cta: "Track flight",
     range: () => [addDays(today(), -2), addDays(today(), 7)],
-    refreshMs: 90000,
+    // live position is free, so refresh often while airborne; schedules change slowly
+    refreshMs: (data) => (data?.status?.phase === "air" ? 30000 : 90000),
   },
 };
 
@@ -135,7 +137,7 @@ sources.addEventListener("click", (e) => {
 
 window.addEventListener("popstate", () => route());
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && session?.data && Date.now() - session.loadedAt > MODES[session.mode].refreshMs) load({ silent: true });
+  if (document.visibilityState === "visible" && session?.data && Date.now() - session.loadedAt > MODES[session.mode].refreshMs(session.data)) load({ silent: true });
 });
 window.addEventListener("online", () => {
   if (session?.error) retryNow();
@@ -361,7 +363,8 @@ async function load({ silent = false, manual = false } = {}) {
 
   try {
     if (!navigator.onLine) throw new ApiError("offline", "You're offline.");
-    const data = await api(`/api/${s.mode}`, { no: s.no, date: s.date || today() }, { timeout: s.mode === "train" ? 25000 : 20000, retries: 1 });
+    const params = { no: s.no, date: s.date || today(), fresh: manual && s.mode === "train" ? "1" : null };
+    const data = await api(`/api/${s.mode}`, params, { timeout: s.mode === "train" ? 25000 : 20000, retries: 1 });
     if (session !== s) return;
     if (s.loader) {
       await s.loader.finish();
@@ -387,7 +390,7 @@ async function load({ silent = false, manual = false } = {}) {
       btn.removeAttribute("aria-busy");
       const phase = s.data?.status?.phase;
       const finished = (s.mode === "train" && phase === "arrived") || (s.mode === "flight" && ["landed", "cancelled"].includes(phase));
-      if (s.data && !finished) s.timer = setTimeout(() => load({ silent: true }), MODES[s.mode].refreshMs);
+      if (s.data && !finished) s.timer = setTimeout(() => load({ silent: true }), MODES[s.mode].refreshMs(s.data));
     }
   }
 }
@@ -463,6 +466,15 @@ function paint() {
   document.title = (s.mode === "train" ? `${s.no} ${s.data.name || ""}` : `${s.data.number} ${s.data.departure?.code}-${s.data.arrival?.code}`).trim();
 
   for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
+
+  // Draw the share card in the background so tapping Share is instant.
+  s.share = view.share;
+  s.shareImage = null;
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 300));
+  idle(() => {
+    if (session !== s || s.share !== view.share) return;
+    s.shareImage = renderShareImage(view.share).catch(() => null);
+  });
 
   s.currentRow = view.currentRow;
   s.io?.disconnect();
@@ -638,11 +650,29 @@ function showRefreshProblem(err, loud) {
 /* Small things                                                        */
 /* ------------------------------------------------------------------ */
 
+function support() {
+  return h(
+    "div",
+    { class: "support" },
+    h("span", { class: "support-icon" }, svg(icons.cup)),
+    h(
+      "div",
+      { class: "support-text" },
+      h("strong", { text: "Like it this way?" }),
+      h("p", {
+        text: "Track is free, has no ads, and will stay that way. If it saved you a call to the enquiry counter, you can chip in for a chai. It goes towards the parts that aren't free, like a bigger flight-data plan.",
+      })
+    ),
+    h("a", { class: "support-btn", href: "https://buymeacoffee.com/parth8", target: "_blank", rel: "noopener noreferrer" }, svg(icons.cup), "Chip in for a chai")
+  );
+}
+
 function credit() {
   const a = (href, text) => h("a", { href, target: "_blank", rel: "noopener noreferrer", text });
   return h(
     "div",
     { class: "credit" },
+    support(),
     h("p", { class: "credit-meta", text: "No ads · No tracking · No sign-ups" }),
     h(
       "p",
@@ -658,17 +688,73 @@ function credit() {
 }
 
 async function share() {
+  const s = session;
+  const url = location.href;
   const title = document.title;
+  const text = s?.share?.text ? `${s.share.text} ${url}` : url;
+  const blob = s?.share ? await (s.shareImage || (s.shareImage = renderShareImage(s.share).catch(() => null))) : null;
+  const file = blob ? new File([blob], `${s.mode}-${s.no}.png`, { type: "image/png" }) : null;
+
+  // Phones: native share sheet with the picture and the link together.
+  if (file && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title, text });
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return;
+    }
+  }
+  // Desktop and older phones: preview the picture with copy and save buttons.
+  if (blob) return openSharePreview(blob, file.name, url, text);
   try {
-    if (navigator.share) await navigator.share({ title, url: location.href });
+    if (navigator.share) await navigator.share({ title, text: s?.share?.text || title, url });
     else {
-      await navigator.clipboard.writeText(location.href);
+      await navigator.clipboard.writeText(url);
       toast("Link copied");
     }
   } catch {
     /* share sheet closed */
   }
 }
+
+const shareSheet = $("#share-sheet");
+let previewUrl = null;
+function openSharePreview(blob, name, url, text) {
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = URL.createObjectURL(blob);
+  $("#share-img").src = previewUrl;
+  $("#share-img").alt = s_alt(text);
+  const copyImg = $("#share-copy-img");
+  copyImg.hidden = !(window.ClipboardItem && navigator.clipboard?.write);
+  copyImg.onclick = async () => {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      toast("Picture copied");
+    } catch {
+      toast("Couldn't copy the picture here. Try Save instead.");
+    }
+  };
+  $("#share-download").onclick = () => {
+    const a = h("a", { href: previewUrl, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+  };
+  $("#share-copy-link").onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("Link copied");
+    } catch {
+      toast("Couldn't copy. Long-press the address bar instead.");
+    }
+  };
+  shareSheet.showModal();
+}
+const s_alt = (text) => `Share card: ${text.replace(/ Live:.*$/, "")}`;
+$("#share-close").addEventListener("click", () => shareSheet.close());
+shareSheet.addEventListener("click", (e) => {
+  if (e.target === shareSheet) shareSheet.close();
+});
 
 let toastTimer;
 function toast(message) {

@@ -112,8 +112,9 @@ export function renderTrain(j, ctx) {
   const staleMin = j.status.lastUpdated ? (Date.now() - Date.parse(j.status.lastUpdated)) / 60000 : 0;
   const stale = phase === "running" && staleMin > 20;
   if (j.status.lastUpdated && phase !== "not_started") {
+    const checked = j.status.checkedAt ? `, checked ${ago(j.status.checkedAt)}` : "";
     now.append(
-      h("p", { class: `now-fresh${stale ? " stale" : ""}` }, h("i"), `Location reported ${ago(j.status.lastUpdated)}`)
+      h("p", { class: `now-fresh${stale ? " stale" : ""}` }, h("i"), `Railway report ${ago(j.status.lastUpdated)}${checked}`)
     );
   }
   node.append(now);
@@ -328,7 +329,31 @@ export function renderTrain(j, ctx) {
     paintGtk(extra);
   }
 
-  return { node, map, currentRow, weather: mine.lat != null ? [{ lat: mine.lat, lon: mine.lon, apply: addWeather }] : [] };
+  const lastChip = chips.at(-1) || null;
+  const share = {
+    mode: "train",
+    kicker: `Train ${j.number}`,
+    subtitle: j.name,
+    eyebrow: mineIsOrigin ? "Starting from" : mine.passed ? "Arrived at" : "Arriving at",
+    place: mine.name,
+    time: clock(mineTime),
+    whenTop: dayLabel(mineTime),
+    whenBottom: whenText,
+    chip: lastChip,
+    progress: {
+      fraction: kmDone / kmTotal,
+      left: origin.code,
+      right: dest.code,
+      middle: `${kmDone} of ${kmTotal} km`,
+      dots: halts.map((s, i) => (s === mine ? "m" : i === lastPassedIdx && phase === "running" ? "c" : s.passed ? "p" : "")),
+    },
+    nowLead: now.querySelector(".now-lead")?.textContent,
+    now: now.querySelector(".now-text")?.textContent,
+    updated: `Updated ${clock(new Date().toISOString())} IST`,
+    text: `Train ${j.number} ${mine.passed ? "reached" : "reaches"} ${mine.name} ${mine.passed ? "at" : "around"} ${clock(mineTime)}${lastChip ? ` (${lastChip.text.toLowerCase()})` : ""}. Live:`,
+  };
+
+  return { node, map, currentRow, share, weather: mine.lat != null ? [{ lat: mine.lat, lon: mine.lon, apply: addWeather }] : [] };
 }
 
 function rail(up, down, isHere = false) {

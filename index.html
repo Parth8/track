@@ -39,7 +39,7 @@
           <span class="mode-foot">
             <span>
               <span class="mode-name display">Train</span>
-              <span class="mode-hint"><i>(Indian Railways)</i><br>Live position, platforms and delays by train number</span>
+              <span class="mode-hint">Live position, platforms and delays by train number</span>
             </span>
             <span class="mode-go" data-icon="next"></span>
           </span>
@@ -49,7 +49,7 @@
           <span class="mode-foot">
             <span>
               <span class="mode-name display">Flight</span>
-              <span class="mode-hint"><i>(Worldwide)</i><br>Gates, delays, live map and your baggage belt</span>
+              <span class="mode-hint">Gates, delays, live map and your baggage belt</span>
             </span>
             <span class="mode-go" data-icon="next"></span>
           </span>
@@ -108,6 +108,23 @@
   <button type="button" class="jump" id="jump"><i></i>Jump to train</button>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <!-- ============ Share preview (desktop and older phones) ============ -->
+  <dialog class="sheet" id="share-sheet" aria-labelledby="share-title">
+    <div class="sheet-inner">
+      <span class="sheet-grab" aria-hidden="true"></span>
+      <div class="sheet-head">
+        <h2 class="display" id="share-title">Share</h2>
+        <button type="button" class="icon-btn" id="share-close" aria-label="Close" data-icon="close"></button>
+      </div>
+      <img class="share-img" id="share-img" alt="">
+      <div class="share-actions">
+        <button type="button" class="cta" id="share-copy-img">Copy picture</button>
+        <button type="button" class="cta secondary" id="share-download">Save picture</button>
+        <button type="button" class="cta secondary" id="share-copy-link">Copy link</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- ============ Sources and credits ============ -->
   <dialog class="sheet" id="sources" aria-labelledby="sources-title">
     <div class="sheet-inner">
@@ -131,6 +148,7 @@
       <p>Flight data by <a href="https://aerodatabox.com" rel="noopener noreferrer" target="_blank">AeroDataBox</a>. Aircraft positions from <a href="https://adsb.lol" rel="noopener noreferrer" target="_blank">adsb.lol</a> (ODbL) and <a href="https://adsb.fi" rel="noopener noreferrer" target="_blank">adsb.fi</a>. Map data © <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> contributors. Weather by <a href="https://open-meteo.com" rel="noopener noreferrer" target="_blank">Open-Meteo</a>.</p>
       <p>Not affiliated with Indian Railways, any airline, or the providers above. Times can be wrong, so confirm at the station or with your airline.</p>
       <p>The only thing this site keeps on your device is your appearance choice. No accounts, no cookies, no history.</p>
+      <p>Track is free and has no ads. If you'd like to help with running costs, you can <a href="https://buymeacoffee.com/parth8" rel="noopener noreferrer" target="_blank">chip in for a chai</a>.</p>
     </div>
   </dialog>
 </body>

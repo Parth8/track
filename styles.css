@@ -2215,3 +2215,93 @@ a {
 .fact.stretch .fact-icon {
   grid-row: 1 / span 3;
 }
+
+/* ============================================================
+   Share preview
+   ============================================================ */
+.share-img {
+  display: block;
+  width: 100%;
+  max-width: 340px;
+  margin: 6px auto 14px;
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  background: var(--hair);
+  aspect-ratio: 4 / 5;
+  object-fit: cover;
+}
+.share-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.share-actions .cta {
+  min-height: 52px;
+  font-size: 15.5px;
+}
+
+/* ============================================================
+   Support
+   ============================================================ */
+.support {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 4px 14px;
+  align-items: start;
+  text-align: left;
+  width: 100%;
+  max-width: 420px;
+  padding: 18px;
+  border-radius: 22px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  margin-bottom: 10px;
+}
+.support-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+}
+.support-icon svg {
+  width: 24px;
+  height: 24px;
+}
+.support-text strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.support-text p {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.support-btn {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  min-height: 48px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+  font-size: 15px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: transform 0.35s var(--spring);
+}
+.support-btn:active {
+  transform: scale(0.97);
+}
+.support-btn svg {
+  width: 20px;
+  height: 20px;
+}
