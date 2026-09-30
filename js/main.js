@@ -10,6 +10,7 @@ import { renderFlight } from "./flight.js";
 const today = () => todayIn(IST);
 const THEME_LABEL = { light: "Light", dark: "Dark", auto: "Match device" };
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
+const CHAI_URL = "https://buymeacoffee.com/parth8"; // swap for your UPI link later
 const fmtFlight = (no) => no.replace(/^([A-Z0-9]{2})(\d)/, "$1 $2");
 
 const MODES = {
@@ -144,6 +145,20 @@ window.addEventListener("online", () => {
 });
 
 $("#home-credit").append(credit());
+
+// Floating chai button (desktop only; phones get the inline one above the signature)
+const chaiFloat = chai("float");
+document.body.append(chaiFloat);
+document.addEventListener("click", (e) => {
+  if (chaiFloat.classList.contains("open") && !chaiFloat.contains(e.target)) chaiFloat.set(false);
+});
+if (window.matchMedia("(min-width: 720px)").matches) {
+  setTimeout(() => {
+    if (document.hidden || chaiFloat.dataset.touched) return;
+    chaiFloat.set(true);
+    setTimeout(() => !chaiFloat.dataset.touched && chaiFloat.set(false, { slow: true }), 6000);
+  }, 3500);
+}
 setupTheme();
 route();
 
@@ -650,21 +665,29 @@ function showRefreshProblem(err, loud) {
 /* Small things                                                        */
 /* ------------------------------------------------------------------ */
 
-function support() {
-  return h(
+function chai(kind) {
+  const btn = h("button", { type: "button", class: "chai-btn", "aria-expanded": "false", "aria-controls": `chai-${kind}`, "aria-label": "Support Track: chip in for a chai" }, svg(icons.cup));
+  const close = h("button", { type: "button", class: "chai-close", "aria-label": "Close" }, svg(icons.close));
+  const panel = h(
     "div",
-    { class: "support" },
-    h("span", { class: "support-icon" }, svg(icons.cup)),
-    h(
-      "div",
-      { class: "support-text" },
-      h("strong", { text: "Like it this way?" }),
-      h("p", {
-        text: "Track is free, has no ads, and will stay that way. If it saved you a call to the enquiry counter, you can chip in for a chai. It goes towards the parts that aren't free, like a bigger flight-data plan.",
-      })
-    ),
-    h("a", { class: "support-btn", href: "https://buymeacoffee.com/parth8", target: "_blank", rel: "noopener noreferrer" }, svg(icons.cup), "Chip in for a chai")
+    { class: "chai-panel", id: `chai-${kind}`, role: "region", "aria-label": "Support Track" },
+    close,
+    h("strong", { text: "Like it this way?" }),
+    h("p", { text: "Track is free, has no ads, and stays that way. If it saved you a call to the enquiry counter, you can chip in for a chai." }),
+    h("a", { class: "support-btn", href: CHAI_URL, target: "_blank", rel: "noopener noreferrer" }, svg(icons.cup), "Chip in for a chai")
   );
+  const root = h("div", { class: `chai chai-${kind}` }, panel, btn);
+  root.set = (open, { slow = false } = {}) => {
+    root.classList.toggle("fading", slow && !open);
+    root.classList.toggle("open", open);
+    btn.setAttribute("aria-expanded", String(open));
+  };
+  const touch = () => (root.dataset.touched = "1");
+  btn.addEventListener("click", () => (touch(), root.set(!root.classList.contains("open"))));
+  close.addEventListener("click", () => (touch(), root.set(false), btn.focus()));
+  root.addEventListener("pointerenter", touch);
+  root.addEventListener("keydown", (e) => e.key === "Escape" && root.set(false));
+  return root;
 }
 
 function credit() {
@@ -672,7 +695,7 @@ function credit() {
   return h(
     "div",
     { class: "credit" },
-    support(),
+    chai("inline"),
     h("p", { class: "credit-meta", text: "No ads · No tracking · No sign-ups" }),
     h(
       "p",
