@@ -1,0 +1,258 @@
+# Track
+
+**A calm, ad-free live tracker for Indian trains and flights.**
+
+Type a train or flight number, pick a date, and see where it is, whether it's late, and what that means for you. No ads, no sign-ups, no tracking, and no wall of telemetry.
+
+**Live:** https://parth8.github.io/track/
+
+---
+
+## Why this exists
+
+Most train trackers in India load hundreds of requests and megabytes of ads to answer one question: *where is my train?* Flight apps swing the other way and bury you in data you don't need.
+
+Track is built on one idea: **show what matters to the traveller right now, and nothing else.**
+
+- The hero is **your stop**, not the train's raw position.
+- Flights reshape themselves by phase. Before takeoff the gate leads, in the air the map leads, and after landing your baggage belt leads.
+- Data freshness is always visible. Stale or estimated information is labelled, never passed off as exact.
+- A short "Good to know" section answers *so what?*: a long halt ahead, arriving before sunrise, a time-zone change, the weather where you're landing.
+
+---
+
+## Features
+
+### Trains
+- Live running status for the last 4 run dates, via a split-flap date picker
+- "Your stop" countdown with delay, ETA and journey progress. Tap any station to make it your stop.
+- Timeline with scheduled and actual or expected times, platforms, halts and day dividers for overnight runs
+- Route map with the train placed from its last reported station
+- Good to know: weather at your stop, arriving before sunrise or after dark, long halts ahead, overnight journeys, on-time record, coach order at the platform
+
+### Flights
+- Phase-aware layout: before takeoff, in the air, landed, cancelled, diverted
+- Live position, altitude and speed from community ADS-B receivers, with an honest fallback when out of range
+- Gate, terminal, check-in desks and baggage belt
+- Good to know tiles: weather at both ends, aircraft type (narrow-body, wide-body, turboprop), flight time, distance, time-zone change, landing after dark
+
+### Everywhere
+- Shareable URLs. The whole state lives in the address bar, for example `?m=train&no=12786&d=2026-09-29&s=KCG`
+- Light, dark or match-device appearance (the site's own palette is the default)
+- Auto-refresh while visible, paused in background tabs
+- Friendly error screens with next steps, auto-retry countdowns and offline recovery
+- Respects reduced motion. Keyboard and screen-reader friendly.
+
+---
+
+## Architecture
+
+```
+Browser (GitHub Pages: static HTML, CSS, ES modules)
+   │
+   │  GET /api/train | /api/flight | /api/weather
+   ▼
+Cloudflare Worker ── validates input, checks origin, rate-limits, caches
+   │
+   ├── Trains:  crowd-sourced running feed (primary for today)
+   │            official NTES enquiry (primary for past runs, fallback, coach order)
+   ├── Flights: AeroDataBox (schedule, gate, belt)
+   │            adsb.lol + adsb.fi (live position, raced in parallel)
+   └── Weather: Open-Meteo
+   │
+   ▼
+Normalised JSON, one shape per mode, whichever source answered
+```
+
+The frontend never talks to a data provider directly and never learns which one answered. Swapping or adding a source is a Worker change only.
+
+**No build step.** The site is plain HTML, CSS and native ES modules. MapLibre and the fonts are self-hosted and version-pinned.
+
+> The Worker (`worker.js`) is deployed separately to Cloudflare and is not part of this repository. Its contract is documented below.
+
+---
+
+## Project structure
+
+```
+index.html            Shell, security policy, the three screens, sources sheet
+styles.css            Design tokens, light and dark themes, components, motion
+js/
+  main.js             Routing (URL is the only state), sessions, refresh, errors
+  train.js            Train status screen
+  flight.js           Flight status screen (phase-based layout)
+  map.js              Lazy MapLibre map, pastel restyle, route and marker
+  loader.js           Journey-style loading animation
+  flip.js             Split-flap date picker
+  api.js              Worker client: timeout, one retry, error normalisation
+  util.js             Safe DOM builder, time zones, geometry
+  icons.js            Static, trusted SVG only
+  theme.js            Applies the saved appearance before first paint
+vendor/maplibre/      MapLibre GL JS 6.11.2 (self-hosted)
+fonts/                Fraunces and Plus Jakarta Sans (variable, self-hosted)
+```
+
+---
+
+## Worker API contract
+
+All routes are `GET`. Responses are JSON. Errors look like `{ "error": "code", "message": "Human sentence." }`.
+
+### `GET /api/train?no=12786&date=2026-09-29`
+| Param | Rule |
+|---|---|
+| `no` | 5 digits |
+| `date` | `YYYY-MM-DD`, today back to 3 days ago (IST). Defaults to today. |
+
+Response shape (abridged):
+```json
+{
+  "kind": "train", "number": "12786", "name": "...", "date": "2026-09-29",
+  "origin": { "code": "AP", "name": "Ashokapuram" },
+  "destination": { "code": "KCG", "name": "Kacheguda" },
+  "status": { "phase": "not_started | running | arrived", "delayMin": 12, "lastUpdated": "ISO", "servedStale": false },
+  "position": { "kmDone": 322, "kmTotal": 769, "stationCode": "BSPL", "stationName": "...", "state": "at | passed", "kmPast": 3 },
+  "stops": [{
+    "code": "MBNR", "name": "...", "km": 663, "lat": 16.75, "lon": 77.99, "halts": true,
+    "platform": "4", "haltMin": 2, "onTimeRating": 6, "passed": false,
+    "sched":    { "arr": "ISO", "dep": "ISO" },
+    "actual":   { "arr": "ISO", "dep": "ISO" },
+    "expected": { "arr": "ISO", "dep": "ISO" },
+    "delay":    { "arr": 12, "dep": 12 }
+  }],
+  "coaches": [{ "code": "KCG", "list": [{ "id": "S1" }] }]
+}
+```
+All times are ISO 8601 with a `+05:30` offset. `stops` includes non-halting stations (`halts: false`) so the map can draw the full line.
+
+### `GET /api/flight?no=6E6252&date=2026-09-29`
+| Param | Rule |
+|---|---|
+| `no` | Airline code plus number, spaces optional (`6E6252`, `AI 101`) |
+| `date` | Departure date, local to the departure airport, 2 days back to 7 days ahead |
+
+Response shape (abridged):
+```json
+{
+  "kind": "flight", "number": "6E 6252", "airline": { "name": "IndiGo", "iata": "6E" },
+  "status": { "phase": "pre | air | landed | cancelled | diverted", "raw": "EnRoute", "delayDep": 0, "delayArr": -24, "inferred": false },
+  "departure": { "code": "HYD", "city": "...", "tz": "Asia/Kolkata", "lat": 17.24, "lon": 78.43,
+                 "sched": "ISO", "revised": "ISO", "runway": "ISO", "actual": "ISO",
+                 "terminal": "2", "gate": "17", "checkIn": "8-12" },
+  "arrival":   { "...same fields...": "", "belt": "2" },
+  "distanceKm": 1497,
+  "aircraft": { "model": "Airbus A320neo", "reg": "VT-ISA", "hex": "800c5d" },
+  "position": { "lat": 23.2, "lon": 77.4, "altFt": 36000, "speedKmh": 815, "trackDeg": 350,
+                "at": "ISO", "ageSec": 20, "source": "live | reported", "via": "adsb.lol" }
+}
+```
+`position` is `null` when no receiver has heard the aircraft in the last 10 minutes. The frontend then estimates the position from the schedule and labels it as an estimate. `status.inferred` is `true` when a plane was spotted airborne before the airline updated its status.
+
+### `GET /api/weather?lat=17.39&lon=78.50`
+Current conditions, hourly forecast and sunrise and sunset for the next few days, in the location's own time zone.
+
+### Error codes
+| Code | Status | Meaning |
+|---|---|---|
+| `invalid_train`, `invalid_flight`, `invalid_date`, `date_out_of_range` | 400 | Input failed validation |
+| `forbidden` | 403 | Request came from a site not in `ALLOWED_ORIGINS` |
+| `not_found` | 404 | No run or flight for that number and date |
+| `rate_limited` | 429 | More than 40 requests a minute from one visitor |
+| `upstream_unavailable` | 502 | Every source failed or timed out |
+| `flights_not_configured` | 503 | No AeroDataBox key set |
+| `quota_exhausted` | 503 | Monthly flight lookups used up |
+
+### Freshness and caching
+| Data | Fresh for | Notes |
+|---|---|---|
+| Train status | 45 s | The page refreshes every 60 s while visible |
+| Flight status | 5 to 60 min, by phase | Protects the free flight-data quota |
+| Live aircraft position | 20 s | Free, so looked up on every refresh |
+| Weather | 15 min | |
+| Backup copy of any result | 6 h | Served, and flagged, if every source is down |
+
+---
+
+## Deploying
+
+### 1. The Worker (Cloudflare dashboard, no CLI needed)
+1. Workers & Pages → Create → Hello World → name it `journey-api` → Deploy.
+2. Edit code → paste `worker.js` → Deploy.
+3. Settings → Variables and Secrets:
+
+| Name | Type | Value |
+|---|---|---|
+| `ALLOWED_ORIGINS` | Text | `https://parth8.github.io` (the domain only, no path) |
+| `ADB_KEY` | **Secret** | AeroDataBox key from RapidAPI (optional; flights stay off without it) |
+| `ADB_HOST` | Text | Optional. Defaults to `aerodatabox.p.rapidapi.com` |
+| `REQUIRE_ORIGIN` | Text | `false` only while testing in a browser tab. Remove afterwards. |
+
+Optionally, add a Rate Limiting binding named `LIMITER` for platform-level rate limits. Without it, the Worker uses a simpler limiter that runs separately in each Cloudflare data center.
+
+### 2. The site (GitHub Pages)
+1. Upload the repository contents with `index.html` at the root.
+2. Settings → Pages → deploy from `main`, root folder.
+
+### 3. Pointing the site at a different Worker
+The Worker address appears twice at the top of `index.html`: in `<meta name="api-base">` and in the `connect-src` part of the security policy. Change both.
+
+---
+
+## Security and privacy
+
+- **Strict Content Security Policy.** Scripts load only from this site. The page can connect only to its own Worker and the map tile server.
+- **No untrusted HTML.** All API data is written with `textContent`. The only markup inserted is static SVG from `icons.js`.
+- **Secrets stay server-side.** The AeroDataBox key lives in the Worker as a secret and never reaches the browser or this repository.
+- **The Worker validates everything.** It checks each request's origin against an allowlist, rate-limits per visitor, and validates every input before calling a source.
+- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only thing kept on a device is the appearance choice, in `localStorage`.
+- **No referrers are sent.** Referrers are suppressed and credentials are omitted from API calls.
+
+---
+
+## Known limitations
+
+- **Train data is crowd-sourced first.** It usually matches the official feed within a minute, but it can shift. The timeline says so.
+- **Train positions come from station reports.** The train is placed along the line from its last report, not from GPS.
+- **ADS-B coverage over India is patchy.** Altitude and speed appear only when a community receiver can hear the aircraft. Otherwise the app shows time in the air and distance left.
+- **The official railway feed may block some cloud regions.** Visitors outside India may only get the crowd-sourced source.
+- **Flight data runs on a free plan.** Its monthly lookup quota is shared by everyone using this deployment.
+- **Unofficial access.** Railway data is fetched from public pages without an official API. Keep usage personal and cached.
+
+---
+
+## Data sources and attribution
+
+| Data | Source | Licence or terms |
+|---|---|---|
+| Train running status | Crowd-sourced running feed and Indian Railways NTES public enquiry | Public pages, unofficial use |
+| Flight schedules, gates, belts | [AeroDataBox](https://aerodatabox.com) | Attribution required (shown on every flight screen) |
+| Live aircraft positions | [adsb.lol](https://adsb.lol), [adsb.fi](https://adsb.fi) | ODbL (adsb.lol); non-commercial with credit (adsb.fi) |
+| Map tiles | [OpenFreeMap](https://openfreemap.org), [OpenMapTiles](https://openmaptiles.org) | Free, attribution required |
+| Map data | © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors | ODbL |
+| Weather | [Open-Meteo](https://open-meteo.com) | CC BY 4.0 |
+
+### Bundled third-party code and fonts
+| Component | Version | Licence |
+|---|---|---|
+| MapLibre GL JS | 6.11.2 | BSD-3-Clause (`vendor/maplibre/LICENSE.txt`) |
+| Fraunces | Variable (Fontsource 5.3.0) | SIL Open Font License 1.1 |
+| Plus Jakarta Sans | Variable (Fontsource 5.3.0) | SIL Open Font License 1.1 |
+
+Track is not affiliated with Indian Railways, any airline, or any provider above. Always confirm times at the station or with your airline.
+
+---
+
+## Roadmap
+
+Deliberately short. Depth over breadth.
+
+- [ ] Small test suite for time zones, geometry, delay logic and phase rendering
+- [ ] "Should I leave for the station now?" nudge
+- [ ] Clearer disruption explanations (diversions, reschedules, cancellations)
+- [ ] Screenshots in this README
+
+---
+
+Built with ♥ (and coffee and Claude) by [Parth](https://parth8.github.io/portfolio/), because life's too short for trackers that fire 266 requests to show you one train.
+
+[LinkedIn](https://linkedin.com/in/aggarwalparth) · [Portfolio](https://parth8.github.io/portfolio/)
