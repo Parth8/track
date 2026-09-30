@@ -678,7 +678,7 @@ function chai(kind) {
       {},
       "Track is free, has no ads, and stays that way. If it saved you a call to the enquiry counter, you can chip in for a chai.",
       h("br"),
-      "(min $1 equivalent in your local supported currency)"
+      h("em", { text: "(min $1 equivalent in your local supported currency)" })
     ),
     h("a", { class: "support-btn", href: CHAI_URL, target: "_blank", rel: "noopener noreferrer" }, svg(icons.cup), "Chip in for a chai")
   );
