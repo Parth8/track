@@ -2243,45 +2243,6 @@ a {
 /* ============================================================
    Support
    ============================================================ */
-.support {
-  display: grid;
-  grid-template-columns: 44px 1fr;
-  gap: 4px 14px;
-  align-items: start;
-  text-align: left;
-  width: 100%;
-  max-width: 420px;
-  padding: 18px;
-  border-radius: 22px;
-  background: var(--card);
-  box-shadow: var(--shadow);
-  margin-bottom: 10px;
-}
-.support-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  display: grid;
-  place-items: center;
-  background: var(--apricot-tint);
-  color: var(--apricot-ink);
-}
-.support-icon svg {
-  width: 24px;
-  height: 24px;
-}
-.support-text strong {
-  display: block;
-  font-size: 15px;
-  font-weight: 800;
-  color: var(--ink);
-}
-.support-text p {
-  font-size: 13.5px;
-  line-height: 1.5;
-  color: var(--muted);
-  margin-top: 3px;
-}
 .support-btn {
   grid-column: 1 / -1;
   margin-top: 10px;
@@ -2304,4 +2265,48 @@ a {
 .support-btn svg {
   width: 20px;
   height: 20px;
+}
+/* Chai: floating on desktop, inline above the signature on phones */
+.chai { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
+.chai-float { position: fixed; right: 22px; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: none; }
+.chai-inline { align-items: center; flex-direction: column-reverse; margin-bottom: 8px; }
+@media (min-width: 720px) {
+  .chai-float { display: flex; }
+  .chai-inline { display: none; }
+}
+.chai-btn {
+  width: 56px; height: 56px; border: 0; border-radius: 50%;
+  background: var(--apricot-tint); color: var(--apricot-ink);
+  display: grid; place-items: center; cursor: pointer;
+  animation: chaiGlow 3.2s ease-in-out infinite;
+  transition: transform 0.4s var(--spring);
+}
+.chai-btn:hover { transform: scale(1.06); }
+.chai-btn:active { transform: scale(0.94); }
+.chai-btn svg { width: 28px; height: 28px; }
+.chai.open .chai-btn { animation: none; box-shadow: 0 6px 18px rgba(138, 74, 28, 0.2); }
+.chai-panel {
+  position: relative; width: 300px; padding: 18px 18px 16px; border-radius: 22px;
+  background: var(--card); box-shadow: var(--shadow), 0 20px 40px rgba(42, 45, 58, 0.14);
+  text-align: left; transform-origin: bottom right;
+  opacity: 0; transform: translateY(10px) scale(0.9); visibility: hidden; pointer-events: none;
+  transition: opacity 0.3s var(--ease-out), transform 0.45s var(--spring), visibility 0s 0.45s;
+}
+.chai.open .chai-panel {
+  opacity: 1; transform: none; visibility: visible; pointer-events: auto;
+  transition: opacity 0.3s var(--ease-out), transform 0.55s var(--spring), visibility 0s;
+}
+.chai.fading .chai-panel { transition: opacity 1.4s ease, transform 1.4s ease, visibility 0s 1.4s; }
+.chai-inline .chai-panel { display: none; width: 100%; max-width: 380px; transform-origin: top center; }
+.chai-inline.open .chai-panel { display: block; animation: sheetIn 0.5s var(--spring); }
+.chai-panel strong { display: block; font-size: 15px; font-weight: 800; padding-right: 32px; }
+.chai-panel p { font-size: 13.5px; line-height: 1.5; color: var(--muted); margin-top: 4px; }
+.chai-close {
+  position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border: 0; border-radius: 50%;
+  background: var(--hair); color: var(--muted); display: grid; place-items: center; cursor: pointer;
+}
+.chai-close svg { width: 14px; height: 14px; }
+@keyframes chaiGlow {
+  0%, 100% { box-shadow: 0 6px 18px rgba(138, 74, 28, 0.18), 0 0 0 0 rgba(176, 106, 52, 0.4); }
+  60% { box-shadow: 0 6px 18px rgba(138, 74, 28, 0.18), 0 0 0 14px rgba(176, 106, 52, 0); }
 }
