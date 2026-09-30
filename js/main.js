@@ -673,7 +673,7 @@ function chai(kind) {
     { class: "chai-panel", id: `chai-${kind}`, role: "region", "aria-label": "Support Track" },
     close,
     h("strong", { text: "Like it this way?" }),
-    h("p", { text: "Track is free, has no ads, and stays that way. If it saved you a call to the enquiry counter, you can chip in for a chai." }),
+    h("p", { text: "Track is free, has no ads, and stays that way. If it saved you a call to the enquiry counter, you can chip in for a chai.\n(min $1 equivalent in your local supported currency)" }),
     h("a", { class: "support-btn", href: CHAI_URL, target: "_blank", rel: "noopener noreferrer" }, svg(icons.cup), "Chip in for a chai")
   );
   const root = h("div", { class: `chai chai-${kind}` }, panel, btn);
@@ -704,7 +704,7 @@ function credit() {
       svg(icons.heart),
       " (and coffee and Claude) by ",
       a("https://parth8.github.io/portfolio/", "Parth"),
-      ", because life's too short for trackers that fire 266 requests to show you one train."
+      ", because life's too short for websites that fire 269 requests to show you one output."
     ),
     h("p", { class: "credit-links" }, a("https://linkedin.com/in/aggarwalparth", "LinkedIn ↗"), a("https://parth8.github.io/portfolio/", "Portfolio ↗"))
   );
