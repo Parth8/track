@@ -8,6 +8,7 @@ import { renderTrain } from "./train.js";
 import { renderFlight } from "./flight.js";
 import { installWay, installPlace, appleGuide, onInstallChange, promptInstall } from "./install.js";
 import { guideArt } from "./guide.js";
+import { createRoutePanel, createResults, routeRange } from "./finder.js";
 
 const today = () => todayIn(IST);
 const THEME_LABEL = { light: "Light", dark: "Dark", auto: "Match device" };
@@ -32,10 +33,17 @@ const MODES = {
       return null;
     },
     dateQ: "When did it leave its first station?",
-    dateHelp: "Pick the day it started its run, even if you board later. Live status covers the last 4 days.",
+    dateHelp: "Pick the day it started its run, even if you board later. Not sure? Use From and to above, and we'll work it out.",
     cta: "Check live status",
     range: () => [addDays(today(), -3), today()],
     refreshMs: () => 30000,
+    // Finding a train by its stations instead of its number
+    route: {
+      dateQ: "When do you board?",
+      dateHelp: "The day you get on at your From station.",
+      cta: "Find trains",
+      range: routeRange,
+    },
   },
   flight: {
     title: "Which flight?",
@@ -69,7 +77,7 @@ const MODES = {
 /* Elements                                                            */
 /* ------------------------------------------------------------------ */
 
-const views = { home: $("#view-home"), search: $("#view-search"), status: $("#view-status") };
+const views = { home: $("#view-home"), search: $("#view-search"), status: $("#view-status"), results: $("#view-results") };
 const form = $("#search-form");
 const qInput = $("#q");
 const qError = $("#q-error");
@@ -80,6 +88,8 @@ const sources = $("#sources");
 let flip = null;
 let session = null;
 let prefill = null; // number and date carried back from the status screen
+let routePanel = null; // created the first time the route finder opens
+const byToggle = $("#by-toggle");
 
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
@@ -105,6 +115,39 @@ $("#search-back").addEventListener("click", (e) => {
   navigate({}, { back: true });
 });
 
+// Train number, or From and To. Switching keeps whatever was already filled in.
+for (const btn of byToggle.querySelectorAll("button")) {
+  btn.addEventListener("click", () => {
+    const r = current();
+    const by = btn.dataset.by;
+    if (by === r.by) return;
+    prefill = { mode: "train", no: qInput.value.replace(/\s/g, ""), date: flip?.value, ...(routePanel ? routePanel.values() : {}) };
+    navigate({ m: "train", by: by === "route" ? "route" : null }, { replace: true, instant: true, keepFocus: true });
+  });
+}
+byToggle.addEventListener("keydown", (e) => {
+  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+  e.preventDefault();
+  const other = byToggle.querySelector('[aria-checked="false"]');
+  other.click();
+  other.focus();
+});
+
+const results = createResults({
+  root: $("#results-root"),
+  title: $("#results-title"),
+  sub: $("#results-sub"),
+  navigate,
+  toast: (m) => toast(m),
+  footer: () => h("div", { class: "foot-stack" }, h("button", { type: "button", class: "link-quiet", "data-open": "sources", text: "Sources and credits" }), credit()),
+});
+$("#results-back").addEventListener("click", (e) => {
+  e.preventDefault();
+  const r = current();
+  navigate({ m: "train", by: "route", from: r.from, to: r.to, d: r.date, t: r.time });
+});
+$("#results-swap").addEventListener("click", () => results.swap());
+
 qInput.addEventListener("input", () => {
   const mode = MODES[current().mode];
   const cleaned = mode.clean(qInput.value);
@@ -115,7 +158,12 @@ qInput.addEventListener("input", () => {
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  const { mode } = current();
+  const { mode, by } = current();
+  if (mode === "train" && by === "route") {
+    const v = routePanel.validate();
+    if (v) navigate({ m: "train", from: v.from, to: v.to, d: flip.value, t: v.time });
+    return;
+  }
   const problem = MODES[mode].check(qInput.value.trim());
   if (problem) {
     qInput.setAttribute("aria-invalid", "true");
@@ -139,7 +187,7 @@ sources.addEventListener("click", (e) => {
   if (e.target === sources) sources.close();
 });
 
-window.addEventListener("popstate", () => route());
+window.addEventListener("popstate", () => route({ pop: true }));
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && session?.data && Date.now() - session.loadedAt > MODES[session.mode].refreshMs(session.data)) load({ silent: true });
 });
@@ -253,18 +301,24 @@ function syncThemeUI() {
 function current() {
   const p = new URLSearchParams(location.search);
   const m = p.get("m");
+  const code = (k) => ((p.get(k) || "").toUpperCase().match(/^[A-Z]{1,5}$/) || [""])[0];
   return {
     mode: m === "train" || m === "flight" ? m : null,
     no: (p.get("no") || "").toUpperCase(),
     date: p.get("d") || "",
     stop: (p.get("s") || "").toUpperCase(),
+    by: m === "train" && p.get("by") === "route" ? "route" : "number",
+    from: code("from"),
+    to: code("to"),
+    time: /^\d{2}:\d{2}$/.test(p.get("t") || "") ? p.get("t") : "",
   };
 }
 
 function navigate(params, opts = {}) {
   const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v));
   const qs = new URLSearchParams(clean).toString();
-  history[opts.replace ? "replaceState" : "pushState"](null, "", qs ? `?${qs}` : location.pathname);
+  if (!views.results.hidden) results.leave(window.scrollY); // so Back lands where you were
+  history[opts.replace ? "replaceState" : "pushState"](opts.state || null, "", qs ? `?${qs}` : location.pathname);
   route(opts);
 }
 
@@ -276,19 +330,22 @@ function backToSearch() {
 
 function route(opts = {}) {
   const r = current();
-  const target = !r.mode ? "home" : r.no ? "status" : "search";
+  const isResults = r.mode === "train" && r.from && r.to && r.by !== "route";
+  const target = !r.mode ? "home" : r.no ? "status" : isResults ? "results" : "search";
   const apply = () => {
     for (const [name, el] of Object.entries(views)) el.hidden = name !== target;
     document.body.dataset.mode = r.mode || "home";
     if (target !== "status") stopSession();
+    let scrollTo = 0;
     if (target === "search") setupSearch(r);
     if (target === "status") openStatus(r);
+    if (target === "results") scrollTo = results.open({ ...r, date: validRouteDate(r.date) }, { pop: opts.pop });
     if (target === "home") document.title = "Track a train or flight";
-    views[target].querySelector("[data-focus]")?.focus({ preventScroll: true });
-    window.scrollTo({ top: 0, behavior: "instant" });
+    if (!opts.keepFocus) views[target].querySelector("[data-focus]")?.focus({ preventScroll: true });
+    window.scrollTo({ top: scrollTo, behavior: "instant" });
   };
 
-  if (!document.startViewTransition || prefersReducedMotion()) return apply();
+  if (!document.startViewTransition || prefersReducedMotion() || opts.instant) return apply();
 
   // The tapped card grows into the search screen, and shrinks back on the way home.
   const card = opts.from || (opts.back ? document.querySelector(`.mode-card[data-mode="${document.body.dataset.mode}"]`) : null);
@@ -316,14 +373,41 @@ function route(opts = {}) {
 /* Search                                                              */
 /* ------------------------------------------------------------------ */
 
+/** A route search date inside the allowed window, or today. */
+function validRouteDate(d) {
+  const [min, max] = routeRange();
+  return /^\d{4}-\d{2}-\d{2}$/.test(d || "") && d >= min && d <= max ? d : today();
+}
+
 function setupSearch(r) {
-  const cfg = MODES[r.mode];
+  const byRoute = r.mode === "train" && r.by === "route";
+  const cfg = byRoute ? { ...MODES.train, ...MODES.train.route } : MODES[r.mode];
   $("#search-title").textContent = cfg.title;
   $("#q-label").textContent = cfg.label;
   $("#q-hint").textContent = cfg.hint;
   $("#date-q").textContent = cfg.dateQ;
   $("#date-help").textContent = cfg.dateHelp;
   $("#cta-text").textContent = cfg.cta;
+
+  document.title = byRoute ? "Find trains between stations" : r.mode === "flight" ? "Track a flight" : "Track a train";
+  byToggle.hidden = r.mode !== "train";
+  byToggle.dataset.by = byRoute ? "route" : "number";
+  for (const b of byToggle.querySelectorAll("button")) {
+    const on = b.dataset.by === byToggle.dataset.by;
+    b.setAttribute("aria-checked", String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+  const show = (el, on) => {
+    if (on && el.hidden) {
+      el.classList.remove("panel-in");
+      void el.offsetWidth;
+      el.classList.add("panel-in");
+    }
+    el.hidden = !on;
+  };
+  show($("#panel-number"), !byRoute);
+  show($("#panel-route"), byRoute);
+  show($("#time-set"), byRoute);
   qInput.placeholder = cfg.placeholder;
   qInput.inputMode = cfg.inputmode;
   qInput.maxLength = cfg.maxlength;
@@ -334,12 +418,18 @@ function setupSearch(r) {
   qInput.removeAttribute("aria-invalid");
   qError.hidden = true;
 
+  if (byRoute) {
+    routePanel ||= createRoutePanel();
+    routePanel.reset({ from: carry?.from || r.from, to: carry?.to || r.to, time: carry?.time || r.time });
+  }
+
   const [min, max] = cfg.range();
   const wanted = carry?.date || r.date;
   const start = wanted && wanted >= min && wanted <= max ? wanted : today() > max ? max : today();
   const readout = (v) => {
     $("#date-long").textContent = longDate(v);
     $("#date-rel").textContent = relativeDay(v, today());
+    if (byRoute) routePanel.onDate(v);
   };
   flip = createFlipDate($("#flip"), { value: start, min, max, onChange: readout });
   readout(start);
@@ -376,7 +466,9 @@ function openStatus(r) {
 
 $("#status-back").addEventListener("click", (e) => {
   e.preventDefault();
-  backToSearch();
+  // Opened from a route search: go back to that list, where you were.
+  if (history.state?.from === "results") history.back();
+  else backToSearch();
 });
 $("#status-refresh").addEventListener("click", () => (session?.data ? load({ manual: true }) : retryNow()));
 $("#status-share").addEventListener("click", share);

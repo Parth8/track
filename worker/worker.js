@@ -6,6 +6,7 @@
  *   /api/train?no=12786&date=2026-09-29
  *   /api/flight?no=6E6252&date=2026-09-29
  *   /api/weather?lat=17.39&lon=78.50
+ *   /api/between?from=MYS&to=KCG&date=2026-10-02
  *
  * Settings (Worker > Settings > Variables and Secrets):
  *   ALLOWED_ORIGINS   text    e.g. https://yourname.github.io   (comma separated)
@@ -20,7 +21,7 @@
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
-const TTL = { train: 15, flight: 90, weather: 900, timetable: 43200, stale: 21600 };
+const TTL = { train: 15, flight: 90, weather: 900, timetable: 43200, between: 21600, stale: 21600 };
 const TRAIN_FRESH_FLOOR_MS = 5000; // a manual refresh re-fetches unless the copy is under 5 s old
 const ADB_HOSTS = new Set(["aerodatabox.p.rapidapi.com"]);
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -76,6 +77,8 @@ export default {
           return reply(await flightRoute(url, env, ctx), 200, cors, TTL.flight, env);
         case "/api/weather":
           return reply(await weatherRoute(url, ctx), 200, cors, TTL.weather, env);
+        case "/api/between":
+          return reply(await betweenRoute(url, ctx), 200, cors, TTL.between, env);
         default:
           throw new ApiError(404, "not_found", "Unknown route.");
       }
@@ -792,6 +795,116 @@ async function lookup(provider, path, value) {
     ageSec: age,
     source: "live",
     via: provider.name,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Trains between two stations                                         */
+/* ------------------------------------------------------------------ */
+
+const RUN_DAYS = new Set(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]);
+
+/**
+ * Every train from one station to another on a date, for the route finder.
+ * `date` is the day you board at `from`. Each train says which day its run started,
+ * which is the date the live tracker needs.
+ */
+async function betweenRoute(url, ctx) {
+  const code = (k) => (url.searchParams.get(k) || "").trim().toUpperCase();
+  const from = code("from");
+  const to = code("to");
+  if (!/^[A-Z]{1,5}$/.test(from) || !/^[A-Z]{1,5}$/.test(to))
+    throw new ApiError(400, "invalid_station", "Station codes are 1 to 5 letters, like MYS or KCG.");
+  if (from === to) throw new ApiError(400, "same_station", "From and To are the same station.");
+  const today = istToday();
+  const date = validDate(url.searchParams.get("date") || today, addDays(today, -3), addDays(today, 120));
+
+  // Timetables change rarely, so one lookup per route and date serves everyone for hours.
+  return cached(ctx, `between/${from}/${to}/${date}`, TTL.between, async () => {
+    const q = new URLSearchParams({ from, to, dateOfJourney: date });
+    const slow = () => new ApiError(502, "upstream_unavailable", "Train timetables are slow right now. Try again shortly.");
+    let res;
+    try {
+      res = await getWithRetry(`https://trainticketapi.railyatri.in/api/trains-between-station-with-sa.json?${q}`, {
+        headers: { "User-Agent": UA, Accept: "application/json", Referer: "https://www.railyatri.in/" },
+      });
+    } catch (err) {
+      log("warn", "between failed", from, to, date, String(err && err.message));
+      throw slow();
+    }
+    if (!res.ok) throw slow();
+    const body = await res.json().catch(() => null);
+    if (!body || body.success !== true) throw slow();
+    return normaliseBetween(from, to, date, body);
+  });
+}
+
+function normaliseBetween(from, to, date, body) {
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+  const rating = (v) => (num(v) != null && num(v) >= 0 ? num(v) : null);
+  const days = (t) => (t.run_days || t.train_run_days || []).filter((d) => RUN_DAYS.has(d));
+  const station = (c, n) => ({ code: String(c || "").toUpperCase(), name: titleCase(n || c || "") });
+  const base = (t) => ({
+    number: String(t.train_number || "").trim(),
+    name: String(t.train_name || "").replace(/\s+/g, " ").trim(),
+    from: station(t.from, t.from_station_name),
+    to: station(t.to, t.to_station_name),
+    runDays: days(t),
+    distanceKm: num(t.distance) != null ? Math.round(num(t.distance)) : null,
+  });
+
+  const seen = new Set();
+  const trains = [];
+  for (const t of body.train_between_stations || []) {
+    const depMin = hhmmToMin(t.from_std || t.from_sta);
+    const arrMin = hhmmToMin(t.to_sta || t.to_std);
+    const fromDay = num(t.from_day) || 0;
+    const toDay = num(t.to_day) || 0;
+    if (!/^\d{5}$/.test(String(t.train_number || "").trim()) || depMin == null || arrMin == null) continue;
+    // The run started fromDay days before the day you board.
+    const startDate = addDays(date, -fromDay);
+    const dep = istIso(startDate, fromDay * 1440 + depMin);
+    const arr = istIso(startDate, toDay * 1440 + arrMin);
+    const train = {
+      ...base(t),
+      startDate,
+      dep,
+      arr,
+      durationMin: num(t.duration_min) || Math.round((Date.parse(arr) - Date.parse(dep)) / 60000),
+      onTimeRating: rating(t.to_on_time_rating) ?? rating(t.on_time_rating),
+      pantry: !!t.has_pantry,
+      special: !!t.special_train,
+    };
+    if (seen.has(train.number)) continue;
+    seen.add(train.number);
+    trains.push(train);
+  }
+  trains.sort((a, b) => (a.dep < b.dep ? -1 : a.dep > b.dep ? 1 : 0));
+
+  // Trains on this route that don't run that day, with the next day they do.
+  const others = [];
+  for (const t of body.alternate_trains || []) {
+    const b = base(t);
+    if (!/^\d{5}$/.test(b.number) || seen.has(b.number)) continue;
+    seen.add(b.number);
+    others.push({
+      ...b,
+      depTime: /^\d{1,2}:\d{2}/.test(t.from_std || "") ? t.from_std.slice(0, 5) : null,
+      arrTime: /^\d{1,2}:\d{2}/.test(t.to_sta || "") ? t.to_sta.slice(0, 5) : null,
+      nextDate: /^\d{4}-\d{2}-\d{2}$/.test(t.train_date || "") ? t.train_date : null,
+      arrDay: Math.max(0, (num(t.to_day) || 0) - (num(t.from_day) || 0)),
+      durationMin: num(t.duration_min),
+    });
+  }
+
+  return {
+    kind: "between",
+    from: trains.find((t) => t.from.code === from)?.from || { code: from, name: null },
+    to: trains.find((t) => t.to.code === to)?.to || { code: to, name: null },
+    date,
+    trains,
+    others: others.slice(0, 8),
+    status: {},
   };
 }
 

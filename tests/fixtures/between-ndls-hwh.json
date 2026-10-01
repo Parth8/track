@@ -1,0 +1,443 @@
+{
+ "success": true,
+ "status": 200,
+ "from": "NDLS",
+ "to": "HWH",
+ "train_between_stations": [
+  {
+   "train_number": "13052",
+   "train_name": "Netaji Express",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "from": "DLI",
+   "to": "HWH",
+   "from_std": "06:15",
+   "from_sta": "06:15",
+   "to_sta": "08:05",
+   "to_std": "08:05",
+   "from_day": 1,
+   "to_day": 2,
+   "duration_min": 1550,
+   "from_station_name": "DELHI",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1443,
+   "on_time_rating": -1,
+   "to_on_time_rating": -1,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-01"
+  },
+  {
+   "train_number": "12324",
+   "train_name": "Barmer - Howrah SF Express",
+   "run_days": [
+    "Thu",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Wed",
+    "Sat"
+   ],
+   "from": "DLI",
+   "to": "HWH",
+   "from_std": "07:50",
+   "from_sta": "07:35",
+   "to_sta": "05:45",
+   "to_std": "05:45",
+   "from_day": 1,
+   "to_day": 2,
+   "duration_min": 1315,
+   "from_station_name": "OLD DELHI",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1431.0,
+   "on_time_rating": 4,
+   "to_on_time_rating": 4,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-01"
+  },
+  {
+   "train_number": "12372",
+   "train_name": "Bikaner - Howrah SF Express",
+   "run_days": [
+    "Thu"
+   ],
+   "train_run_days": [
+    "Thu"
+   ],
+   "from": "DLI",
+   "to": "HWH",
+   "from_std": "15:10",
+   "from_sta": "14:55",
+   "to_sta": "16:50",
+   "to_std": "16:50",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1540,
+   "from_station_name": "OLD DELHI",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1465.0,
+   "on_time_rating": 9,
+   "to_on_time_rating": 9,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-01"
+  },
+  {
+   "train_number": "12314",
+   "train_name": "New Delhi - Sealdah Rajdhani Express",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "from": "NDLS",
+   "to": "SDAH",
+   "from_std": "16:30",
+   "from_sta": "16:30",
+   "to_sta": "10:10",
+   "to_std": "10:10",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1060,
+   "from_station_name": "NEW DELHI",
+   "to_station_name": "KOLKATA SEALDAH",
+   "distance": 1454.0,
+   "on_time_rating": 9,
+   "to_on_time_rating": 9,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-01"
+  },
+  {
+   "train_number": "12302",
+   "train_name": "New Delhi - Howrah Rajdhani Express (Via Gaya)",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Sat",
+    "Sun"
+   ],
+   "from": "NDLS",
+   "to": "HWH",
+   "from_std": "16:50",
+   "from_sta": "16:50",
+   "to_sta": "09:55",
+   "to_std": "09:55",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1025,
+   "from_station_name": "NEW DELHI",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1447.0,
+   "on_time_rating": 9,
+   "to_on_time_rating": 9,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-01"
+  },
+  {
+   "train_number": "12304",
+   "train_name": "Poorva Express (Via Patna) ",
+   "run_days": [
+    "Wed",
+    "Thu",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Wed",
+    "Thu",
+    "Sat",
+    "Sun"
+   ],
+   "from": "NDLS",
+   "to": "HWH",
+   "from_std": "17:40",
+   "from_sta": "17:40",
+   "to_sta": "17:00",
+   "to_std": "17:00",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1400,
+   "from_station_name": "NEW DELHI",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1529.0,
+   "on_time_rating": 9,
+   "to_on_time_rating": 9,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-01"
+  },
+  {
+   "train_number": "12260",
+   "train_name": "Bikaner - Sealdah AC Duronto Express",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Thu",
+    "Fri"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Thu",
+    "Fri"
+   ],
+   "from": "NDLS",
+   "to": "SDAH",
+   "from_std": "19:45",
+   "from_sta": "19:45",
+   "to_sta": "13:30",
+   "to_std": "13:30",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1065,
+   "from_station_name": "NEW DELHI",
+   "to_station_name": "SEALDAH",
+   "distance": 1455,
+   "on_time_rating": 7,
+   "to_on_time_rating": 7,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-01"
+  }
+ ],
+ "alternate_trains": [
+  {
+   "train_number": "12306",
+   "train_name": "New Delhi - Howrah Rajdhani Express (Via Patna)",
+   "run_days": [
+    "Fri"
+   ],
+   "train_run_days": [
+    "Fri"
+   ],
+   "from": "NDLS",
+   "to": "HWH",
+   "from_std": "16:50",
+   "from_sta": "16:50",
+   "to_sta": "12:15",
+   "to_std": "12:15",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1165,
+   "from_station_name": "NEW DELHI",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1529.0,
+   "on_time_rating": 8,
+   "to_on_time_rating": 8,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-02"
+  },
+  {
+   "train_number": "12382",
+   "train_name": "Poorva Express (Via Gaya)",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Fri"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Fri"
+   ],
+   "from": "NDLS",
+   "to": "HWH",
+   "from_std": "17:40",
+   "from_sta": "17:40",
+   "to_sta": "17:00",
+   "to_std": "17:00",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1400,
+   "from_station_name": "NEW DELHI",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1446.0,
+   "on_time_rating": 10,
+   "to_on_time_rating": 10,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-02"
+  },
+  {
+   "train_number": "12274",
+   "train_name": "New Delhi - Howrah Duronto Express",
+   "run_days": [
+    "Tue",
+    "Sat"
+   ],
+   "train_run_days": [
+    "Tue",
+    "Sat"
+   ],
+   "from": "NDLS",
+   "to": "HWH",
+   "from_std": "12:35",
+   "from_sta": "12:35",
+   "to_sta": "10:35",
+   "to_std": "10:35",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1320,
+   "from_station_name": "NEW DELHI",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1529.0,
+   "on_time_rating": 8,
+   "to_on_time_rating": 8,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-03"
+  },
+  {
+   "train_number": "13066",
+   "train_name": "Anand Vihar T - Howrah Amrit Bharat Express",
+   "run_days": [
+    "Sat"
+   ],
+   "train_run_days": [
+    "Sat"
+   ],
+   "from": "ANVT",
+   "to": "HWH",
+   "from_std": "05:15",
+   "from_sta": "05:15",
+   "to_sta": "10:50",
+   "to_std": "10:50",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1775,
+   "from_station_name": "ANAND VIHAR TRM",
+   "to_station_name": "HOWRAH JN",
+   "distance": 1452.0,
+   "on_time_rating": -1,
+   "to_on_time_rating": -1,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-03"
+  },
+  {
+   "train_number": "12380",
+   "train_name": "Jallianwala Bagh Express",
+   "run_days": [
+    "Sun"
+   ],
+   "train_run_days": [
+    "Sun"
+   ],
+   "from": "DLI",
+   "to": "SDAH",
+   "from_std": "20:15",
+   "from_sta": "20:00",
+   "to_sta": "16:35",
+   "to_std": "16:35",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1220,
+   "from_station_name": "OLD DELHI",
+   "to_station_name": "KOLKATA SEALDAH",
+   "distance": 1447.0,
+   "on_time_rating": 5,
+   "to_on_time_rating": 5,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-04"
+  },
+  {
+   "train_number": "22858",
+   "train_name": "Anand Vihar T - Santragachi SF Express",
+   "run_days": [
+    "Tue"
+   ],
+   "train_run_days": [
+    "Tue"
+   ],
+   "from": "ANVT",
+   "to": "SRC",
+   "from_std": "13:25",
+   "from_sta": "13:25",
+   "to_sta": "17:40",
+   "to_std": "17:40",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1695,
+   "from_station_name": "ANAND VIHAR TRM",
+   "to_station_name": "SANTRAGACHI JN",
+   "distance": 1572.0,
+   "on_time_rating": 1,
+   "to_on_time_rating": 1,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-06"
+  },
+  {
+   "train_number": "12330",
+   "train_name": "West Bengal Sampark Kranti Express",
+   "run_days": [
+    "Wed"
+   ],
+   "train_run_days": [
+    "Wed"
+   ],
+   "from": "ANVT",
+   "to": "SDAH",
+   "from_std": "20:20",
+   "from_sta": "20:20",
+   "to_sta": "16:35",
+   "to_std": "16:35",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1215,
+   "from_station_name": "ANAND VIHAR TRM",
+   "to_station_name": "KOLKATA SEALDAH",
+   "distance": 1434.0,
+   "on_time_rating": 7,
+   "to_on_time_rating": 7,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-07"
+  }
+ ],
+ "nearby_station": []
+}

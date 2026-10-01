@@ -93,11 +93,47 @@
       <form id="search-form" class="search-form" novalidate>
         <h1 class="display" id="search-title" tabindex="-1" data-focus>Which train?</h1>
 
-        <label class="field-label" for="q" id="q-label">Train number</label>
-        <input class="q-input" id="q" name="q" autocomplete="off" spellcheck="false" enterkeyhint="go"
-               aria-describedby="q-hint q-error">
-        <p class="field-hint" id="q-hint"></p>
-        <p class="field-error" id="q-error" role="alert" hidden></p>
+        <div class="by-toggle" id="by-toggle" role="radiogroup" aria-label="Find your train by" data-by="number" hidden>
+          <button type="button" role="radio" data-by="number" aria-checked="true"><span data-icon="hash"></span>Train number</button>
+          <button type="button" role="radio" data-by="route" aria-checked="false"><span data-icon="route"></span>From and to</button>
+        </div>
+
+        <div class="by-panel" id="panel-number">
+          <label class="field-label" for="q" id="q-label">Train number</label>
+          <input class="q-input" id="q" name="q" autocomplete="off" spellcheck="false" enterkeyhint="go"
+                 aria-describedby="q-hint q-error">
+          <p class="field-hint" id="q-hint"></p>
+          <p class="field-error" id="q-error" role="alert" hidden></p>
+        </div>
+
+        <!-- Route finder: every train between two stations -->
+        <div class="by-panel" id="panel-route" hidden>
+          <div class="journey">
+            <div class="jf" data-end="from">
+              <label class="jf-label" for="st-from">From</label>
+              <div class="jf-box">
+                <input class="jf-input" id="st-from" type="text" placeholder="Station name or code" autocomplete="off"
+                       autocapitalize="words" spellcheck="false" enterkeyhint="next" role="combobox" aria-autocomplete="list"
+                       aria-expanded="false" aria-controls="st-from-list" aria-describedby="route-error">
+                <span class="jf-code" id="st-from-code" hidden></span>
+              </div>
+              <ul class="st-list" id="st-from-list" role="listbox" aria-label="Stations to leave from" hidden></ul>
+            </div>
+            <div class="jf" data-end="to">
+              <label class="jf-label" for="st-to">To</label>
+              <div class="jf-box">
+                <input class="jf-input" id="st-to" type="text" placeholder="Station name or code" autocomplete="off"
+                       autocapitalize="words" spellcheck="false" enterkeyhint="done" role="combobox" aria-autocomplete="list"
+                       aria-expanded="false" aria-controls="st-to-list" aria-describedby="route-error">
+                <span class="jf-code" id="st-to-code" hidden></span>
+              </div>
+              <ul class="st-list" id="st-to-list" role="listbox" aria-label="Stations to go to" hidden></ul>
+            </div>
+            <button type="button" class="jf-swap" id="jf-swap" aria-label="Swap From and To" data-icon="swap"></button>
+          </div>
+          <p class="field-error" id="route-error" role="alert" hidden></p>
+          <p class="sr-only" id="st-status" aria-live="polite"></p>
+        </div>
 
         <fieldset class="date-set">
           <legend class="fieldset-legend" id="date-q">When did it leave its first station?</legend>
@@ -109,8 +145,29 @@
           </p>
         </fieldset>
 
+        <div class="time-set" id="time-set" hidden>
+          <div class="time-head">
+            <label class="field-label" for="t-after">Leaving after</label>
+            <input class="time-input" id="t-after" type="time" step="300">
+          </div>
+          <div class="time-chips" id="time-chips" role="group" aria-label="Quick times"></div>
+        </div>
+
         <button class="cta" type="submit"><span id="cta-text">Check live status</span><span data-icon="next"></span></button>
       </form>
+    </section>
+
+    <!-- ============ Route results ============ -->
+    <section id="view-results" class="view" hidden aria-labelledby="results-title">
+      <div class="topbar">
+        <a class="icon-btn" id="results-back" href="./" aria-label="Change search" data-icon="back"></a>
+        <div class="topbar-title">
+          <strong id="results-title" tabindex="-1" data-focus></strong>
+          <span id="results-sub"></span>
+        </div>
+        <button type="button" class="icon-btn" id="results-swap" aria-label="Show the return journey" data-icon="swap"></button>
+      </div>
+      <div id="results-root" aria-live="polite" aria-busy="true"></div>
     </section>
 
     <!-- ============ Status ============ -->

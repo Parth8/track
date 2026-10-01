@@ -24,6 +24,9 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 ## Features
 
 ### Trains
+- Find a train by number, or by **From and To**: pick two stations, the day you board and a time, and see every train between them. Tapping one opens its live status for the right run (worked out for you, even when it started the day before) with your stop already set.
+- Station search runs on your device across 8,677 stations, by name, code, older name or nickname ("Mysore", "Bombay", "Trichy"), with each city's main station first
+- Route results show departure and arrival, journey time, which days it runs, on-time record, the next one to leave and the fastest, nearby stations the train uses instead, and trains on the route that don't run that day
 - Live running status for the last 4 run dates, via a split-flap date picker
 - "Your stop" countdown with delay, ETA and journey progress. Tap any station to make it your stop.
 - Timeline with scheduled and actual or expected times, platforms, halts and day dividers for overnight runs
@@ -51,12 +54,13 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 ```
 Browser (GitHub Pages: static HTML, CSS, ES modules)
    │
-   │  GET /api/train | /api/flight | /api/weather
+   │  GET /api/train | /api/between | /api/flight | /api/weather
    ▼
 Cloudflare Worker ── validates input, checks origin, rate-limits, caches
    │
    ├── Trains:  crowd-sourced running feed (primary for today)
    │            official NTES enquiry (primary for past runs, fallback, coach order)
+   │            published timetable (trains between two stations)
    ├── Flights: AeroDataBox (schedule, gate, belt)
    │            adsb.lol + adsb.fi (live position, raced in parallel)
    └── Weather: Open-Meteo
@@ -69,14 +73,14 @@ The frontend never talks to a data provider directly and never learns which one 
 
 **No build step.** The site is plain HTML, CSS and native ES modules. MapLibre and the fonts are self-hosted and version-pinned.
 
-> The Worker (`worker.js`) is deployed separately to Cloudflare and is not part of this repository. Its contract is documented below.
+> The Worker lives in `worker/worker.js` and is deployed separately to Cloudflare (see Deploying). Its contract is documented below.
 
 ---
 
 ## Project structure
 
 ```
-index.html            Shell, security policy, the three screens, sources sheet
+index.html            Shell, security policy, the four screens, sources sheet
 manifest.webmanifest  Name, icons and full-screen mode for add to home screen
 styles.css            Design tokens, light and dark themes, components, motion
 js/
@@ -92,6 +96,12 @@ js/
   theme.js            Applies the saved appearance before first paint
   install.js          Add to home screen: which way this browser does it, if at all
   guide.js            Picture guides for adding Track on iPhone, iPad and Mac (static SVG)
+  finder.js           Route finder: station fields, time picks, results list
+  stations.js         Station list loading and on-device search
+data/stations.json    Passenger stations: [code, name, older name] (built by tools/)
+tools/                build-stations.mjs: rebuilds data/stations.json from NTES's station list
+worker/worker.js      The Cloudflare Worker (data service)
+tests/                Worker and station tests (node --test), browser tests for the route finder
 icons/                Home-screen and app icons (PNG, drawn from favicon.svg)
 screenshots/          Install-dialog screenshots for Android and desktop Chrome (sample data, not a real journey)
 vendor/maplibre/      MapLibre GL JS 6.11.2 (self-hosted)
@@ -154,13 +164,35 @@ Response shape (abridged):
 ```
 `position` is `null` when no receiver has heard the aircraft in the last 10 minutes. The frontend then estimates the position from the schedule and labels it as an estimate. `status.inferred` is `true` when a plane was spotted airborne before the airline updated its status.
 
+### `GET /api/between?from=MYS&to=KCG&date=2026-10-02`
+| Param | Rule |
+|---|---|
+| `from`, `to` | Station codes, 1 to 5 letters, different from each other |
+| `date` | The day you board at `from`, `YYYY-MM-DD`, 3 days back to 120 days ahead (IST) |
+
+Response shape (abridged):
+```json
+{
+  "kind": "between", "date": "2026-10-02",
+  "from": { "code": "MYS", "name": "Mysore Jn" }, "to": { "code": "KCG", "name": "Kacheguda" },
+  "trains": [{
+    "number": "12786", "name": "Ashokapuram - Kacheguda SF Express",
+    "from": { "code": "MYS", "name": "Mysore Jn" }, "to": { "code": "KCG", "name": "Kacheguda" },
+    "startDate": "2026-10-02", "dep": "ISO", "arr": "ISO", "durationMin": 865,
+    "runDays": ["Mon", "Tue"], "onTimeRating": 9, "distanceKm": 763, "pantry": false, "special": false
+  }],
+  "others": [{ "number": "12975", "name": "...", "depTime": "10:30", "arrTime": "01:30", "arrDay": 1, "runDays": ["Thu", "Sat"], "nextDate": "2026-10-03" }]
+}
+```
+`trains` are sorted by departure. `startDate` is the day the train's run began, which is the date the live tracker needs (a train you board after midnight may have started the day before). A train's `from` or `to` can be a nearby station the timetable suggests, such as Delhi Jn for New Delhi. `others` are trains on the route that don't run that day, with the next date they do.
+
 ### `GET /api/weather?lat=17.39&lon=78.50`
 Current conditions, hourly forecast and sunrise and sunset for the next few days, in the location's own time zone.
 
 ### Error codes
 | Code | Status | Meaning |
 |---|---|---|
-| `invalid_train`, `invalid_flight`, `invalid_date`, `date_out_of_range` | 400 | Input failed validation |
+| `invalid_train`, `invalid_flight`, `invalid_station`, `same_station`, `invalid_date`, `date_out_of_range` | 400 | Input failed validation |
 | `forbidden` | 403 | Request came from a site not in `ALLOWED_ORIGINS` |
 | `not_found` | 404 | No run or flight for that number and date |
 | `rate_limited` | 429 | More than 40 requests a minute from one visitor |
@@ -175,6 +207,7 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 | Flight status | 5 to 60 min, by phase | Protects the free flight-data quota |
 | Live aircraft position | 20 s | Free, so looked up on every refresh |
 | Weather | 15 min | |
+| Trains between stations | 6 h | Timetables rarely change, so one lookup serves everyone |
 | Backup copy of any result | 6 h | Served, and flagged, if every source is down |
 
 ---
@@ -183,7 +216,7 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 
 ### 1. The Worker (Cloudflare dashboard, no CLI needed)
 1. Workers & Pages → Create → Hello World → name it `journey-api` → Deploy.
-2. Edit code → paste `worker.js` → Deploy.
+2. Edit code → paste `worker/worker.js` → Deploy. Do this again whenever `worker/worker.js` changes.
 3. Settings → Variables and Secrets:
 
 | Name | Type | Value |
@@ -215,6 +248,19 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 
 ---
 
+## Testing
+
+```
+node --test tests/*.test.mjs           # Worker and station search, offline
+python3 -m http.server 8765            # then, in another terminal:
+node tests/finder.e2e.mjs              # route finder in a real browser (needs Playwright)
+```
+Worker tests answer upstream calls from recorded responses in `tests/fixtures`, so they run offline and give the same result every time.
+
+To refresh the station list, save NTES's station list (the `arrStationList` array) as JSON and run `node tools/build-stations.mjs ntes.json datameet-stations.json > data/stations.json`.
+
+---
+
 ## Known limitations
 
 - **Train data is crowd-sourced first.** It usually matches the official feed within a minute, but it can shift. The timeline says so.
@@ -223,6 +269,7 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 - **The official railway feed may block some cloud regions.** Visitors outside India may only get the crowd-sourced source.
 - **Flight data runs on a free plan.** Its monthly lookup quota is shared by everyone using this deployment.
 - **Unofficial access.** Railway data is fetched from public pages without an official API. Keep usage personal and cached.
+- **Route search shows direct trains only.** Journeys that need a change of train aren't suggested.
 
 ---
 
@@ -231,6 +278,9 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 | Data | Source | Licence or terms |
 |---|---|---|
 | Train running status | Crowd-sourced running feed and Indian Railways NTES public enquiry | Public pages, unofficial use |
+| Trains between stations | Published timetable, via the crowd-sourced feed's timetable search | Public pages, unofficial use |
+| Station names and codes | Indian Railways NTES station list | Public data |
+| Older station names (search only) | [datameet/railways](https://github.com/datameet/railways) | CC0 |
 | Flight schedules, gates, belts | [AeroDataBox](https://aerodatabox.com) | Attribution required (shown on every flight screen) |
 | Live aircraft positions | [adsb.lol](https://adsb.lol), [adsb.fi](https://adsb.fi) | ODbL (adsb.lol); non-commercial with credit (adsb.fi) |
 | Map tiles | [OpenFreeMap](https://openfreemap.org), [OpenMapTiles](https://openmaptiles.org) | Free, attribution required |
@@ -253,7 +303,8 @@ Track is not affiliated with Indian Railways, any airline, or any provider above
 
 Deliberately short. Depth over breadth.
 
-- [ ] Small test suite for time zones, geometry, delay logic and phase rendering
+- [x] Find a train by stations, date and time
+- [ ] Small test suite for time zones, geometry, delay logic and phase rendering (Worker and station tests are in)
 - [ ] "Should I leave for the station now?" nudge
 - [ ] Clearer disruption explanations (diversions, reschedules, cancellations)
 - [ ] Screenshots in this README

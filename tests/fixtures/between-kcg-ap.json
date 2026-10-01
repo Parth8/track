@@ -1,0 +1,107 @@
+{
+ "success": true,
+ "status": 200,
+ "from": "KCG",
+ "to": "AP",
+ "train_between_stations": [
+  {
+   "train_number": "12785",
+   "train_name": "Kacheguda - Ashokapuram SF Express",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "from": "KCG",
+   "to": "AP",
+   "from_std": "19:05",
+   "from_sta": "19:05",
+   "to_sta": "09:55",
+   "to_std": "09:55",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 890,
+   "from_station_name": "KACHEGUDA",
+   "to_station_name": "ASHOKAPURAM",
+   "distance": 768.0,
+   "on_time_rating": 10,
+   "to_on_time_rating": 10,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02"
+  },
+  {
+   "train_number": "17289",
+   "train_name": "Kakinada Town - Mysuru Express",
+   "run_days": [
+    "Mon",
+    "Fri"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Fri"
+   ],
+   "from": "SC",
+   "to": "MYS",
+   "from_std": "22:05",
+   "from_sta": "21:55",
+   "to_sta": "16:00",
+   "to_std": "16:00",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 1075,
+   "from_station_name": "SECUNDERABAD JN",
+   "to_station_name": "MYSORE JN",
+   "distance": 839.0,
+   "on_time_rating": -1,
+   "to_on_time_rating": -1,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02"
+  },
+  {
+   "train_number": "12976",
+   "train_name": "Jaipur - Mysuru SF Express",
+   "run_days": [
+    "Wed",
+    "Fri"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Wed"
+   ],
+   "from": "KCG",
+   "to": "MYS",
+   "from_std": "00:05",
+   "from_sta": "23:55",
+   "to_sta": "16:00",
+   "to_std": "16:00",
+   "from_day": 2,
+   "to_day": 2,
+   "duration_min": 955,
+   "from_station_name": "KACHEGUDA",
+   "to_station_name": "MYSORE JN",
+   "distance": 804.0,
+   "on_time_rating": 3,
+   "to_on_time_rating": 3,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-02"
+  }
+ ],
+ "alternate_trains": [],
+ "nearby_station": []
+}

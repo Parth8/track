@@ -2163,7 +2163,7 @@ a {
   max-width: 32ch;
 }
 .credit-by a {
-  color: var(--accent);
+  color: var(--deep);
   font-weight: 700;
   text-decoration: none;
 }
@@ -2440,3 +2440,828 @@ a {
   100% { opacity: 0; transform: scale(1.8); }
 }
 .install-safari p { margin-top: 10px; }
+
+/* ============================================================
+   Route finder: find a train by its stations
+   ============================================================ */
+
+/* Train number or From and to: a pill slides under the chosen side */
+.by-toggle {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--tint) 75%, var(--card));
+  margin-bottom: 2px;
+}
+.by-toggle[hidden] {
+  display: none;
+}
+.by-toggle::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  transition: transform 0.5s var(--spring);
+}
+.by-toggle[data-by="route"]::before {
+  transform: translateX(100%);
+}
+.by-toggle button {
+  position: relative;
+  z-index: 1;
+  min-height: 46px;
+  border: 0;
+  background: none;
+  border-radius: 14px;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  transition: color 0.25s;
+}
+.by-toggle button svg {
+  width: 17px;
+  height: 17px;
+}
+.by-toggle button[aria-checked="true"] {
+  color: var(--deep);
+}
+.by-panel {
+  position: relative;
+  z-index: 10; /* station suggestions open over the date cards below */
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.by-panel[hidden] {
+  display: none;
+}
+.panel-in {
+  animation: panelIn 0.4s var(--ease-out) both;
+}
+
+/* From and To, joined by a dotted line like a ticket */
+.journey {
+  position: relative;
+  background: var(--card);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  border: 2px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  padding: 4px 70px 4px 50px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.journey:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--shadow), 0 0 0 5px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.journey::before {
+  content: "";
+  position: absolute;
+  left: 24px;
+  top: 42px;
+  bottom: 42px;
+  border-left: 2px dashed var(--line);
+}
+.jf {
+  position: relative;
+  padding: 12px 0 10px;
+}
+.jf + .jf {
+  border-top: 1px solid var(--hair);
+}
+.jf::before {
+  content: "";
+  position: absolute;
+  left: -32px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-top: -2px;
+  border-radius: 50%;
+  border: 3px solid var(--accent);
+  background: var(--card);
+  transition: background 0.3s, transform 0.4s var(--spring);
+}
+.jf[data-end="to"]::before {
+  background: var(--accent);
+}
+.jf.picked::before {
+  transform: scale(1.12);
+}
+.jf-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.jf-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+}
+.jf-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  padding: 2px 0;
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--deep);
+  text-overflow: ellipsis;
+}
+.jf-input::placeholder {
+  font-size: 17px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.jf-input:focus-visible {
+  outline: none;
+}
+.jf-input[aria-invalid="true"] {
+  color: var(--late);
+}
+.jf-code {
+  flex: none;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--tint);
+  color: var(--deep);
+}
+.jf-code.pop {
+  animation: codePop 0.45s var(--spring);
+}
+.jf-swap {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin-top: -23px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--tint);
+  color: var(--deep);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transform: rotate(var(--spin, 0deg));
+  transition: transform 0.55s var(--spring), background 0.2s;
+}
+.jf-swap:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--card));
+}
+.jf-swap:active {
+  scale: 0.92;
+}
+.jf-swap svg {
+  width: 21px;
+  height: 21px;
+}
+/* the two stations trade places */
+.journey.swapping .jf[data-end="from"] .jf-box {
+  animation: swapDown 0.45s var(--ease-out);
+}
+.journey.swapping .jf[data-end="to"] .jf-box {
+  animation: swapUp 0.45s var(--ease-out);
+}
+
+/* Suggestions under a station field */
+.st-list {
+  position: absolute;
+  left: -52px;
+  right: -72px;
+  top: calc(100% + 4px);
+  z-index: 30;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--card);
+  border-radius: 20px;
+  box-shadow: var(--shadow), 0 18px 44px rgba(42, 45, 58, 0.18);
+  max-height: min(340px, 52vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  transform-origin: top center;
+  animation: listIn 0.22s var(--ease-out);
+}
+.st-list[hidden] {
+  display: none;
+}
+.jf.open {
+  z-index: 31;
+}
+.st-head {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.st-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 50px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  cursor: pointer;
+  animation: rowIn 0.3s var(--ease-out) both;
+  animation-delay: calc(min(var(--i, 0), 6) * 22ms);
+}
+.st-opt:hover {
+  background: color-mix(in srgb, var(--tint) 55%, transparent);
+}
+.st-opt[aria-selected="true"] {
+  background: var(--tint);
+}
+.st-main {
+  flex: 1;
+  min-width: 0;
+}
+.st-name {
+  display: block;
+  font-weight: 700;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.st-name mark {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: inherit;
+  border-radius: 4px;
+  padding: 0 1px;
+}
+.st-sub {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.st-code {
+  flex: none;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--deep);
+  padding: 2px 7px;
+  border: 1.5px solid var(--hair);
+  border-radius: 8px;
+}
+.st-empty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.st-spin {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2.5px solid var(--tint);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+/* Leaving after: a time, or a quick pick */
+.time-set {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+.time-set[hidden] {
+  display: none;
+}
+.time-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.time-input {
+  min-width: 118px;
+  height: 48px;
+  border-radius: 14px;
+  border: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--card);
+  padding: 0 12px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--deep);
+  font-variant-numeric: tabular-nums;
+  color-scheme: inherit;
+}
+.time-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.time-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 4px 2px 6px;
+  margin: -4px -2px -6px;
+}
+.time-chips::-webkit-scrollbar {
+  display: none;
+}
+.time-chip {
+  flex: none;
+  min-height: 40px;
+  padding: 0 15px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, transform 0.35s var(--spring);
+}
+.time-chip:active {
+  transform: scale(0.94);
+}
+.time-chip[aria-pressed="true"] {
+  background: var(--deep);
+  color: var(--card);
+}
+
+/* ---------- results ---------- */
+.route-card {
+  padding: 18px 18px 14px;
+}
+.rc-ends {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr);
+  align-items: end;
+  gap: 6px;
+}
+.rc-end strong {
+  display: block;
+  font-size: 22px;
+  line-height: 1.12;
+  color: var(--deep);
+  overflow-wrap: break-word;
+}
+.rc-ends.long strong {
+  font-size: 19px;
+}
+.rc-ends.xlong strong {
+  font-size: 17px;
+}
+.rc-end.to {
+  text-align: right;
+}
+.rc-code {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.rc-mid {
+  position: relative;
+  height: 20px;
+  align-self: center;
+}
+.rc-mid i {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 9px;
+  border-top: 2px dashed var(--line);
+}
+.rc-mid b {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+  animation: ride 2.6s var(--ease-out) infinite;
+}
+.rc-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--hair);
+}
+.rc-when {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  min-width: 0;
+}
+.rc-when strong {
+  font-size: 15px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.rc-when span {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.day-step {
+  flex: none;
+  min-height: 42px;
+  min-width: 64px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--tint);
+  color: var(--deep);
+  font-size: 13.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  transition: transform 0.35s var(--spring), opacity 0.2s;
+}
+.day-step:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.day-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.day-step svg {
+  width: 15px;
+  height: 15px;
+}
+/* Small phones: arrows only, so the date stays on one line (the label still names the day). */
+@media (max-width: 359px) {
+  .day-step {
+    min-width: 44px;
+    padding: 0;
+  }
+  .day-step span {
+    display: none;
+  }
+}
+.rc-count {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 4px 0;
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+.rc-count strong {
+  color: var(--deep);
+}
+.rc-count span {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.train-list,
+.other-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tcard {
+  position: relative;
+  display: block;
+  padding: 16px 16px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  color: inherit;
+  text-decoration: none;
+  animation: rowIn 0.45s var(--ease-out) both;
+  animation-delay: calc(min(var(--i, 0), 8) * 45ms);
+  transition: transform 0.35s var(--spring), box-shadow 0.25s;
+}
+a.tcard:hover {
+  box-shadow: var(--shadow), 0 12px 30px rgba(42, 45, 58, 0.09);
+}
+a.tcard:active {
+  transform: scale(0.985);
+}
+.tcard.muted {
+  background: color-mix(in srgb, var(--card) 55%, transparent);
+  box-shadow: none;
+  border: 1.5px dashed var(--hair);
+}
+.tcard.skel-card {
+  gap: 12px;
+}
+.tc-flags {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.tc-times {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.tc-t {
+  font-family: var(--font-display);
+  font-variation-settings: "SOFT" 100, "opsz" 72;
+  font-size: 30px;
+  line-height: 1;
+  color: var(--deep);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.tc-t sup {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--late);
+  margin-left: 2px;
+  vertical-align: 12px;
+}
+.tc-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tc-line i {
+  flex: 1;
+  height: 0;
+  border-top: 2px dashed var(--line);
+}
+.tc-codes {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.tc-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--ink);
+}
+.tc-no {
+  flex: none;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--muted);
+}
+.tc-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.tc-tags:empty {
+  display: none;
+}
+.tc-days {
+  display: inline-flex;
+  gap: 3px;
+}
+.tc-days b {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  background: var(--hair);
+}
+.tc-days b.on {
+  background: var(--tint);
+  color: var(--deep);
+}
+.tc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--hair);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.tc-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--deep);
+}
+.tc-go svg {
+  width: 17px;
+  height: 17px;
+  transition: transform 0.35s var(--spring);
+}
+a.tcard:hover .tc-go svg {
+  transform: translateX(3px);
+}
+.tc-later {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+}
+.tc-later svg {
+  width: 16px;
+  height: 16px;
+}
+.live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ring 2s ease-out infinite;
+}
+.fold-btn {
+  width: 100%;
+  min-height: 52px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tint) 45%, transparent);
+  color: var(--deep);
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.fold-btn svg {
+  width: 17px;
+  height: 17px;
+}
+.ocard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 12px 12px 16px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 60%, transparent);
+  border: 1.5px dashed var(--hair);
+  animation: rowIn 0.45s var(--ease-out) both;
+  animation-delay: calc(min(var(--i, 0), 8) * 45ms + 120ms);
+}
+.oc-main {
+  flex: 1;
+  min-width: 0;
+}
+.ocard .tc-name {
+  margin-top: 0;
+  font-size: 15px;
+}
+.oc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.oc-next {
+  flex: none;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--tint);
+  color: var(--deep);
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.oc-next svg {
+  width: 15px;
+  height: 15px;
+}
+.empty.compact {
+  padding-top: 18px;
+}
+.empty.compact svg {
+  width: 150px;
+}
+.empty.compact .cta {
+  margin-top: 6px;
+  padding: 0 24px;
+}
+.foot-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+@keyframes listIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scaleY(0.96);
+  }
+}
+@keyframes codePop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+}
+@keyframes swapDown {
+  0% {
+    transform: translateY(-34px);
+    opacity: 0.2;
+  }
+}
+@keyframes swapUp {
+  0% {
+    transform: translateY(34px);
+    opacity: 0.2;
+  }
+}
+@keyframes ride {
+  0% {
+    left: 0;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    left: calc(100% - 12px);
+    opacity: 0;
+  }
+}
+.oc-meta sup.plus {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--late);
+  margin-left: 2px;
+}
+.fold-btn.quiet {
+  border-color: var(--hair);
+  background: transparent;
+  color: var(--ink-soft);
+}
