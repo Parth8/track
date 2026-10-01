@@ -13,6 +13,26 @@ const isMacSafari =
 const isEdge = !isIOS && !isAndroid && /Edg\//.test(ua);
 const isChrome = !isIOS && !isAndroid && !isEdge && /Chrome\//.test(ua) && !/OPR\//.test(ua);
 
+/**
+ * Which picture guide fits this Apple setup, so the drawing matches the screen in front of them:
+ * "safari" (iPhone, iOS 15 to 18), "safari26" (iPhone, Share under •••), "ipad", "chrome" (Chrome on iOS),
+ * "mac", "open-safari" (only Safari can add from here), or null for plain text steps.
+ */
+export const appleGuide = (() => {
+  if (isMacSafari) return "mac";
+  if (!isIOS) return null;
+  const os = ua.match(/OS (\d+)_(\d+)/); // iPads in desktop mode don't say, and they're new enough
+  const before164 = os && (+os[1] < 16 || (+os[1] === 16 && +os[2] < 4));
+  const safariVersion = +(ua.match(/Version\/(\d+)/)?.[1] || 0); // iOS 26 Safari still says "OS 18_6"
+  const isIPad = /iPad/.test(ua) || /Macintosh/.test(ua);
+  if (/CriOS/.test(ua)) return before164 ? "open-safari" : "chrome";
+  if (/FxiOS|EdgiOS|OPiOS|DuckDuckGo/.test(ua)) return before164 ? "open-safari" : null;
+  // apps' built-in browsers (Instagram, Facebook, Google app and others) have no Add to Home Screen
+  if (!/Safari\//.test(ua) || /FBAN|FBAV|Instagram|GSA\/|Line\/|LinkedInApp|Snapchat|Twitter/.test(ua)) return "open-safari";
+  if (isIPad) return "ipad";
+  return safariVersion >= 26 ? "safari26" : "safari";
+})();
+
 /** Where the app will live once added, for the button's wording. */
 export const installPlace = isIOS || isAndroid ? "home" : isMacSafari ? "dock" : "desktop";
 

@@ -2406,3 +2406,37 @@ a {
   .bubbles { column-gap: 12px; }
   .bubbles .bubble-note { font-size: 17px; }
 }
+
+/* Picture guides for Apple devices: two drawings with numbered captions */
+.install.bubble-float .bubble-panel { width: 330px; }
+.guide {
+  list-style: none; margin: 12px 0 2px; padding: 0; counter-reset: step;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+.guide li { counter-increment: step; display: grid; gap: 8px; align-content: start; }
+.guide-art { display: block; border-radius: 14px; background: var(--mint-bg); padding: 6px 4px 2px; }
+.guide-art svg { display: block; width: 100%; height: auto; }
+.guide-cap { display: block; font-size: 12.5px; line-height: 1.4; color: var(--ink-soft); }
+.guide-cap::before {
+  content: counter(step); display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 6px;
+  border-radius: 50%; background: var(--mint-tint); color: var(--mint-deep); font-size: 11px; font-weight: 800; vertical-align: 1px;
+}
+.guide-cap b { color: var(--ink); font-weight: 800; }
+.guide .d { fill: var(--card); stroke: var(--muted); stroke-opacity: 0.45; stroke-width: 1.2; }
+.guide .s { fill: var(--hair); }
+.guide .i { fill: none; stroke: var(--ink-soft); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.guide .t { fill: var(--ink); font: 700 7px var(--font-body); }
+.guide .t.sm { font-size: 6px; }
+.guide .hl { fill: var(--mint-tint); }
+.guide .m {
+  fill: none; stroke: var(--mint-deep); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 1; animation: scribble 0.8s 0.25s ease-out both;
+}
+.guide li + li .m { animation-delay: 0.9s; }
+.guide .p { fill: var(--mint); opacity: 0; transform-box: fill-box; transform-origin: center; animation: tapPulse 1.4s 1.1s ease-out 2; }
+.guide li + li .p { animation-delay: 1.8s; }
+@keyframes tapPulse {
+  0% { opacity: 0.35; transform: scale(0.5); }
+  100% { opacity: 0; transform: scale(1.8); }
+}
+.install-safari p { margin-top: 10px; }

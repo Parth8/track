@@ -6,7 +6,8 @@ import { createLoader } from "./loader.js";
 import { renderShareImage } from "./share-card.js";
 import { renderTrain } from "./train.js";
 import { renderFlight } from "./flight.js";
-import { installWay, installPlace, onInstallChange, promptInstall } from "./install.js";
+import { installWay, installPlace, appleGuide, onInstallChange, promptInstall } from "./install.js";
+import { guideArt } from "./guide.js";
 
 const today = () => todayIn(IST);
 const THEME_LABEL = { light: "Light", dark: "Dark", auto: "Match device" };
@@ -150,8 +151,24 @@ $("#home-credit").append(credit());
 
 // The add-to-home-screen button shows only where this browser can actually add it.
 const syncInstall = (way) => {
+  const was = document.documentElement.dataset.install;
   if (way) document.documentElement.dataset.install = way;
   else delete document.documentElement.dataset.install;
+  if (way === was) return;
+  // An open panel keeps up: written steps become the one-tap button the moment the browser allows it.
+  const open = [...document.querySelectorAll(".install.open")];
+  if (!open.length) return;
+  if (!way) {
+    open.forEach((b) => b.set(false));
+    toast(installPlace === "home" ? "Track is on your home screen" : "Track is installed");
+    return;
+  }
+  for (const b of open) {
+    const hadFocus = b.contains(document.activeElement);
+    b.refill();
+    if (way === "prompt" && hadFocus) b.querySelector(".support-btn")?.focus();
+  }
+  if (way === "prompt") toast("One-tap install is ready");
 };
 syncInstall(installWay());
 onInstallChange(syncInstall);
@@ -693,9 +710,10 @@ function bubble(name, kind, { label, region, icon, fill, note }) {
   // A pencil note pointing at the button. Decorative: the button has its own label.
   const scribble = h("span", { class: "bubble-note", "aria-hidden": "true" }, svg(icons.scribbleArrow), svg(icons.scribbleDown), h("span", { text: note }));
   const root = h("div", { class: `bubble bubble-${kind} ${name}` }, panel, btn, scribble);
+  root.refill = () => panel.replaceChildren(close, ...fill(root));
   root.set = (open, { slow = false } = {}) => {
     if (open) {
-      panel.replaceChildren(close, ...fill(root));
+      root.refill();
       // inline bubbles share one row, so only one panel is open at a time
       for (const other of root.parentElement?.querySelectorAll(":scope > .bubble.open") || []) if (other !== root) other.set(false);
     }
@@ -764,9 +782,9 @@ function installSteps(root) {
       svg(icons.addHome),
       onHome ? "Add to home screen" : "Install Track"
     );
-  else if (way === "ios") how = steps(["Tap ", b("Share"), " ", svg(icons.share), ". In Safari it may be under ", b("•••"), "."], ["Scroll down and choose ", b("Add to Home Screen"), "."]);
+  else if ((way === "ios" || way === "mac") && appleGuide) how = appleSteps(appleGuide);
+  else if (way === "ios") how = steps(["Open your browser's ", b("Share"), " menu ", svg(icons.share), "."], ["Choose ", b("Add to Home Screen"), "."]);
   else if (way === "android") how = steps(["Open your browser's menu ", b("⋮"), "."], ["Choose ", b("Add to Home screen"), " or ", b("Install app"), "."]);
-  else if (way === "mac") how = steps(["In the menu bar, open ", b("File"), "."], ["Choose ", b("Add to Dock"), "."]);
   else if (way === "chrome") how = steps(["Open Chrome's menu ", b("⋮"), " and choose ", b("Cast, save, and share"), "."], ["Choose ", b("Install page as app"), "."]);
   else if (way === "edge") how = steps(["Open Edge's menu ", b("…"), " and choose ", b("Apps"), "."], ["Choose ", b("Install this site as an app"), "."]);
   return [
@@ -778,6 +796,50 @@ function installSteps(root) {
     }),
     how,
   ].filter(Boolean);
+}
+
+/** Two pictures with numbered captions for Apple devices; the captions carry the meaning. */
+function appleSteps(kind) {
+  const b = (text) => h("b", { text });
+  const addHome = ["Scroll down and choose ", b("Add to Home Screen"), "."];
+  if (kind === "open-safari") {
+    return h(
+      "div",
+      { class: "install-safari" },
+      h("p", { text: "Only Safari can add Track to your home screen from here. Copy the link, open Safari, and paste it in." }),
+      h(
+        "button",
+        {
+          type: "button",
+          class: "support-btn",
+          on: {
+            click: async () => {
+              try {
+                await navigator.clipboard.writeText(location.origin + location.pathname);
+                toast("Link copied. Now open Safari.");
+              } catch {
+                toast("Couldn't copy. Long-press the address bar instead.");
+              }
+            },
+          },
+        },
+        svg(icons.share),
+        "Copy link"
+      )
+    );
+  }
+  const captions = {
+    safari: [["Tap ", b("Share"), " in the toolbar."], addHome],
+    safari26: [["Tap ", b("•••"), ", then ", b("Share"), "."], addHome],
+    ipad: [["Tap ", b("Share"), " at the top right."], addHome],
+    chrome: [["Tap ", b("Share"), " in the address bar."], addHome],
+    mac: [["In the menu bar, open ", b("File"), "."], ["Choose ", b("Add to Dock"), "."]],
+  }[kind];
+  return h(
+    "ol",
+    { class: "guide" },
+    guideArt[kind].map((art, i) => h("li", {}, h("span", { class: "guide-art" }, svg(art)), h("span", { class: "guide-cap" }, captions[i])))
+  );
 }
 
 function credit() {
