@@ -6,11 +6,13 @@ import { createLoader } from "./loader.js";
 import { renderShareImage } from "./share-card.js";
 import { renderTrain } from "./train.js";
 import { renderFlight } from "./flight.js";
+import { installWay, installPlace, onInstallChange, promptInstall } from "./install.js";
 
 const today = () => todayIn(IST);
 const THEME_LABEL = { light: "Light", dark: "Dark", auto: "Match device" };
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
 const CHAI_URL = "https://buymeacoffee.com/parth8"; // swap for your UPI link later
+const INSTALL_NOTE = { home: "add the app to your home screen", dock: "add the app to your Dock", desktop: "install the app" };
 const fmtFlight = (no) => no.replace(/^([A-Z0-9]{2})(\d)/, "$1 $2");
 
 const MODES = {
@@ -146,18 +148,32 @@ window.addEventListener("online", () => {
 
 $("#home-credit").append(credit());
 
-// Floating chai button (desktop only; phones get the inline one above the signature)
+// The add-to-home-screen button shows only where this browser can actually add it.
+const syncInstall = (way) => {
+  if (way) document.documentElement.dataset.install = way;
+  else delete document.documentElement.dataset.install;
+};
+syncInstall(installWay());
+onInstallChange(syncInstall);
+
+// Floating chai and install buttons (desktop only; phones get inline ones above the signature)
 const chaiFloat = chai("float");
-document.body.append(chaiFloat);
+const installFloat = install("float");
+const floats = [chaiFloat, installFloat];
+document.body.append(chaiFloat, installFloat);
 document.addEventListener("click", (e) => {
-  if (chaiFloat.classList.contains("open") && !chaiFloat.contains(e.target)) chaiFloat.set(false);
+  for (const f of floats) if (f.classList.contains("open") && !f.contains(e.target)) f.set(false);
 });
 if (window.matchMedia("(min-width: 720px)").matches) {
-  setTimeout(() => {
-    if (document.hidden || chaiFloat.dataset.touched) return;
-    chaiFloat.set(true);
-    setTimeout(() => !chaiFloat.dataset.touched && chaiFloat.set(false, { slow: true }), 6000);
-  }, 3500);
+  // Each one says hello once, chai first, and only if nobody has touched either yet.
+  const peek = (f, delay) =>
+    setTimeout(() => {
+      if (document.hidden || getComputedStyle(f).display === "none" || floats.some((o) => o.dataset.touched || o.classList.contains("open"))) return;
+      f.set(true);
+      setTimeout(() => !f.dataset.touched && f.set(false, { slow: true }), 6000);
+    }, delay);
+  peek(chaiFloat, 3500);
+  peek(installFloat, 12000);
 }
 setupTheme();
 route();
@@ -665,25 +681,22 @@ function showRefreshProblem(err, loud) {
 /* Small things                                                        */
 /* ------------------------------------------------------------------ */
 
-function chai(kind) {
-  const btn = h("button", { type: "button", class: "chai-btn", "aria-expanded": "false", "aria-controls": `chai-${kind}`, "aria-label": "Support Track: chip in for a chai" }, svg(icons.cup));
-  const close = h("button", { type: "button", class: "chai-close", "aria-label": "Close" }, svg(icons.close));
-  const panel = h(
-    "div",
-    { class: "chai-panel", id: `chai-${kind}`, role: "region", "aria-label": "Support Track" },
-    close,
-    h("strong", { text: "Like it this way?" }),
-    h(
-      "p",
-      {},
-      "Track is free, has no ads, and stays that way. If it saved you a call to the enquiry counter, you can chip in for a chai.",
-      h("br"),
-      h("em", { text: "(min $1 equivalent in your local supported currency)" })
-    ),
-    h("a", { class: "support-btn", href: CHAI_URL, target: "_blank", rel: "noopener noreferrer" }, svg(icons.cup), "Chip in for a chai")
-  );
-  const root = h("div", { class: `chai chai-${kind}` }, panel, btn);
+/**
+ * A round button that opens a small panel (chai, add to home screen).
+ * kind: "float" (desktop corner) or "inline" (above the signature on phones).
+ * fill() builds the panel's content each time it opens.
+ */
+function bubble(name, kind, { label, region, icon, fill }) {
+  const btn = h("button", { type: "button", class: "bubble-btn", "aria-expanded": "false", "aria-controls": `${name}-${kind}`, "aria-label": label }, svg(icon));
+  const close = h("button", { type: "button", class: "bubble-close", "aria-label": "Close" }, svg(icons.close));
+  const panel = h("div", { class: "bubble-panel", id: `${name}-${kind}`, role: "region", "aria-label": region }, close);
+  const root = h("div", { class: `bubble bubble-${kind} ${name}` }, panel, btn);
   root.set = (open, { slow = false } = {}) => {
+    if (open) {
+      panel.replaceChildren(close, ...fill(root));
+      // inline bubbles share one row, so only one panel is open at a time
+      for (const other of root.parentElement?.querySelectorAll(":scope > .bubble.open") || []) if (other !== root) other.set(false);
+    }
     root.classList.toggle("fading", slow && !open);
     root.classList.toggle("open", open);
     btn.setAttribute("aria-expanded", String(open));
@@ -696,12 +709,80 @@ function chai(kind) {
   return root;
 }
 
+function chai(kind) {
+  return bubble("chai", kind, {
+    label: "Support Track: chip in for a chai",
+    region: "Support Track",
+    icon: icons.cup,
+    fill: () => [
+      h("strong", { text: "Like it this way?" }),
+      h(
+        "p",
+        {},
+        "Track is free, has no ads, and stays that way. If it saved you a call to the enquiry counter, you can chip in for a chai.",
+        h("br"),
+        h("em", { text: "(min $1 equivalent in your local supported currency)" })
+      ),
+      h("a", { class: "support-btn", href: CHAI_URL, target: "_blank", rel: "noopener noreferrer" }, svg(icons.cup), "Chip in for a chai"),
+    ],
+  });
+}
+
+function install(kind) {
+  const onHome = installPlace === "home";
+  const root = bubble("install", kind, {
+    label: onHome ? "Add Track to your home screen" : "Install Track as an app",
+    region: onHome ? "Add Track to your home screen" : "Install Track",
+    icon: icons.addHome,
+    fill: installSteps,
+  });
+  // A pencil note pointing at the button. Decorative: the button has its own label.
+  root.append(h("span", { class: "install-note", "aria-hidden": "true" }, svg(icons.scribbleArrow), h("span", { text: INSTALL_NOTE[installPlace] })));
+  return root;
+}
+
+function installSteps(root) {
+  const way = installWay();
+  const onHome = installPlace === "home";
+  const b = (text) => h("b", { text });
+  const steps = (...items) => h("ol", { class: "install-steps" }, items.map((parts) => h("li", {}, h("span", {}, parts))));
+  let how = null;
+  if (way === "prompt")
+    how = h(
+      "button",
+      {
+        type: "button",
+        class: "support-btn",
+        on: {
+          click: async () => {
+            root.set(false);
+            if (await promptInstall()) toast(onHome ? "Track is on your home screen" : "Track is installed");
+          },
+        },
+      },
+      svg(icons.addHome),
+      onHome ? "Add to home screen" : "Install Track"
+    );
+  else if (way === "ios") how = steps(["Tap ", b("Share"), " ", svg(icons.share), ". In Safari it may be under ", b("•••"), "."], ["Scroll down and choose ", b("Add to Home Screen"), "."]);
+  else if (way === "android") how = steps(["Open your browser's menu ", b("⋮"), "."], ["Choose ", b("Add to Home screen"), " or ", b("Install app"), "."]);
+  else if (way === "mac") how = steps(["In the menu bar, open ", b("File"), "."], ["Choose ", b("Add to Dock"), "."]);
+  return [
+    h("strong", { text: onHome ? "Keep Track one tap away" : "Keep Track one click away" }),
+    h("p", {
+      text: onHome
+        ? "It opens full-screen from your home screen, just like an app. No app store, nothing to update, and still no ads."
+        : "It opens in its own window, just like an app. No app store, nothing to update, and still no ads.",
+    }),
+    how,
+  ].filter(Boolean);
+}
+
 function credit() {
   const a = (href, text) => h("a", { href, target: "_blank", rel: "noopener noreferrer", text });
   return h(
     "div",
     { class: "credit" },
-    chai("inline"),
+    h("div", { class: "bubbles" }, chai("inline"), install("inline")),
     h("p", { class: "credit-meta", text: "No ads · No tracking · No sign-ups" }),
     h(
       "p",

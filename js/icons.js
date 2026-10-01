@@ -9,6 +9,9 @@ export const icons = {
   down: s('<path d="M6 9l6 6 6-6"/>'),
   close: s('<path d="M6 6l12 12M18 6L6 18"/>'),
   share: s('<path d="M12 4v11M7 9l5-5 5 5M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>'),
+  addHome: s('<rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M12 9v6M9 12h6"/>'),
+  // hand-drawn, for the pencil note beside the add-to-home-screen button
+  scribbleArrow: s('<path pathLength="1" d="M38 13c-8-3.5-19-4-31-.5M13 6.5 6.5 12.6l7.2 4.6"/>', "0 0 40 22"),
   refresh: s('<path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/>'),
   pin: s('<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>'),
   info: s('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'),

@@ -38,6 +38,7 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 
 ### Everywhere
 - Shareable URLs. The whole state lives in the address bar, for example `?m=train&no=12786&d=2026-09-29&s=KCG`
+- Add to home screen. Opens full-screen like an app, with no app store. The button only appears where the browser can actually add it (iPhone, iPad, Android, Chrome and Edge, Safari on a Mac) and hides once it's added
 - Light, dark or match-device appearance (the site's own palette is the default)
 - Auto-refresh while visible, paused in background tabs
 - Friendly error screens with next steps, auto-retry countdowns and offline recovery
@@ -76,6 +77,7 @@ The frontend never talks to a data provider directly and never learns which one 
 
 ```
 index.html            Shell, security policy, the three screens, sources sheet
+manifest.webmanifest  Name, icons and full-screen mode for add to home screen
 styles.css            Design tokens, light and dark themes, components, motion
 js/
   main.js             Routing (URL is the only state), sessions, refresh, errors
@@ -88,8 +90,10 @@ js/
   util.js             Safe DOM builder, time zones, geometry
   icons.js            Static, trusted SVG only
   theme.js            Applies the saved appearance before first paint
+  install.js          Add to home screen: which way this browser does it, if at all
+icons/                Home-screen and app icons (PNG, drawn from favicon.svg)
 vendor/maplibre/      MapLibre GL JS 6.11.2 (self-hosted)
-fonts/                Fraunces and Plus Jakarta Sans (variable, self-hosted)
+fonts/                Fraunces, Plus Jakarta Sans and Caveat (self-hosted)
 ```
 
 ---
@@ -237,6 +241,7 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 | MapLibre GL JS | 6.11.2 | BSD-3-Clause (`vendor/maplibre/LICENSE.txt`) |
 | Fraunces | Variable (Fontsource 5.3.0) | SIL Open Font License 1.1 |
 | Plus Jakarta Sans | Variable (Fontsource 5.3.0) | SIL Open Font License 1.1 |
+| Caveat | 400, Latin subset (Fontsource 5.3.0) | SIL Open Font License 1.1 |
 
 Track is not affiliated with Indian Railways, any airline, or any provider above. Always confirm times at the station or with your airline.
 

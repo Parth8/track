@@ -13,6 +13,12 @@
   font-weight: 200 800;
   font-display: swap;
 }
+/* Handwriting for the pencil note. Latin subset, loaded only where the note shows. */
+@font-face {
+  font-family: "Caveat";
+  src: url("fonts/caveat.woff2") format("woff2");
+  font-display: swap;
+}
 
 /* ============================================================
    Tokens
@@ -26,6 +32,7 @@
   --ink-soft: #555a68;
   --muted: #6c6f7e;
   --hair: #eceae4;
+  --pencil: #5f5b55;
 
   --mint-tint: #d8efe2;
   --mint-bg: #edf7f1;
@@ -78,6 +85,7 @@
     --ink-soft: #c3c1bb;
     --muted: #a09fa6;
     --hair: #2b2e37;
+    --pencil: #a8a49c;
     --mint-tint: #1f3a2e;
     --mint-bg: #141d19;
     --mint: #7ccaa2;
@@ -107,6 +115,8 @@
       --ink-soft: #c3c1bb;
       --muted: #a09fa6;
       --hair: #2b2e37;
+    --pencil: #a8a49c;
+      --pencil: #a8a49c;
       --mint-tint: #1f3a2e;
       --mint-bg: #141d19;
       --mint: #7ccaa2;
@@ -2266,47 +2276,113 @@ a {
   width: 20px;
   height: 20px;
 }
-/* Chai: floating on desktop, inline above the signature on phones */
-.chai { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; }
-.chai-float { position: fixed; right: 22px; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: none; }
-.chai-inline { align-items: center; flex-direction: column-reverse; margin-bottom: 8px; }
-@media (min-width: 720px) {
-  .chai-float { display: flex; }
-  .chai-inline { display: none; }
+/* Bubbles (chai, add to home screen): a round button that opens a small panel.
+   Floating on desktop (chai on the right, install on the left), inline above the signature on phones. */
+.bubble {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 12px;
+  --glow-soft: rgba(138, 74, 28, 0.18); --glow-ring: rgba(176, 106, 52, 0.4);
 }
-.chai-btn {
+.bubble.install { --glow-soft: rgba(31, 90, 64, 0.18); --glow-ring: rgba(62, 138, 102, 0.4); }
+.bubble-float {
+  position: fixed; bottom: calc(22px + env(safe-area-inset-bottom, 0px)); z-index: 30; display: none;
+  pointer-events: none; /* only the button and an open panel take taps, not the empty space around them */
+}
+.chai.bubble-float { right: 22px; }
+.install.bubble-float { left: 22px; align-items: flex-start; }
+.bubble-float .bubble-btn { pointer-events: auto; }
+.bubbles { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0 12px; margin-bottom: 8px; }
+.bubbles > .bubble { display: contents; }
+@media (min-width: 720px) {
+  .bubble-float { display: flex; }
+  .bubbles { display: none; }
+}
+/* Only offered where this browser can add it, and never once it's added */
+:root:not([data-install]) .install { display: none; }
+@media (display-mode: standalone) {
+  .install { display: none; }
+}
+.bubble-btn {
   width: 56px; height: 56px; border: 0; border-radius: 50%;
   background: var(--apricot-tint); color: var(--apricot-ink);
   display: grid; place-items: center; cursor: pointer;
-  animation: chaiGlow 3.2s ease-in-out infinite;
+  animation: bubbleGlow 3.2s ease-in-out infinite;
   transition: transform 0.4s var(--spring);
 }
-.chai-btn:hover { transform: scale(1.06); }
-.chai-btn:active { transform: scale(0.94); }
-.chai-btn svg { width: 28px; height: 28px; }
-.chai.open .chai-btn { animation: none; box-shadow: 0 6px 18px rgba(138, 74, 28, 0.2); }
-.chai-panel {
+.install .bubble-btn { background: var(--mint-tint); color: var(--mint-deep); animation-delay: 1.6s; }
+.bubble-btn:hover { transform: scale(1.06); }
+.bubble-btn:active { transform: scale(0.94); }
+.bubble-btn svg { width: 28px; height: 28px; }
+.bubble.open .bubble-btn { animation: none; box-shadow: 0 6px 18px var(--glow-soft); }
+.bubble-panel {
   position: relative; width: 300px; padding: 18px 18px 16px; border-radius: 22px;
   background: var(--card); box-shadow: var(--shadow), 0 20px 40px rgba(42, 45, 58, 0.14);
   text-align: left; transform-origin: bottom right;
   opacity: 0; transform: translateY(10px) scale(0.9); visibility: hidden; pointer-events: none;
   transition: opacity 0.3s var(--ease-out), transform 0.45s var(--spring), visibility 0s 0.45s;
 }
-.chai.open .chai-panel {
+.install .bubble-panel { transform-origin: bottom left; }
+.bubble.open .bubble-panel {
   opacity: 1; transform: none; visibility: visible; pointer-events: auto;
   transition: opacity 0.3s var(--ease-out), transform 0.55s var(--spring), visibility 0s;
 }
-.chai.fading .chai-panel { transition: opacity 1.4s ease, transform 1.4s ease, visibility 0s 1.4s; }
-.chai-inline .chai-panel { display: none; width: 100%; max-width: 380px; transform-origin: top center; }
-.chai-inline.open .chai-panel { display: block; animation: sheetIn 0.5s var(--spring); }
-.chai-panel strong { display: block; font-size: 15px; font-weight: 800; padding-right: 32px; }
-.chai-panel p { font-size: 13.5px; line-height: 1.5; color: var(--muted); margin-top: 4px; }
-.chai-close {
+.bubble.fading .bubble-panel { transition: opacity 1.4s ease, transform 1.4s ease, visibility 0s 1.4s; }
+.bubbles .bubble-panel { display: none; order: 9; flex: 0 0 100%; max-width: 380px; margin-top: 12px; transform-origin: top center; }
+.bubbles .bubble.open .bubble-panel { display: block; animation: sheetIn 0.5s var(--spring); }
+.bubble-panel strong { display: block; font-size: 15px; font-weight: 800; padding-right: 32px; }
+.bubble-panel p { font-size: 13.5px; line-height: 1.5; color: var(--muted); margin-top: 4px; }
+.bubble-close {
   position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; border: 0; border-radius: 50%;
   background: var(--hair); color: var(--muted); display: grid; place-items: center; cursor: pointer;
 }
-.chai-close svg { width: 14px; height: 14px; }
-@keyframes chaiGlow {
-  0%, 100% { box-shadow: 0 6px 18px rgba(138, 74, 28, 0.18), 0 0 0 0 rgba(176, 106, 52, 0.4); }
-  60% { box-shadow: 0 6px 18px rgba(138, 74, 28, 0.18), 0 0 0 14px rgba(176, 106, 52, 0); }
+.bubble-close svg { width: 14px; height: 14px; }
+@keyframes bubbleGlow {
+  0%, 100% { box-shadow: 0 6px 18px var(--glow-soft), 0 0 0 0 var(--glow-ring); }
+  60% { box-shadow: 0 6px 18px var(--glow-soft), 0 0 0 14px transparent; }
+}
+
+/* Add to home screen: the panel's steps and button */
+.install .support-btn {
+  width: 100%; border: 0; cursor: pointer; font: inherit; font-size: 15px; font-weight: 800;
+  background: var(--mint-tint); color: var(--mint-deep);
+}
+.install-steps {
+  list-style: none; margin: 12px 0 2px; padding: 0; counter-reset: step;
+  display: grid; gap: 8px; font-size: 13.5px; line-height: 1.45; color: var(--ink-soft);
+}
+.install-steps li { counter-increment: step; display: flex; gap: 10px; align-items: flex-start; }
+.install-steps li::before {
+  content: counter(step); flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--mint-tint); color: var(--mint-deep);
+  font-size: 12px; font-weight: 800;
+}
+.install-steps b { color: var(--ink); font-weight: 800; }
+.install-steps svg { width: 16px; height: 16px; vertical-align: -3px; color: var(--ink); }
+
+/* The pencil note beside the button */
+.install-note {
+  display: flex; align-items: center; gap: 3px; max-width: 8.6em;
+  font-family: "Caveat", "Segoe Print", "Bradley Hand", cursive; font-size: 19px; line-height: 0.95;
+  color: var(--pencil); text-align: left; transform: rotate(-4deg);
+  pointer-events: none; user-select: none;
+}
+.install-note svg {
+  width: 26px; height: 15px; flex: none; stroke-width: 2.2;
+  stroke-dasharray: 1; animation: scribble 0.9s 0.4s ease-out both;
+}
+.install-note span { animation: fadeIn 0.6s 0.9s ease-out both; }
+@media (max-width: 340px) {
+  .bubbles { gap: 0 8px; }
+  .install-note { font-size: 17px; max-width: 7.4em; }
+}
+.bubble-float .install-note {
+  position: absolute; left: 66px; bottom: 18px; max-width: none; white-space: nowrap;
+  transition: opacity 0.3s var(--ease-out);
+}
+.bubble-float.open .install-note { opacity: 0; }
+@keyframes scribble {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
 }
