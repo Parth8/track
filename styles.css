@@ -32,7 +32,6 @@
   --ink-soft: #555a68;
   --muted: #6c6f7e;
   --hair: #eceae4;
-  --pencil: #5f5b55;
 
   --mint-tint: #d8efe2;
   --mint-bg: #edf7f1;
@@ -85,7 +84,6 @@
     --ink-soft: #c3c1bb;
     --muted: #a09fa6;
     --hair: #2b2e37;
-    --pencil: #a8a49c;
     --mint-tint: #1f3a2e;
     --mint-bg: #141d19;
     --mint: #7ccaa2;
@@ -115,8 +113,6 @@
       --ink-soft: #c3c1bb;
       --muted: #a09fa6;
       --hair: #2b2e37;
-    --pencil: #a8a49c;
-      --pencil: #a8a49c;
       --mint-tint: #1f3a2e;
       --mint-bg: #141d19;
       --mint: #7ccaa2;
@@ -2290,8 +2286,18 @@ a {
 .chai.bubble-float { right: 22px; }
 .install.bubble-float { left: 22px; align-items: flex-start; }
 .bubble-float .bubble-btn { pointer-events: auto; }
-.bubbles { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0 12px; margin-bottom: 8px; }
+/* Phones: two equal columns, each a pencil note curving down onto its button; panels open full width below */
+.bubbles {
+  display: grid; grid-template-columns: 1fr 1fr; column-gap: 20px; justify-items: center; align-items: end;
+  width: 100%; max-width: 340px; margin: 4px auto 10px;
+}
 .bubbles > .bubble { display: contents; }
+.bubbles .chai > * { grid-column: 1; }
+.bubbles .install > * { grid-column: 2; }
+.bubbles .bubble-note { grid-row: 1; }
+.bubbles .bubble-btn { grid-row: 2; }
+.bubbles .bubble > .bubble-panel { grid-row: 3; grid-column: 1 / -1; justify-self: stretch; }
+:root:not([data-install]) .bubbles { grid-template-columns: 1fr; max-width: 380px; }
 @media (min-width: 720px) {
   .bubble-float { display: flex; }
   .bubbles { display: none; }
@@ -2300,6 +2306,7 @@ a {
 :root:not([data-install]) .install { display: none; }
 @media (display-mode: standalone) {
   .install { display: none; }
+  .bubbles { grid-template-columns: 1fr; max-width: 380px; }
 }
 .bubble-btn {
   width: 56px; height: 56px; border: 0; border-radius: 50%;
@@ -2326,7 +2333,7 @@ a {
   transition: opacity 0.3s var(--ease-out), transform 0.55s var(--spring), visibility 0s;
 }
 .bubble.fading .bubble-panel { transition: opacity 1.4s ease, transform 1.4s ease, visibility 0s 1.4s; }
-.bubbles .bubble-panel { display: none; order: 9; flex: 0 0 100%; max-width: 380px; margin-top: 12px; transform-origin: top center; }
+.bubbles .bubble-panel { display: none; width: auto; margin-top: 14px; transform-origin: top center; }
 .bubbles .bubble.open .bubble-panel { display: block; animation: sheetIn 0.5s var(--spring); }
 .bubble-panel strong { display: block; font-size: 15px; font-weight: 800; padding-right: 32px; }
 .bubble-panel p { font-size: 13.5px; line-height: 1.5; color: var(--muted); margin-top: 4px; }
@@ -2358,31 +2365,44 @@ a {
 .install-steps b { color: var(--ink); font-weight: 800; }
 .install-steps svg { width: 16px; height: 16px; vertical-align: -3px; color: var(--ink); }
 
-/* The pencil note beside the button */
-.install-note {
-  display: flex; align-items: center; gap: 3px; max-width: 8.6em;
+/* Pencil notes pointing at the buttons, in each button's own ink */
+.chai { --note: var(--apricot-ink); }
+.install { --note: var(--mint-deep); }
+.bubble-note {
+  display: flex; flex-direction: column; align-items: center;
   font-family: "Caveat", "Segoe Print", "Bradley Hand", cursive; font-size: 19px; line-height: 0.95;
-  color: var(--pencil); text-align: left; transform: rotate(-4deg);
+  color: var(--note); opacity: 0.85; text-align: center;
   pointer-events: none; user-select: none;
 }
-.install-note svg {
-  width: 26px; height: 15px; flex: none; stroke-width: 2.2;
-  stroke-dasharray: 1; animation: scribble 0.9s 0.4s ease-out both;
+.bubble-note svg { flex: none; stroke-width: 2.2; stroke-dasharray: 1; animation: scribble 0.9s 0.4s ease-out both; }
+.bubble-note span { animation: fadeIn 0.6s 0.9s ease-out both; }
+/* phones: note above, arrow curving down onto the button */
+.bubbles .bubble-note { max-width: 9em; margin-bottom: 2px; }
+.bubbles .bubble-note span { order: -1; }
+.bubbles .chai .bubble-note span { transform: rotate(-5deg); }
+.bubbles .install .bubble-note span { transform: rotate(3deg); }
+.bubble-note svg:first-child { display: none; width: 26px; height: 15px; }
+.bubble-note svg:nth-child(2) { width: 18px; height: 21px; margin: 2px 0 0 14px; }
+.bubbles .install .bubble-note svg:nth-child(2) { transform: scaleX(-1); margin: 2px 14px 0 0; }
+/* desktop corners: note beside the button, arrow pointing at it */
+.bubble-float .bubble-note {
+  position: absolute; bottom: 18px; flex-direction: row; gap: 3px; white-space: nowrap;
+  transform: rotate(-4deg); transition: opacity 0.3s var(--ease-out);
 }
-.install-note span { animation: fadeIn 0.6s 0.9s ease-out both; }
-@media (max-width: 340px) {
-  .bubbles { gap: 0 8px; }
-  .install-note { font-size: 17px; max-width: 7.4em; }
-}
-.bubble-float .install-note {
-  position: absolute; left: 66px; bottom: 18px; max-width: none; white-space: nowrap;
-  transition: opacity 0.3s var(--ease-out);
-}
-.bubble-float.open .install-note { opacity: 0; }
+.bubble-float .bubble-note svg:first-child { display: block; }
+.bubble-float .bubble-note svg:nth-child(2) { display: none; }
+.install.bubble-float .bubble-note { left: 66px; }
+.chai.bubble-float .bubble-note { right: 66px; flex-direction: row-reverse; transform: rotate(4deg); }
+.chai.bubble-float .bubble-note svg:first-child { transform: scaleX(-1); }
+.bubble-float.open .bubble-note { opacity: 0; }
 @keyframes scribble {
   from { stroke-dashoffset: 1; }
   to { stroke-dashoffset: 0; }
 }
 @keyframes fadeIn {
   from { opacity: 0; }
+}
+@media (max-width: 340px) {
+  .bubbles { column-gap: 12px; }
+  .bubbles .bubble-note { font-size: 17px; }
 }

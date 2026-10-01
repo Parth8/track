@@ -686,11 +686,13 @@ function showRefreshProblem(err, loud) {
  * kind: "float" (desktop corner) or "inline" (above the signature on phones).
  * fill() builds the panel's content each time it opens.
  */
-function bubble(name, kind, { label, region, icon, fill }) {
+function bubble(name, kind, { label, region, icon, fill, note }) {
   const btn = h("button", { type: "button", class: "bubble-btn", "aria-expanded": "false", "aria-controls": `${name}-${kind}`, "aria-label": label }, svg(icon));
   const close = h("button", { type: "button", class: "bubble-close", "aria-label": "Close" }, svg(icons.close));
   const panel = h("div", { class: "bubble-panel", id: `${name}-${kind}`, role: "region", "aria-label": region }, close);
-  const root = h("div", { class: `bubble bubble-${kind} ${name}` }, panel, btn);
+  // A pencil note pointing at the button. Decorative: the button has its own label.
+  const scribble = h("span", { class: "bubble-note", "aria-hidden": "true" }, svg(icons.scribbleArrow), svg(icons.scribbleDown), h("span", { text: note }));
+  const root = h("div", { class: `bubble bubble-${kind} ${name}` }, panel, btn, scribble);
   root.set = (open, { slow = false } = {}) => {
     if (open) {
       panel.replaceChildren(close, ...fill(root));
@@ -714,6 +716,7 @@ function chai(kind) {
     label: "Support Track: chip in for a chai",
     region: "Support Track",
     icon: icons.cup,
+    note: "chip in?",
     fill: () => [
       h("strong", { text: "Like it this way?" }),
       h(
@@ -730,15 +733,13 @@ function chai(kind) {
 
 function install(kind) {
   const onHome = installPlace === "home";
-  const root = bubble("install", kind, {
+  return bubble("install", kind, {
     label: onHome ? "Add Track to your home screen" : "Install Track as an app",
     region: onHome ? "Add Track to your home screen" : "Install Track",
     icon: icons.addHome,
+    note: INSTALL_NOTE[installPlace],
     fill: installSteps,
   });
-  // A pencil note pointing at the button. Decorative: the button has its own label.
-  root.append(h("span", { class: "install-note", "aria-hidden": "true" }, svg(icons.scribbleArrow), h("span", { text: INSTALL_NOTE[installPlace] })));
-  return root;
 }
 
 function installSteps(root) {
@@ -766,6 +767,8 @@ function installSteps(root) {
   else if (way === "ios") how = steps(["Tap ", b("Share"), " ", svg(icons.share), ". In Safari it may be under ", b("•••"), "."], ["Scroll down and choose ", b("Add to Home Screen"), "."]);
   else if (way === "android") how = steps(["Open your browser's menu ", b("⋮"), "."], ["Choose ", b("Add to Home screen"), " or ", b("Install app"), "."]);
   else if (way === "mac") how = steps(["In the menu bar, open ", b("File"), "."], ["Choose ", b("Add to Dock"), "."]);
+  else if (way === "chrome") how = steps(["Open Chrome's menu ", b("⋮"), " and choose ", b("Cast, save, and share"), "."], ["Choose ", b("Install page as app"), "."]);
+  else if (way === "edge") how = steps(["Open Edge's menu ", b("…"), " and choose ", b("Apps"), "."], ["Choose ", b("Install this site as an app"), "."]);
   return [
     h("strong", { text: onHome ? "Keep Track one tap away" : "Keep Track one click away" }),
     h("p", {

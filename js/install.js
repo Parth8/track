@@ -8,6 +8,11 @@ const isAndroid = /Android/.test(ua);
 const isMacSafari =
   !isIOS && /Macintosh/.test(ua) && /Version\/(1[7-9]|[2-9]\d)/.test(ua) && /Safari\//.test(ua) && !/Chrome|Chromium|Edg|Firefox|OPR/.test(ua);
 
+// Chrome and Edge on a computer can always install from their menu, even before
+// they're ready to offer their own one-click prompt (that waits for a click and 30 s on the page).
+const isEdge = !isIOS && !isAndroid && /Edg\//.test(ua);
+const isChrome = !isIOS && !isAndroid && !isEdge && /Chrome\//.test(ua) && !/OPR\//.test(ua);
+
 /** Where the app will live once added, for the button's wording. */
 export const installPlace = isIOS || isAndroid ? "home" : isMacSafari ? "dock" : "desktop";
 
@@ -29,13 +34,15 @@ window.addEventListener("appinstalled", () => {
 
 const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 
-/** "prompt" | "ios" | "android" | "mac", or null when there's nothing to offer (already added, or unsupported). */
+/** "prompt" | "ios" | "android" | "mac" | "edge" | "chrome", or null when there's nothing to offer (already added, or unsupported). */
 export function installWay() {
   if (added || standalone()) return null;
   if (deferred) return "prompt";
   if (isIOS) return "ios";
   if (isMacSafari) return "mac";
   if (isAndroid) return "android";
+  if (isEdge) return "edge";
+  if (isChrome) return "chrome";
   return null;
 }
 
