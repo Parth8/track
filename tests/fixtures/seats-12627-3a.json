@@ -1,0 +1,102 @@
+{
+ "success": true,
+ "error": null,
+ "data_from": "IRCTC",
+ "last_updated_at_txt": "Just now",
+ "seat_availibility": [
+  {
+   "Date (DD-MM-YYYY)": "5-11-2026",
+   "Class - 3A": "REGRET",
+   "class_type": "Class - 3A",
+   "availablity_date": "5-11-2026",
+   "availablity_status": "REGRET",
+   "seat_avl_text": "REGRET",
+   "seat_avl": null,
+   "ticket_fare": 0,
+   "catering_charge": 0,
+   "total_fare": 0,
+   "last_updated_at": "2026-10-02T09:31:17+05:30",
+   "show_book_button": false,
+   "date_format": {
+    "change_date": "05 Nov Thu",
+    "date": "05",
+    "month": "Nov",
+    "day": "Thu",
+    "full_day": "Thursday"
+   },
+   "alt_cnf_seat": false
+  },
+  {
+   "Date (DD-MM-YYYY)": "6-11-2026",
+   "Class - 3A": "REGRET",
+   "class_type": "Class - 3A",
+   "availablity_date": "6-11-2026",
+   "availablity_status": "REGRET",
+   "seat_avl_text": "REGRET",
+   "seat_avl": null,
+   "ticket_fare": 0,
+   "catering_charge": 0,
+   "total_fare": 0,
+   "last_updated_at": "2026-10-02T09:31:17+05:30",
+   "show_book_button": false,
+   "date_format": {
+    "change_date": "06 Nov Fri",
+    "date": "06",
+    "month": "Nov",
+    "day": "Fri",
+    "full_day": "Friday"
+   },
+   "alt_cnf_seat": false
+  },
+  {
+   "Date (DD-MM-YYYY)": "7-11-2026",
+   "Class - 3A": "GNWL131/WL99",
+   "class_type": "Class - 3A",
+   "availablity_date": "7-11-2026",
+   "availablity_status": "GNWL131/WL99",
+   "seat_avl_text": "WAITLIST",
+   "seat_avl": 99,
+   "ticket_fare": 2325,
+   "catering_charge": 0,
+   "total_fare": 2325,
+   "last_updated_at": "2026-10-02T09:31:17+05:30",
+   "show_book_button": true,
+   "date_format": {
+    "change_date": "07 Nov Sat",
+    "date": "07",
+    "month": "Nov",
+    "day": "Sat",
+    "full_day": "Saturday"
+   },
+   "alt_cnf_seat": false,
+   "cp_percentage": 56,
+   "cp_perc": "56% (Med Chance)",
+   "cp_prob": "MEDIUM"
+  },
+  {
+   "Date (DD-MM-YYYY)": "8-11-2026",
+   "Class - 3A": "GNWL83/WL44",
+   "class_type": "Class - 3A",
+   "availablity_date": "8-11-2026",
+   "availablity_status": "GNWL83/WL44",
+   "seat_avl_text": "WAITLIST",
+   "seat_avl": 44,
+   "ticket_fare": 2325,
+   "catering_charge": 0,
+   "total_fare": 2325,
+   "last_updated_at": "2026-10-02T09:31:17+05:30",
+   "show_book_button": true,
+   "date_format": {
+    "change_date": "08 Nov Sun",
+    "date": "08",
+    "month": "Nov",
+    "day": "Sun",
+    "full_day": "Sunday"
+   },
+   "alt_cnf_seat": false,
+   "cp_percentage": 74,
+   "cp_perc": "74% (Med Chance)",
+   "cp_prob": "MEDIUM"
+  }
+ ]
+}

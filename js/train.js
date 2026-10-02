@@ -1,4 +1,4 @@
-import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, pointAtKm } from "./util.js";
+import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, pointAtKm, timeNode, dayShift, IST } from "./util.js";
 import { icons, weatherLook } from "./icons.js";
 
 const bestArr = (s) => s.actual.arr || s.expected.arr || s.sched.arr;
@@ -57,7 +57,7 @@ export function renderTrain(j, ctx) {
     h(
       "div",
       { class: "hero-time-row" },
-      h("p", { class: "hero-time", "data-k": "hero-time", text: clock(mineTime) || "--:--" }),
+      h("p", { class: "hero-time", "data-k": "hero-time" }, mineTime ? timeNode(mineTime) : "--:--"),
       h("div", { class: "hero-when" }, h("span", { text: dayLabel(mineTime) }), h("strong", { class: "tn", "data-k": "hero-when", text: whenText }))
     ),
     h("div", { class: "hero-chips" }, chips.map((c) => h("span", { class: `chip ${c.cls}`, text: c.text }))),
@@ -235,8 +235,8 @@ export function renderTrain(j, ctx) {
         h("p", { class: "tl-meta tn", text: meta.join(", ") }),
         chip ? h("span", { class: `chip ${chip.cls}`, text: chip.text }) : null
       ),
-      timeCell(s, "arr", i === 0),
-      timeCell(s, "dep", !next)
+      timeCell(s, "arr", i === 0, j.date),
+      timeCell(s, "dep", !next, j.date)
     );
     tl.append(row);
     if (isCurrent) currentRow = row;
@@ -366,7 +366,8 @@ function rail(up, down, isHere = false) {
   );
 }
 
-function timeCell(s, which, blank) {
+// Times on a later day than the train's start get "+1", as printed timetables do.
+function timeCell(s, which, blank, startDate) {
   if (blank) return h("span", { class: "tl-time" }, h("small", { text: " " }), h("b", { class: "t-none", text: "-" }));
   const sched = s.sched[which];
   const actual = s.actual[which];
@@ -378,8 +379,8 @@ function timeCell(s, which, blank) {
   return h(
     "span",
     { class: "tl-time" },
-    h("small", { text: actual || expected ? clock(sched) : " " }),
-    h("b", { class: cls, "data-k": `${s.code}-${which}`, text: clock(shown) })
+    h("small", {}, actual || expected ? timeNode(sched) : " "),
+    h("b", { class: cls, "data-k": `${s.code}-${which}` }, timeNode(shown, IST, { shift: dayShift(shown, startDate) }))
   );
 }
 

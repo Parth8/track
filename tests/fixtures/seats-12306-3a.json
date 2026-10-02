@@ -1,0 +1,52 @@
+{
+ "success": true,
+ "error": null,
+ "data_from": "IRCTC",
+ "last_updated_at_txt": "Just now",
+ "seat_availibility": [
+  {
+   "Date (DD-MM-YYYY)": "20-11-2026",
+   "Class - 3A": "RAC  87/RAC  78",
+   "class_type": "Class - 3A",
+   "availablity_date": "20-11-2026",
+   "availablity_status": "RAC  87/RAC  78",
+   "seat_avl_text": "RAC",
+   "seat_avl": 78,
+   "ticket_fare": 2825,
+   "catering_charge": 400,
+   "total_fare": 3225,
+   "last_updated_at": "2026-10-02T09:31:14+05:30",
+   "show_book_button": true,
+   "date_format": {
+    "change_date": "20 Nov Fri",
+    "date": "20",
+    "month": "Nov",
+    "day": "Fri",
+    "full_day": "Friday"
+   },
+   "alt_cnf_seat": false
+  },
+  {
+   "Date (DD-MM-YYYY)": "27-11-2026",
+   "Class - 3A": "AVAILABLE-0048",
+   "class_type": "Class - 3A",
+   "availablity_date": "27-11-2026",
+   "availablity_status": "AVAILABLE-0048",
+   "seat_avl_text": "AVAILABLE",
+   "seat_avl": 48,
+   "ticket_fare": 2825,
+   "catering_charge": 400,
+   "total_fare": 3225,
+   "last_updated_at": "2026-10-02T09:31:14+05:30",
+   "show_book_button": true,
+   "date_format": {
+    "change_date": "27 Nov Fri",
+    "date": "27",
+    "month": "Nov",
+    "day": "Fri",
+    "full_day": "Friday"
+   },
+   "alt_cnf_seat": false
+  }
+ ]
+}

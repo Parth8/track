@@ -7,6 +7,8 @@
  *   /api/flight?no=6E6252&date=2026-09-29
  *   /api/weather?lat=17.39&lon=78.50
  *   /api/between?from=MYS&to=KCG&date=2026-10-02
+ *   /api/seats?no=12306&from=NDLS&to=HWH&date=2026-10-09&cls=3A&quota=GN
+ *   /api/flights?from=DEL&to=BLR&date=2026-10-02&after=17:00
  *
  * Settings (Worker > Settings > Variables and Secrets):
  *   ALLOWED_ORIGINS   text    e.g. https://yourname.github.io   (comma separated)
@@ -16,12 +18,18 @@
  *                             so that no secret value can leave this Worker.
  *   ADB_HOST          text    optional, default aerodatabox.p.rapidapi.com
  *   REQUIRE_ORIGIN    text    optional, "false" lets you test in a browser tab
+ *   QUOTA             KV namespace binding. Flight search by route stays off without it.
+ *                             It holds one number per month: how many paid airport lookups
+ *                             flight search has used, so it can stop before tracking runs dry.
+ *   FLIGHT_SEARCH_CAP text    optional, paid airport lookups flight search may use per month
+ *                             (default 100). Each search uses at most 2, and every search from
+ *                             the same airport and day shares them. "0" pauses flight search.
  */
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
-const TTL = { train: 15, flight: 90, weather: 900, timetable: 43200, between: 21600, stale: 21600 };
+const TTL = { train: 15, flight: 90, weather: 900, timetable: 43200, between: 21600, seats: 600, stale: 21600 };
 const TRAIN_FRESH_FLOOR_MS = 5000; // a manual refresh re-fetches unless the copy is under 5 s old
 const ADB_HOSTS = new Set(["aerodatabox.p.rapidapi.com"]);
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -79,6 +87,10 @@ export default {
           return reply(await weatherRoute(url, ctx), 200, cors, TTL.weather, env);
         case "/api/between":
           return reply(await betweenRoute(url, ctx), 200, cors, TTL.between, env);
+        case "/api/flights":
+          return reply(await flightsBetweenRoute(url, env, ctx), 200, cors, 300, env);
+        case "/api/seats":
+          return reply(await seatsRoute(url, ctx), 200, cors, 300, env);
         default:
           throw new ApiError(404, "not_found", "Unknown route.");
       }
@@ -740,6 +752,186 @@ function normaliseFlight(no, date, list) {
   };
 }
 
+/* ------------------------------------------------------------------ */
+/* Flights between two airports                                        */
+/* ------------------------------------------------------------------ */
+
+const SEARCH_CAP_DEFAULT = 100;
+const SLOTS = { am: ["00:00", "11:59"], pm: ["12:00", "23:59"] };
+
+/**
+ * Every flight from one airport to another on a local date. Built from the origin's
+ * departure board in two 12-hour slots, each cached and shared by every search from that
+ * airport that day, whatever the destination. Codeshares are left out: one row per real flight.
+ */
+async function flightsBetweenRoute(url, env, ctx) {
+  if (!env.ADB_KEY) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
+  const code = (k) => (url.searchParams.get(k) || "").trim().toUpperCase();
+  const from = code("from");
+  const to = code("to");
+  if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to)) throw new ApiError(400, "invalid_airport", "Airport codes have 3 letters, like DEL or BLR.");
+  if (from === to) throw new ApiError(400, "same_airport", "From and To are the same airport.");
+  const today = istToday();
+  const date = validDate(url.searchParams.get("date") || today, addDays(today, -1), addDays(today, 7));
+  const afterRaw = url.searchParams.get("after") || "";
+  const afterMin = /^\d{2}:\d{2}$/.test(afterRaw) ? hhmmToMin(afterRaw) : null;
+  const after = afterMin != null && afterMin < 1440 ? afterRaw : null;
+  // An afternoon or evening search only needs the second half of the day.
+  const slots = after && afterMin >= 720 ? ["pm"] : ["am", "pm"];
+
+  const got = await Promise.allSettled(slots.map((slot) => departureSlot(env, ctx, from, date, slot)));
+  const ok = got.filter((g) => g.status === "fulfilled").map((g) => g.value);
+  if (!ok.length) throw got[0].reason;
+
+  const flights = flightsTo(ok.flatMap((s) => s.departures), to);
+  const checked = ok.map((s) => Date.parse(s.status?.checkedAt || "")).filter(Number.isFinite);
+  return {
+    kind: "flights",
+    from: { code: from },
+    to: flights[0]?.arr.code === to ? { code: to, name: flights[0].arr.name, tz: flights[0].arr.tz } : { code: to },
+    date,
+    after,
+    flights,
+    partial: ok.length < slots.length,
+    // Why part of the day is missing, in words the page can show.
+    partialNote: ok.length < slots.length ? partialNote(got.find((g) => g.status === "rejected").reason) : null,
+    asOf: checked.length ? new Date(Math.min(...checked)).toISOString() : new Date().toISOString(),
+    status: { servedStale: ok.some((s) => s.status?.servedStale) || undefined },
+  };
+}
+
+function partialNote(err) {
+  return err instanceof ApiError ? err.message : "Part of the day couldn't be loaded. Try again shortly.";
+}
+
+/** One half-day of an airport's departure board: a paid lookup, so cached and counted. */
+function departureSlot(env, ctx, from, date, slot) {
+  const today = istToday();
+  const ttl = date === today ? 900 : date < today ? 3600 : 21600;
+  return cached(ctx, `fids/${from}/${date}/${slot}`, ttl, async () => {
+    const host = env.ADB_HOST || "aerodatabox.p.rapidapi.com";
+    if (!ADB_HOSTS.has(host)) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
+    await spendSearch(env);
+    const [a, b] = SLOTS[slot];
+    const q = "withLeg=true&direction=Departure&withCancelled=true&withCodeshared=false&withCargo=false&withPrivate=false&withLocation=false";
+    let res;
+    try {
+      res = await getWithRetry(`https://${host}/flights/airports/iata/${from}/${date}T${a}/${date}T${b}?${q}`, {
+        headers: { "X-RapidAPI-Key": env.ADB_KEY, "X-RapidAPI-Host": host, Accept: "application/json" },
+      }, { timeout: 12000, retries: 1 });
+    } catch (err) {
+      log("warn", "departures failed", from, date, slot, String(err && err.message));
+      throw new ApiError(502, "upstream_unavailable", "Flight schedules are slow right now. Try again shortly.");
+    }
+    if (res.status === 204) return { departures: [], status: {} };
+    if (res.status === 400 || res.status === 404) throw new ApiError(404, "airport_not_found", `No departure board for ${from}.`);
+    if (res.status === 429 || res.status === 403)
+      throw new ApiError(503, "quota_exhausted", "This month's free flight lookups are used up. Trains still work.");
+    if (!res.ok) throw new ApiError(502, "upstream_unavailable", "Flight schedules are slow right now. Try again shortly.");
+    const body = await res.json().catch(() => null);
+    return { departures: Array.isArray(body?.departures) ? body.departures : [], status: {} };
+  });
+}
+
+/**
+ * Count one paid lookup against this month's flight-search budget, or refuse.
+ * Tracking a flight by number never goes through here, so it keeps working when search pauses.
+ */
+let spendQueue = Promise.resolve();
+function spendSearch(env) {
+  // One at a time within this Worker, so two slots looked up together both get counted.
+  const turn = spendQueue.then(() => spendOne(env));
+  spendQueue = turn.catch(() => {});
+  return turn;
+}
+
+async function spendOne(env) {
+  const kv = env.QUOTA;
+  if (!kv || typeof kv.get !== "function") throw new ApiError(503, "search_not_configured", "Flight search isn't switched on yet. Track by flight number for now.");
+  const cap = Number.parseInt(env.FLIGHT_SEARCH_CAP ?? "", 10);
+  const limit = Number.isFinite(cap) && cap >= 0 ? cap : SEARCH_CAP_DEFAULT;
+  const month = istToday().slice(0, 7);
+  const key = `flight-search/${month}`;
+  const used = Number(await kv.get(key)) || 0;
+  if (used >= limit) {
+    const m = Number(month.slice(5, 7));
+    const next = `1 ${MONTHS[m % 12]}`;
+    throw new ApiError(503, "search_paused", `Flight search is resting until ${next} to save lookups for live tracking. Tracking by flight number still works.`);
+  }
+  // KV isn't atomic across Workers, so a busy minute can overshoot by a lookup or two. Fine for a monthly budget.
+  await kv.put(key, String(used + 1), { expirationTtl: 60 * 60 * 24 * 45 });
+}
+
+const hmOf = (x) => (/^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2})/.exec(x?.local || "") || [])[1] || null;
+const dateOf = (x) => (/^(\d{4}-\d{2}-\d{2})/.exec(x?.local || "") || [])[1] || null;
+const date0 = (iso) => (iso ? iso.slice(0, 10) : null);
+
+/** Departures that land at `to`, one row per flight, earliest first. */
+function flightsTo(departures, to) {
+  const t = (x) => (x?.utc ? new Date(x.utc.replace(" ", "T").replace("Z", "") + "Z").toISOString() : null);
+  const seen = new Set();
+  const out = [];
+  for (const f of departures) {
+    // withLeg=true gives departure + arrival; without it, `movement` describes the other airport.
+    const dep = f.departure || f.movement || {};
+    const arr = f.arrival || (f.departure ? {} : f.movement) || {};
+    const ap = (f.arrival && f.arrival.airport) || (f.movement && f.movement.airport) || {};
+    if ((ap.iata || "").toUpperCase() !== to) continue;
+    if (f.codeshareStatus === "IsCodeshared" || f.isCargo) continue;
+    const number = String(f.number || "").replace(/\s+/g, " ").trim().toUpperCase();
+    const no = number.replace(/\s+/g, "");
+    if (!/^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(no) || seen.has(no)) continue;
+    const depSched = t(dep.scheduledTime);
+    if (!depSched) continue;
+    seen.add(no);
+    const raw = f.status || "Unknown";
+    const depRev = t(dep.revisedTime) || t(dep.predictedTime);
+    const depActual = t(dep.runwayTime);
+    const arrSched = f.arrival ? t(arr.scheduledTime) : null;
+    const arrRev = f.arrival ? t(arr.revisedTime) || t(arr.predictedTime) : null;
+    let phase = "pre";
+    if (/Cancel/i.test(raw)) phase = "cancelled";
+    else if (raw === "Diverted") phase = "diverted";
+    else if (raw === "Arrived") phase = "landed";
+    else if (depActual || /Departed|EnRoute|Approaching/.test(raw)) phase = "air";
+    const mins = (a, b) => (a && b ? Math.round((Date.parse(b) - Date.parse(a)) / 60000) : null);
+    const localDate = dateOf(dep.scheduledTime);
+    out.push({
+      number: /^[A-Z0-9]{2} /.test(number) ? number : `${no.slice(0, 2)} ${no.slice(2)}`,
+      no,
+      date: localDate,
+      airline: { name: f.airline?.name || no.slice(0, 2), iata: f.airline?.iata || no.slice(0, 2) },
+      status: { raw, phase, delayMin: mins(depSched, depRev) },
+      // Local clock times at each airport ("06:00") and local dates, so the page needs no time zones.
+      dep: {
+        sched: depSched,
+        revised: depRev,
+        actual: depActual,
+        local: hmOf(dep.scheduledTime),
+        revisedLocal: hmOf(dep.revisedTime || dep.predictedTime),
+        localDate: localDate || date0(depSched),
+        terminal: dep.terminal || null,
+        gate: dep.gate || null,
+      },
+      arr: {
+        code: to,
+        name: ap.shortName || ap.name || to,
+        tz: ap.timeZone || null,
+        sched: arrSched,
+        revised: arrRev,
+        local: hmOf(arr.scheduledTime),
+        revisedLocal: hmOf(arr.revisedTime || arr.predictedTime),
+        localDate: f.arrival ? dateOf(arr.scheduledTime) : null,
+        terminal: arr.terminal || null,
+      },
+      durationMin: mins(depSched, arrSched),
+      aircraft: f.aircraft?.model || null,
+    });
+  }
+  out.sort((a, b) => (a.dep.sched < b.dep.sched ? -1 : a.dep.sched > b.dep.sched ? 1 : 0));
+  return out;
+}
+
 const ADSB = [
   { name: "adsb.lol", base: "https://api.adsb.lol/v2", hex: "hex", reg: "reg", cs: "callsign" },
   { name: "adsb.fi", base: "https://opendata.adsb.fi/api/v2", hex: "hex", reg: "registration", cs: "callsign" },
@@ -874,6 +1066,7 @@ function normaliseBetween(from, to, date, body) {
       onTimeRating: rating(t.to_on_time_rating) ?? rating(t.on_time_rating),
       pantry: !!t.has_pantry,
       special: !!t.special_train,
+      classes: classesOf(t),
     };
     if (seen.has(train.number)) continue;
     seen.add(train.number);
@@ -904,6 +1097,170 @@ function normaliseBetween(from, to, date, body) {
     date,
     trains,
     others: others.slice(0, 8),
+    status: {},
+  };
+}
+
+/** Travel classes a train carries on this route, cheapest first, as the timetable lists them. */
+function classesOf(t) {
+  const seen = new Set();
+  const out = [];
+  let list = Array.isArray(t.class_type) && t.class_type.length ? t.class_type : (t.journey_class || []).map((c) => ({ coach_type: c }));
+  // When coach counts are known, a class with no coaches isn't really on the train.
+  if (list.some((c) => Number(c?.coach_count) > 0)) list = list.filter((c) => Number(c?.coach_count) > 0);
+  for (const c of list) {
+    const code = String(c?.coach_type || "").toUpperCase().trim();
+    if (!SEAT_CLASSES[code] || seen.has(code)) continue;
+    seen.add(code);
+    out.push(code);
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Seat availability                                                   */
+/* ------------------------------------------------------------------ */
+
+const SEAT_CLASSES = {
+  "1A": "AC First Class",
+  "2A": "AC 2 Tier",
+  "3A": "AC 3 Tier",
+  "3E": "AC 3 Economy",
+  EA: "AC Executive Anubhuti",
+  EC: "Executive Chair Car",
+  EV: "Vistadome AC",
+  CC: "AC Chair Car",
+  FC: "First Class",
+  SL: "Sleeper",
+  "2S": "Second Sitting",
+};
+const SEAT_QUOTAS = { GN: "General", TQ: "Tatkal" };
+
+/**
+ * Live seat availability (IRCTC, via RailYatri) for one train, class and quota,
+ * for the day you board and the next few runs. Cached for 10 minutes: it moves, but
+ * not second by second, and one lookup can serve everyone checking the same train.
+ */
+async function seatsRoute(url, ctx) {
+  const p = (k) => (url.searchParams.get(k) || "").trim().toUpperCase();
+  const no = p("no");
+  const from = p("from");
+  const to = p("to");
+  const cls = p("cls");
+  const quota = p("quota") || "GN";
+  if (!/^\d{5}$/.test(no)) throw new ApiError(400, "invalid_train", "Train numbers have 5 digits.");
+  if (!/^[A-Z]{1,5}$/.test(from) || !/^[A-Z]{1,5}$/.test(to))
+    throw new ApiError(400, "invalid_station", "Station codes are 1 to 5 letters, like MYS or KCG.");
+  if (from === to) throw new ApiError(400, "same_station", "From and To are the same station.");
+  if (!SEAT_CLASSES[cls]) throw new ApiError(400, "invalid_class", "Pick a class like SL, 3A or 2A.");
+  if (!SEAT_QUOTAS[quota]) throw new ApiError(400, "invalid_quota", "Quota must be GN (General) or TQ (Tatkal).");
+  const today = istToday();
+  const date = validDate(url.searchParams.get("date") || today, today, addDays(today, 120));
+
+  return cached(ctx, `seats/${no}/${from}/${to}/${date}/${cls}/${quota}`, TTL.seats, async () => {
+    const q = new URLSearchParams({
+      device_type_id: "6",
+      src: "ttb_landing",
+      utm_source: "",
+      is_update: "true",
+      update_duration: "0",
+      d_day: "0",
+      train_source: from,
+      train_destination: to,
+      v_code: "",
+    });
+    const slow = () => new ApiError(502, "upstream_unavailable", "Seat availability is slow right now. Try again shortly.");
+    let res;
+    try {
+      res = await getWithRetry(`https://sa.railyatri.in/api/seat/enquiry/${no}/${date}/${from}/${to}/${cls}/${quota}.json?${q}`, {
+        headers: { "User-Agent": UA, Accept: "application/json", Referer: "https://www.railyatri.in/" },
+      }, { timeout: 12000, retries: 1 });
+    } catch (err) {
+      log("warn", "seats failed", no, from, to, date, cls, quota, String(err && err.message));
+      throw slow();
+    }
+    if (!res.ok) throw slow();
+    const body = await res.json().catch(() => null);
+    if (!body || body.success !== true) throw slow();
+    return normaliseSeats({ no, from, to, date, cls, quota }, body);
+  });
+}
+
+/** "AVAILABLE-0048", "RAC  87/RAC  78", "GNWL119/WL47", "REGRET" → what it means now. */
+function seatState(row) {
+  const raw = String(row.availablity_status || row.current_status || "").replace(/#/g, "").replace(/\s+/g, " ").trim();
+  const text = String(row.seat_avl_text || "").toUpperCase();
+  const lastNum = (s) => {
+    const all = s.match(/\d+/g);
+    return all ? Number(all[all.length - 1]) : null;
+  };
+  const up = raw.toUpperCase();
+  if (/DEPARTED/.test(up)) return { kind: "closed", count: null, label: "Train departed", raw };
+  if (/CHART|CLOSED|BOOKING NOT ALLOWED|SUSPENDED/.test(up)) return { kind: "closed", count: null, label: "Booking closed", raw };
+  if (/NOT ?AVAILABLE/.test(up)) return { kind: "closed", count: null, label: "Not available", raw };
+  if (text === "REGRET" || /REGRET/.test(up)) return { kind: "regret", count: null, label: "Regret", raw };
+  if (text === "AVAILABLE" || /^(CURR_)?AVA?I?LA?BLE|^AVBL/.test(up)) {
+    const n = lastNum(up);
+    return { kind: "available", count: n, label: n ? `${n} available` : "Available", raw };
+  }
+  if (text === "RAC" || /^RAC/.test(up)) {
+    const n = lastNum(up);
+    return { kind: "rac", count: n, label: n ? `RAC ${n}` : "RAC", raw };
+  }
+  if (text === "WAITLIST" || /WL/.test(up)) {
+    const n = Number.isFinite(Number(row.seat_avl)) && Number(row.seat_avl) > 0 ? Number(row.seat_avl) : lastNum(up);
+    return { kind: "waitlist", count: n, label: n ? `Waitlist ${n}` : "Waitlist", raw };
+  }
+  return { kind: "unknown", count: null, label: raw ? titleCase(raw) : "Not known", raw };
+}
+
+/** "9-10-2026" → "2026-10-09" */
+function dmyToIso(s) {
+  const m = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(String(s || "").trim());
+  return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : null;
+}
+
+function normaliseSeats(q, body) {
+  const rows = Array.isArray(body.seat_availibility) ? body.seat_availibility : [];
+  const err = String(body.error || "").trim();
+  if (!rows.length) {
+    if (/class does not exist/i.test(err)) throw new ApiError(404, "class_not_found", `${SEAT_CLASSES[q.cls]} isn't on this train between these stations.`);
+    if (/invalid journey|not run|does not run/i.test(err)) throw new ApiError(404, "not_running", "This train doesn't run between these stations on that day.");
+    if (q.quota === "TQ") throw new ApiError(404, "tatkal_closed", "Tatkal for this day isn't open yet. It opens the day before the train leaves.");
+    throw new ApiError(502, "upstream_unavailable", "Seat availability is slow right now. Try again shortly.");
+  }
+  const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.round(Number(v)) : null);
+  const days = [];
+  for (const r of rows) {
+    const date = dmyToIso(r.availablity_date || r["Date (DD-MM-YYYY)"]);
+    if (!date || days.some((d) => d.date === date)) continue;
+    const state = seatState(r);
+    const chance = Number(r.cp_percentage);
+    days.push({
+      date,
+      ...state,
+      fare: num(r.total_fare),
+      baseFare: num(r.ticket_fare),
+      catering: num(r.catering_charge),
+      // A confirmation guess only means something for a waitlist or RAC.
+      chance: (state.kind === "waitlist" || state.kind === "rac") && Number.isFinite(chance) && chance >= 0 && chance <= 100 ? Math.round(chance) : null,
+    });
+  }
+  days.sort((a, b) => (a.date < b.date ? -1 : 1));
+  const updated = rows.map((r) => Date.parse(r.last_updated_at || "")).filter(Number.isFinite);
+  return {
+    kind: "seats",
+    number: q.no,
+    from: q.from,
+    to: q.to,
+    date: q.date,
+    cls: q.cls,
+    className: SEAT_CLASSES[q.cls],
+    quota: q.quota,
+    quotaName: SEAT_QUOTAS[q.quota],
+    days: days.slice(0, 6),
+    updatedAt: updated.length ? new Date(Math.max(...updated)).toISOString() : new Date().toISOString(),
+    source: body.data_from === "IRCTC" ? "IRCTC" : "Railway booking data",
     status: {},
   };
 }

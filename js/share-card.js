@@ -116,8 +116,18 @@ function drawTrain(ctx, s, t, card) {
   ctx.font = DISPLAY(placeSize);
   ctx.fillText(s.place, x, card.y + 190);
 
-  ctx.font = DISPLAY(200, 300);
-  ctx.fillText(s.time || "--:--", x - 6, card.y + 380);
+  // "4:30 PM": digits big, AM/PM small beside them, all clear of the day text on the right.
+  const [digits, ampm] = (s.time || "--:--").split(" ");
+  ctx.font = BODY(52, 800);
+  const ampmW = ampm ? ctx.measureText(ampm).width + 14 : 0;
+  const timeSize = shrink(ctx, digits, (right - x) * 0.62 - ampmW, (n) => DISPLAY(n, 300), 200, 120);
+  ctx.font = DISPLAY(timeSize, 300);
+  ctx.fillText(digits, x - 6, card.y + 380);
+  if (ampm) {
+    const w = ctx.measureText(digits).width;
+    ctx.font = BODY(52, 800);
+    ctx.fillText(ampm, x - 6 + w + 14, card.y + 380);
+  }
 
   ctx.textAlign = "right";
   ctx.fillStyle = MUTED;

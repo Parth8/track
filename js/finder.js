@@ -1,21 +1,41 @@
 // Route finder: pick From and To stations, a day and a time, and see every train between them.
 // Tapping a train opens its live status for the right run, with your stop already set.
 
-import { h, svg, clock, dayLabel, duration, addDays, todayIn, IST, longDate } from "./util.js";
+import { h, svg, clock, hm, timeNode, dayLabel, duration, addDays, todayIn, IST, longDate, ago } from "./util.js";
 import { icons, art } from "./icons.js";
 import { api, ApiError } from "./api.js";
-import { loadStations, stationsReady, stationByCode, stationName, searchStations, resolveStation, POPULAR } from "./stations.js";
+import { loadStations, stationName, stationSource } from "./stations.js";
+import { airportSource } from "./airports.js";
 
 const today = () => todayIn(IST);
 const noonOf = (d) => `${d}T12:00:00+05:30`;
-const shortDay = (d) => dayLabel(noonOf(d)); // "Fri 2 Oct"
-const weekday = (d) => new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" }).format(new Date(`${d}T00:00:00Z`));
+export const shortDay = (d) => dayLabel(noonOf(d)); // "Fri 2 Oct"
+export const weekday = (d) => new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" }).format(new Date(`${d}T00:00:00Z`));
 const minutesOf = (hhmm) => (/^\d{2}:\d{2}$/.test(hhmm || "") ? +hhmm.slice(0, 2) * 60 + +hhmm.slice(3) : null);
-const nowHHMM = () => clock(new Date().toISOString());
+// Internal comparisons always use 24-hour "HH:MM"; only what's shown follows the clock choice.
+const hhmm24 = (iso) => clock(iso, IST, false);
+const nowHHMM = () => hhmm24(new Date().toISOString());
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const CLASS_NAMES = {
+  "1A": "AC First Class",
+  "2A": "AC 2 Tier",
+  "3A": "AC 3 Tier",
+  "3E": "AC 3 Economy",
+  EA: "AC Executive Anubhuti",
+  EC: "Executive Chair Car",
+  EV: "Vistadome AC",
+  CC: "AC Chair Car",
+  FC: "First Class",
+  SL: "Sleeper",
+  "2S": "Second Sitting",
+};
+const rupees = (n) => `₹${Number(n).toLocaleString("en-IN")}`;
+// Seat states in a few characters, for the strip of next runs.
+const seatShort = (d) =>
+  d.kind === "available" ? (d.count ? `Avl ${d.count}` : "Avl") : d.kind === "rac" ? d.label : d.kind === "waitlist" ? (d.count ? `WL ${d.count}` : "WL") : d.kind === "regret" ? "Regret" : d.kind === "closed" ? "Closed" : "–";
 // Long names (or one long word) step both ends down a size together, so they wrap between
 // words rather than inside one, and the two ends still match.
-const nameSize = (...names) => {
+export const nameSize = (...names) => {
   const longest = Math.max(...names.map((n) => n.length));
   const word = Math.max(...names.flatMap((n) => n.split(/\s+/).map((w) => w.length)));
   if (longest > 22 || word > 11) return " xlong";
@@ -32,7 +52,8 @@ export const routeRange = () => [addDays(today(), -3), addDays(today(), 30)];
 
 let uid = 0;
 
-function stationField({ input, list, codeEl, status, onPick }) {
+function stationField({ input, list, codeEl, status, onPick, source }) {
+  const src = () => source(); // stations or airports, whichever the form is searching
   const field = input.closest(".jf");
   let picked = null; // { code, name }
   let items = [];
@@ -103,7 +124,7 @@ function stationField({ input, list, codeEl, status, onPick }) {
           "span",
           { class: "st-main" },
           h("span", { class: "st-name" }, via === "popular" ? station.name : highlight(station.name, query)),
-          via === "alias" && station.alias ? h("span", { class: "st-sub", text: `Also known as ${station.alias}` }) : null
+          src().sub(station, via) ? h("span", { class: "st-sub", text: src().sub(station, via) }) : null
         ),
         h("span", { class: "st-code", text: station.code })
       );
@@ -112,29 +133,24 @@ function stationField({ input, list, codeEl, status, onPick }) {
     if (!rows.length && empty) list.append(h("li", { class: "st-empty", role: "presentation", text: empty }));
     open();
     if (rows.length && query) setActive(0);
-    status.textContent = rows.length ? `${rows.length} station${rows.length > 1 ? "s" : ""} found. Use the arrow keys to choose.` : empty || "";
+    status.textContent = rows.length ? `${rows.length} ${src().noun}${rows.length > 1 ? "s" : ""} found. Use the arrow keys to choose.` : empty || "";
   }
 
   function refresh() {
     query = input.value.trim();
-    if (!stationsReady()) {
-      list.replaceChildren(h("li", { class: "st-empty", role: "presentation" }, h("span", { class: "st-spin", "aria-hidden": "true" }), "Loading stations"));
+    const S = src();
+    if (!S.ready()) {
+      list.replaceChildren(h("li", { class: "st-empty", role: "presentation" }, h("span", { class: "st-spin", "aria-hidden": "true" }), S.loadingText));
       open();
-      loadStations()
-        .then(() => document.activeElement === input && refresh())
+      S.load()
+        .then(() => document.activeElement === input && src() === S && refresh())
         .catch(() => {
-          list.replaceChildren(h("li", { class: "st-empty", role: "presentation", text: "Couldn't load the station list. Check your connection and try again." }));
+          list.replaceChildren(h("li", { class: "st-empty", role: "presentation", text: S.loadFail }));
         });
       return;
     }
-    if (!query) {
-      const popular = POPULAR.map((c) => stationByCode(c)).filter(Boolean);
-      return render(
-        popular.map((station) => ({ station, via: "popular" })),
-        { heading: "Popular stations" }
-      );
-    }
-    render(searchStations(query), { empty: `No station matches “${query}”. Try its code, like MYS.` });
+    if (!query) return render(S.popular().map((station) => ({ station, via: "popular" })), { heading: S.popularHeading });
+    render(S.search(query), { empty: S.empty(query) });
   }
 
   function choose(station, { silent = false } = {}) {
@@ -174,7 +190,7 @@ function stationField({ input, list, codeEl, status, onPick }) {
   input.addEventListener("blur", () => {
     close();
     if (!picked && input.value.trim()) {
-      const exact = resolveStation(input.value);
+      const exact = src().resolve(input.value);
       if (exact) choose(exact, { silent: true });
     }
   });
@@ -208,17 +224,18 @@ function stationField({ input, list, codeEl, status, onPick }) {
         input.value = "";
         return unpick();
       }
-      const st = stationByCode(code);
+      const S = src();
+      const st = S.byCode(code);
       if (st) return choose(st, { silent: true });
       picked = { code, name: code };
       input.value = code;
       codeEl.textContent = code;
       codeEl.hidden = false;
       field.classList.add("picked");
-      loadStations()
+      S.load()
         .then(() => {
-          const s = stationByCode(code);
-          if (s && picked?.code === code) choose(s, { silent: true });
+          const s = S.byCode(code);
+          if (s && picked?.code === code && src() === S) choose(s, { silent: true });
         })
         .catch(() => {});
     },
@@ -245,7 +262,7 @@ function stationField({ input, list, codeEl, status, onPick }) {
     },
     resolve() {
       if (picked) return picked;
-      const exact = input.value.trim() && resolveStation(input.value);
+      const exact = input.value.trim() && src().resolve(input.value);
       if (exact) choose(exact, { silent: true });
       return picked;
     },
@@ -272,6 +289,7 @@ const QUICK_TIMES = [
 
 export function createRoutePanel() {
   const $ = (id) => document.getElementById(id);
+  let source = stationSource;
   const errorEl = $("route-error");
   const status = $("st-status");
   const timeInput = $("t-after");
@@ -294,6 +312,7 @@ export function createRoutePanel() {
     list: $("st-from-list"),
     codeEl: $("st-from-code"),
     status,
+    source: () => source,
     onPick: (p) => {
       errorEl.hidden = true;
       // From picked: carry on to To, unless it's already filled in.
@@ -305,6 +324,7 @@ export function createRoutePanel() {
     list: $("st-to-list"),
     codeEl: $("st-to-code"),
     status,
+    source: () => source,
     onPick: (p) => {
       errorEl.hidden = true;
       if (p) {
@@ -356,16 +376,22 @@ export function createRoutePanel() {
   });
 
   return {
-    /** Fill in from the address bar or a previous search. */
-    reset({ from: f, to: t, time } = {}) {
+    /** Fill in from the address bar or a previous search. kind: "train" (stations) or "flight" (airports). */
+    reset({ from: f, to: t, time, kind = "train" } = {}) {
       errorEl.hidden = true;
+      source = kind === "flight" ? airportSource : stationSource;
+      for (const [input, list, side] of [[from.input, $("st-from-list"), "leave from"], [to.input, $("st-to-list"), "go to"]]) {
+        input.placeholder = source.placeholder;
+        list.setAttribute("aria-label", `${source.noun[0].toUpperCase()}${source.noun.slice(1)}s to ${side}`);
+        list.hidden = true;
+      }
       from.setCode(f || null);
       to.setCode(t || null);
       const valid = /^\d{2}:\d{2}$/.test(time || "") ? time : "";
       timeInput.value = valid;
       chipKey = !valid ? "" : QUICK_TIMES.some((c) => c.key === valid) ? valid : "custom";
       paintChips();
-      loadStations().catch(() => {});
+      source.load().catch(() => {});
     },
     onDate(d) {
       date = d;
@@ -380,9 +406,10 @@ export function createRoutePanel() {
     validate() {
       const f = from.resolve();
       const t = to.resolve();
-      if (!f) return showError(from.text ? `Pick “${from.text}” from the list, or type its code.` : "Choose the station you're leaving from.", from), null;
+      const noun = source.noun;
+      if (!f) return showError(from.text ? `Pick “${from.text}” from the list, or type its code.` : `Choose the ${noun} you're leaving from.`, from), null;
       if (!t) return showError(to.text ? `Pick “${to.text}” from the list, or type its code.` : "Choose where you're going.", to), null;
-      if (f.code === t.code) return showError("From and To are the same station. Pick a different one.", to), null;
+      if (f.code === t.code) return showError(`From and To are the same ${noun}. Pick a different one.`, to), null;
       showError("");
       return { from: f.code, to: t.code, time: timeInput.value || null };
     },
@@ -400,7 +427,9 @@ const trackable = (startDate) => startDate >= addDays(today(), -3) && startDate 
 
 export function createResults({ root, title, sub, navigate, toast, footer }) {
   const memo = new Map(); // search key => data, for instant back navigation
-  let current = null; // { key, r, data, expanded, scrollY }
+  let current = null; // { key, r, data, expanded, scrollY, seat }
+  const seatMemo = new Map(); // "no/from/to/date/cls/quota" => { data } | { err } | { pending: Promise }
+  const cards = new Map(); // train number => () => fresh card, to redraw one card in place
   let token = 0;
   let focusStep = null; // keeps keyboard focus on the day arrow after the page redraws
 
@@ -455,7 +484,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
           "div",
           { class: "rc-when" },
           h("strong", { text: r.date === today() ? `Today · ${shortDay(r.date)}` : shortDay(r.date) }),
-          h("span", { text: r.time ? `Leaving after ${r.time}` : "Any time of day" })
+          h("span", { text: r.time ? `Leaving after ${hm(r.time)}` : "Any time of day" })
         ),
         step(1)
       )
@@ -483,10 +512,11 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
     );
   }
 
-  function trainCard(t, r, i, flags) {
+  function trainCard(t, r, i, flags, settled = false) {
     const nextDay = Math.round((Date.parse(`${t.arr.slice(0, 10)}T00:00:00Z`) - Date.parse(`${t.dep.slice(0, 10)}T00:00:00Z`)) / 86400000);
     const left = r.date === today() && Date.parse(t.dep) < Date.now();
     const canTrack = trackable(t.startDate);
+    const past = !canTrack && t.startDate < today();
     const fromName = stationName(t.from.code, t.from.name);
     const toName = stationName(t.to.code, t.to.name);
     const premium = (t.name.match(PREMIUM) || [])[1];
@@ -508,7 +538,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
         "span",
         { class: "tc-go" },
         left ? h("i", { class: "live-dot", "aria-hidden": "true" }) : null,
-        left ? `Left at ${clock(t.dep)} · Track live` : "Track live",
+        left ? ["Left at ", timeNode(t.dep), " · Track live"] : "Track live",
         svg(icons.next)
       );
     } else if (t.startDate > today()) {
@@ -519,37 +549,16 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
       foot = h("span", { class: "tc-later" }, svg(icons.clock), "Too long ago to track live");
     }
 
-    const body = [
-      flags.length ? h("span", { class: "tc-flags" }, flags.map((f) => h("span", { class: `chip ${f.cls}`, text: f.text }))) : null,
-      h(
-        "span",
-        { class: "tc-times" },
-        h("span", { class: "tc-t" }, clock(t.dep)),
-        h("span", { class: "tc-line" }, h("i"), h("b", { text: duration(t.durationMin * 60000) }), h("i")),
-        h("span", { class: "tc-t" }, clock(t.arr), nextDay > 0 ? h("sup", { text: `+${nextDay}` }) : null)
-      ),
-      h("span", { class: "tc-codes" }, h("span", { text: t.from.code }), h("span", { text: t.to.code })),
-      h("span", { class: "tc-name" }, h("span", { class: "tc-no tn", text: t.number }), h("span", { text: t.name })),
-      h("span", { class: "tc-tags" }, tags),
-      h("span", { class: "tc-foot" }, foot),
-    ];
     const label =
       `${t.number} ${t.name}. Leaves ${fromName} at ${clock(t.dep)}, reaches ${toName} at ${clock(t.arr)}` +
       `${nextDay === 1 ? " the next day" : nextDay > 1 ? ` ${nextDay} days later` : ""}. ${duration(t.durationMin * 60000)}. ` +
       `${flags.map((f) => f.text).join(". ")}${flags.length ? ". " : ""}${spoken}`;
 
-    if (!canTrack)
-      return h("li", {}, h("div", { class: "tcard muted", vars: { "--i": String(i) }, role: "group", "aria-label": label }, body));
-    const href = `?m=train&no=${t.number}&d=${t.startDate}&s=${t.to.code}`;
-    return h(
-      "li",
-      {},
-      h(
-        "a",
-        {
-          class: "tcard",
-          href,
-          vars: { "--i": String(i) },
+    // The whole card opens live status (a link stretched over it); the seat buttons sit above that layer.
+    const link = canTrack
+      ? h("a", {
+          class: "tc-link",
+          href: `?m=train&no=${t.number}&d=${t.startDate}&s=${t.to.code}`,
           "aria-label": label,
           on: {
             click: (e) => {
@@ -558,8 +567,216 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
               navigate({ m: "train", no: t.number, d: t.startDate, s: t.to.code }, { state: { from: "results" } });
             },
           },
-        },
-        body
+        })
+      : null;
+
+    const seatsOk = !past && !left && r.date >= today() && (t.classes || []).length > 0;
+    const card = h(
+      canTrack ? "article" : "div",
+      {
+        class: `tcard${canTrack ? " linked" : ""}${past ? " muted" : ""}${settled ? " settled" : ""}`,
+        vars: { "--i": String(i) },
+        ...(canTrack ? {} : { role: "group", "aria-label": label }),
+      },
+      link,
+      h(
+        "div",
+        { class: "tc-body", "aria-hidden": canTrack ? "true" : null },
+        flags.length ? h("span", { class: "tc-flags" }, flags.map((f) => h("span", { class: `chip ${f.cls}`, text: f.text }))) : null,
+        h(
+          "span",
+          { class: "tc-times" },
+          h("span", { class: "tc-t" }, timeNode(t.dep)),
+          h("span", { class: "tc-line" }, h("i"), h("b", { text: duration(t.durationMin * 60000) }), h("i")),
+          h("span", { class: "tc-t" }, timeNode(t.arr, IST, { shift: nextDay }))
+        ),
+        h("span", { class: "tc-codes" }, h("span", { text: t.from.code }), h("span", { text: t.to.code })),
+        h("span", { class: "tc-name" }, h("span", { class: "tc-no tn", text: t.number }), h("span", { text: t.name })),
+        h("span", { class: "tc-tags" }, tags)
+      ),
+      seatsOk ? seatSection(t, r) : null,
+      h("span", { class: "tc-foot", "aria-hidden": canTrack ? "true" : null }, foot)
+    );
+    const li = h("li", { "data-no": t.number }, card);
+    cards.set(t.number, () => trainCard(t, r, i, flags, true));
+    return li;
+  }
+
+  /* ---------------- seats ---------------- */
+
+  const seatKey = (t, r, s) => `${t.number}/${t.from.code}/${t.to.code}/${r.date}/${s.cls}/${s.quota}`;
+  // Tatkal opens the day before a train leaves, so it's only worth offering for today and tomorrow.
+  const tatkalOk = (r) => r.date <= addDays(today(), 1);
+
+  function seatSection(t, r) {
+    const open = current.seat?.no === t.number ? current.seat : null;
+    const panelId = `seats-${t.number}`;
+    return h(
+      "div",
+      { class: "tc-seats" },
+      h(
+        "div",
+        { class: "seat-row" },
+        h("span", { class: "seat-label", id: `${panelId}-label`, text: "Seats" }),
+        h(
+          "div",
+          { class: "seat-classes", role: "group", "aria-labelledby": `${panelId}-label` },
+          t.classes.map((c) =>
+            h("button", {
+              type: "button",
+              class: `seat-cls${open?.cls === c ? " on" : ""}`,
+              "data-cls": c,
+              "aria-expanded": String(open?.cls === c),
+              "aria-controls": panelId,
+              "aria-label": `${CLASS_NAMES[c] || c} seats on ${t.number}`,
+              title: CLASS_NAMES[c] || c,
+              text: c,
+              on: { click: () => toggleSeats(t, r, c) },
+            })
+          )
+        )
+      ),
+      h("div", { class: "seat-panel", id: panelId, "aria-live": "polite", hidden: !open }, open ? seatPanel(t, r, open) : null)
+    );
+  }
+
+  /** Open a class (or close it if it's already open). One train's seats are open at a time. */
+  function toggleSeats(t, r, cls) {
+    const was = current.seat;
+    current.seat = was && was.no === t.number && was.cls === cls ? null : { no: t.number, cls, quota: "GN" };
+    if (was && was.no !== t.number) redrawCard(was.no);
+    redrawCard(t.number, `[data-cls="${cls}"]`);
+  }
+
+  function setQuota(t, quota) {
+    if (!current.seat || current.seat.quota === quota) return;
+    current.seat = { ...current.seat, quota };
+    redrawCard(t.number, `.seat-quota [data-q="${quota}"]`);
+  }
+
+  function redrawCard(no, focusSel) {
+    const li = root.querySelector(`li[data-no="${no}"]`);
+    const make = cards.get(no);
+    if (!li || !make) return;
+    // Keep keyboard focus on the same control across the redraw (e.g. when seats arrive).
+    const had = li.contains(document.activeElement) ? document.activeElement : null;
+    const sel =
+      focusSel ||
+      (had?.dataset.cls ? `[data-cls="${had.dataset.cls}"]` : had?.dataset.q ? `.seat-quota [data-q="${had.dataset.q}"]` : had?.classList.contains("tc-link") ? ".tc-link" : null);
+    const fresh = make();
+    li.replaceWith(fresh);
+    if (sel) fresh.querySelector(sel)?.focus({ preventScroll: true });
+  }
+
+  function seatPanel(t, r, s) {
+    const key = seatKey(t, r, s);
+    const got = seatMemo.get(key);
+    if (!got || got.pending) {
+      if (!got) {
+        const pending = api(
+          "/api/seats",
+          { no: t.number, from: t.from.code, to: t.to.code, date: r.date, cls: s.cls, quota: s.quota },
+          { timeout: 20000, retries: 1 }
+        )
+          .then((data) => seatMemo.set(key, { data }))
+          .catch((err) => seatMemo.set(key, { err: err instanceof ApiError ? err : new ApiError("network", "Could not reach live data.") }))
+          .then(() => {
+            if (current.seat?.no === t.number && current.seat.cls === s.cls && current.seat.quota === s.quota) redrawCard(t.number);
+          });
+        seatMemo.set(key, { pending });
+      }
+      return h(
+        "div",
+        { class: "seat-loading", role: "status" },
+        h("span", { class: "skel", vars: { width: "46%", height: "22px" } }),
+        h("span", { class: "skel", vars: { width: "70%", height: "13px" } }),
+        h("span", { class: "sr-only", text: `Checking ${CLASS_NAMES[s.cls] || s.cls} seats` })
+      );
+    }
+    const quotaSwitch = tatkalOk(r)
+      ? h(
+          "div",
+          { class: "seat-quota", role: "radiogroup", "aria-label": "Quota" },
+          [["GN", "General"], ["TQ", "Tatkal"]].map(([q, name]) =>
+            h("button", {
+              type: "button",
+              role: "radio",
+              "aria-checked": String(s.quota === q),
+              "data-q": q,
+              text: name,
+              on: { click: () => setQuota(t, q) },
+            })
+          )
+        )
+      : null;
+
+    if (got.err) {
+      const final = ["class_not_found", "not_running", "tatkal_closed", "invalid_class"].includes(got.err.code);
+      return h(
+        "div",
+        { class: "seat-error" },
+        quotaSwitch,
+        h("p", { text: final ? got.err.message : got.err.code === "offline" ? "You're offline. Seats can't be checked right now." : "Couldn't check seats just now." }),
+        final
+          ? null
+          : h("button", {
+              type: "button",
+              class: "pill-btn",
+              text: "Try again",
+              on: {
+                click: () => {
+                  seatMemo.delete(key);
+                  redrawCard(t.number, `[data-cls="${s.cls}"]`);
+                },
+              },
+            })
+      );
+    }
+
+    const data = got.data;
+    const day = data.days.find((d) => d.date === r.date) || data.days[0];
+    const rest = data.days.filter((d) => d !== day).slice(0, 4);
+    const hint = {
+      available: "Seats are open to book.",
+      rac: "RAC lets you board and share a berth until one frees up.",
+      waitlist: day.chance == null ? "Waitlisted tickets confirm only if others cancel." : null,
+      regret: "The waitlist is full. Try another class or day.",
+      closed: null,
+      unknown: null,
+    }[day.kind];
+    return h(
+      "div",
+      { class: "seat-body" },
+      quotaSwitch,
+      h(
+        "div",
+        { class: `seat-now ${day.kind}` },
+        h("span", { class: "seat-dot", "aria-hidden": "true" }),
+        h("div", { class: "seat-what" }, h("strong", { text: day.label }), h("span", { text: `${data.className} · ${data.quotaName} · ${shortDay(day.date)}` })),
+        day.fare ? h("div", { class: "seat-fare" }, h("strong", { class: "tn", text: rupees(day.fare) }), h("span", { text: day.catering ? "per adult, with meals" : "per adult" })) : null
+      ),
+      day.chance != null
+        ? h(
+            "div",
+            { class: `seat-chance ${day.chance >= 70 ? "high" : day.chance >= 35 ? "mid" : "low"}` },
+            h("span", { text: `${day.chance}% chance to confirm` }),
+            h("i", { role: "img", "aria-label": `${day.chance} percent`, vars: { "--p": `${day.chance}%` } })
+          )
+        : null,
+      hint ? h("p", { class: "seat-hint", text: hint }) : null,
+      rest.length
+        ? h(
+            "div",
+            { class: "seat-next" },
+            h("span", { class: "seat-next-label", text: "Next runs" }),
+            h("ol", {}, rest.map((d) => h("li", { class: d.kind }, h("b", { text: shortDay(d.date) }), h("span", { text: seatShort(d) }))))
+          )
+        : null,
+      h(
+        "p",
+        { class: "seat-src" },
+        `${data.source}, checked ${ago(data.updatedAt)}. `,
+        h("a", { href: "https://www.irctc.co.in/nget/train-search", target: "_blank", rel: "noopener noreferrer", text: "Book on IRCTC" })
       )
     );
   }
@@ -577,7 +794,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
         h(
           "span",
           { class: "oc-meta" },
-          o.depTime && o.arrTime ? h("span", { class: "tn" }, `${o.depTime} → ${o.arrTime}`, o.arrDay > 0 ? h("sup", { class: "plus", text: `+${o.arrDay}` }) : null) : null,
+          o.depTime && o.arrTime ? h("span", { class: "tn" }, `${hm(o.depTime)} → ${hm(o.arrTime)}`, o.arrDay > 0 ? h("sup", { class: "plus", text: `+${o.arrDay}` }) : null) : null,
           dayDots(o.runDays)
         )
       ),
@@ -624,13 +841,13 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
       // Badges that help pick: the next one out, and the fastest.
       const flags = new Map();
       const add = (t, f) => t && flags.set(t.number, [...(flags.get(t.number) || []), f]);
-      if (isToday) add(trains.find((t) => Date.parse(t.dep) > Date.now() && (tMin == null || minutesOf(clock(t.dep)) >= tMin)), { cls: "accent", text: "Next to leave" });
+      if (isToday) add(trains.find((t) => Date.parse(t.dep) > Date.now() && (tMin == null || minutesOf(hhmm24(t.dep)) >= tMin)), { cls: "accent", text: "Next to leave" });
       if (trains.length >= 3) {
         const fastest = trains.reduce((a, b) => (b.durationMin < a.durationMin ? b : a));
         if (trains.filter((t) => t.durationMin === fastest.durationMin).length === 1) add(fastest, { cls: "info", text: "Fastest" });
       }
 
-      const earlier = tMin == null ? [] : trains.filter((t) => minutesOf(clock(t.dep)) < tMin);
+      const earlier = tMin == null ? [] : trains.filter((t) => minutesOf(hhmm24(t.dep)) < tMin);
       const later = trains.filter((t) => !earlier.includes(t));
       const showEarlier = current.expanded || !later.length;
       const noneLater = !later.length && earlier.length;
@@ -640,13 +857,13 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
           "p",
           { class: "rc-count" },
           h("strong", { text: `${trains.length} train${trains.length > 1 ? "s" : ""}` }),
-          later.length && earlier.length ? ` · ${later.length} after ${r.time}` : "",
+          later.length && earlier.length ? ` · ${later.length} after ${hm(r.time)}` : "",
           h("span", { text: "Sorted by departure" })
         )
       );
       if (noneLater)
         nodes.push(
-          h("div", { class: "banner info", role: "note" }, svg(icons.info), h("span", { text: `Nothing leaves after ${r.time} that day. Here's what leaves earlier.` }))
+          h("div", { class: "banner info", role: "note" }, svg(icons.info), h("span", { text: `Nothing leaves after ${hm(r.time)} that day. Here's what leaves earlier.` }))
         );
 
       const list = h("ol", { class: "train-list", "aria-label": "Trains" });
@@ -668,12 +885,12 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
                     const y = window.scrollY;
                     paint();
                     window.scrollTo({ top: y, behavior: "instant" });
-                    root.querySelector(".tcard")?.focus({ preventScroll: true });
+                    root.querySelector(".tc-link, .tcard")?.focus({ preventScroll: true });
                   },
                 },
               },
               svg(icons.up),
-              `${earlier.length} earlier train${earlier.length > 1 ? "s" : ""}, before ${r.time}`
+              `${earlier.length} earlier train${earlier.length > 1 ? "s" : ""}, before ${hm(r.time)}`
             )
           )
         );
@@ -799,8 +1016,9 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
     }
   }
 
+  const showing = () => !!current && !root.closest("[hidden]") && document.body.dataset.mode === "train";
   window.addEventListener("online", () => {
-    if (current && !current.data && !root.closest("[hidden]")) load(true);
+    if (showing() && !current.data) load(true);
   });
 
   return {
@@ -809,12 +1027,23 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
       const key = keyOf(r);
       const same = current && current.key === key;
       const keepScroll = pop && same ? current.scrollY : 0;
-      current = { key, r, data: null, expanded: same ? current.expanded : false, othersOpen: same ? current.othersOpen : false, scrollY: 0 };
+      current = { key, r, data: null, expanded: same ? current.expanded : false, othersOpen: same ? current.othersOpen : false, scrollY: 0, seat: same ? current.seat : null };
       load();
       return keepScroll;
     },
     leave(scrollY) {
       if (current) current.scrollY = scrollY;
+    },
+    /** Draw the open list again in place (e.g. after the clock setting changes). */
+    /** Another search took over the shared list: drop any answer still on its way. */
+    pause() {
+      token++;
+    },
+    redraw() {
+      if (!showing() || !current.data) return;
+      const y = window.scrollY;
+      paint();
+      window.scrollTo({ top: y, behavior: "instant" });
     },
     swap() {
       if (!current) return;

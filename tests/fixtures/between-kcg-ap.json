@@ -41,7 +41,18 @@
    "to_on_time_rating": 10,
    "has_pantry": false,
    "special_train": false,
-   "train_date": "2026-10-02"
+   "train_date": "2026-10-02",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "17289",
@@ -70,7 +81,18 @@
    "to_on_time_rating": -1,
    "has_pantry": false,
    "special_train": false,
-   "train_date": "2026-10-02"
+   "train_date": "2026-10-02",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "12976",
@@ -99,7 +121,18 @@
    "to_on_time_rating": 3,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-02"
+   "train_date": "2026-10-02",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   }
  ],
  "alternate_trains": [],

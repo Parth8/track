@@ -9,6 +9,7 @@ import { renderFlight } from "./flight.js";
 import { installWay, installPlace, appleGuide, onInstallChange, promptInstall } from "./install.js";
 import { guideArt } from "./guide.js";
 import { createRoutePanel, createResults, routeRange } from "./finder.js";
+import { createFlightResults, flightRouteRange } from "./flight-finder.js";
 
 const today = () => todayIn(IST);
 const THEME_LABEL = { light: "Light", dark: "Dark", auto: "Match device" };
@@ -65,13 +66,20 @@ const MODES = {
       return null;
     },
     dateQ: "Departure date",
-    dateHelp: "Local date at the airport the flight leaves from.",
+    dateHelp: "Local date at the airport the flight leaves from. Don't know the number? Use From and to above.",
     cta: "Track flight",
     range: () => [addDays(today(), -2), addDays(today(), 7)],
     // live position is free, so refresh often while airborne; schedules change slowly
     refreshMs: (data) => (data?.status?.phase === "air" ? 30000 : 90000),
+    route: {
+      dateQ: "When do you fly?",
+      dateHelp: "Local date at the airport you leave from.",
+      cta: "Find flights",
+      range: flightRouteRange,
+    },
   },
 };
+const BY_LABEL = { train: ["Train number", "Find your train by"], flight: ["Flight number", "Find your flight by"] };
 
 /* ------------------------------------------------------------------ */
 /* Elements                                                            */
@@ -121,8 +129,8 @@ for (const btn of byToggle.querySelectorAll("button")) {
     const r = current();
     const by = btn.dataset.by;
     if (by === r.by) return;
-    prefill = { mode: "train", no: qInput.value.replace(/\s/g, ""), date: flip?.value, ...(routePanel ? routePanel.values() : {}) };
-    navigate({ m: "train", by: by === "route" ? "route" : null }, { replace: true, instant: true, keepFocus: true });
+    prefill = { mode: r.mode, no: qInput.value.replace(/\s/g, ""), date: flip?.value, ...(routePanel ? routePanel.values() : {}) };
+    navigate({ m: r.mode, by: by === "route" ? "route" : null }, { replace: true, instant: true, keepFocus: true });
   });
 }
 byToggle.addEventListener("keydown", (e) => {
@@ -133,20 +141,23 @@ byToggle.addEventListener("keydown", (e) => {
   other.focus();
 });
 
-const results = createResults({
+const resultsOpts = {
   root: $("#results-root"),
   title: $("#results-title"),
   sub: $("#results-sub"),
   navigate,
   toast: (m) => toast(m),
   footer: () => h("div", { class: "foot-stack" }, h("button", { type: "button", class: "link-quiet", "data-open": "sources", text: "Sources and credits" }), credit()),
-});
+};
+// Trains and flights share the results screen; each mode has its own list behind it.
+const resultsBy = { train: createResults(resultsOpts), flight: createFlightResults(resultsOpts) };
+const results = { redraw: () => Object.values(resultsBy).forEach((x) => x.redraw()) };
 $("#results-back").addEventListener("click", (e) => {
   e.preventDefault();
   const r = current();
-  navigate({ m: "train", by: "route", from: r.from, to: r.to, d: r.date, t: r.time });
+  navigate({ m: r.mode, by: "route", from: r.from, to: r.to, d: r.date, t: r.time });
 });
-$("#results-swap").addEventListener("click", () => results.swap());
+$("#results-swap").addEventListener("click", () => resultsBy[current().mode]?.swap());
 
 qInput.addEventListener("input", () => {
   const mode = MODES[current().mode];
@@ -159,9 +170,9 @@ qInput.addEventListener("input", () => {
 form.addEventListener("submit", (e) => {
   e.preventDefault();
   const { mode, by } = current();
-  if (mode === "train" && by === "route") {
+  if (by === "route") {
     const v = routePanel.validate();
-    if (v) navigate({ m: "train", from: v.from, to: v.to, d: flip.value, t: v.time });
+    if (v) navigate({ m: mode, from: v.from, to: v.to, d: flip.value, t: v.time });
     return;
   }
   const problem = MODES[mode].check(qInput.value.trim());
@@ -241,6 +252,7 @@ if (window.matchMedia("(min-width: 720px)").matches) {
   peek(installFloat, 12000);
 }
 setupTheme();
+setupClock();
 route();
 
 /* ------------------------------------------------------------------ */
@@ -262,6 +274,29 @@ function setupTheme() {
     if (document.documentElement.dataset.theme === "auto") themeChanged();
   });
   syncThemeUI();
+}
+
+/** 12- or 24-hour times. Stored like the theme; theme.js applies it before first paint. */
+function setupClock() {
+  const sync = () => {
+    for (const b of document.querySelectorAll("#clock-seg button")) b.setAttribute("aria-checked", String(b.dataset.clock === document.documentElement.dataset.clock));
+  };
+  for (const b of document.querySelectorAll("#clock-seg button")) {
+    b.addEventListener("click", () => {
+      if (document.documentElement.dataset.clock === b.dataset.clock) return;
+      document.documentElement.dataset.clock = b.dataset.clock;
+      try {
+        localStorage.setItem("clock", b.dataset.clock);
+      } catch {
+        /* private mode: the choice lasts for this visit */
+      }
+      sync();
+      // Redraw whatever is showing times right now.
+      if (session?.data && !statusRoot.closest("[hidden]")) paint();
+      results?.redraw();
+    });
+  }
+  sync();
 }
 
 function setTheme(choice) {
@@ -307,7 +342,7 @@ function current() {
     no: (p.get("no") || "").toUpperCase(),
     date: p.get("d") || "",
     stop: (p.get("s") || "").toUpperCase(),
-    by: m === "train" && p.get("by") === "route" ? "route" : "number",
+    by: p.get("by") === "route" ? "route" : "number",
     from: code("from"),
     to: code("to"),
     time: /^\d{2}:\d{2}$/.test(p.get("t") || "") ? p.get("t") : "",
@@ -317,7 +352,7 @@ function current() {
 function navigate(params, opts = {}) {
   const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v));
   const qs = new URLSearchParams(clean).toString();
-  if (!views.results.hidden) results.leave(window.scrollY); // so Back lands where you were
+  if (!views.results.hidden) resultsBy[document.body.dataset.mode]?.leave(window.scrollY); // so Back lands where you were
   history[opts.replace ? "replaceState" : "pushState"](opts.state || null, "", qs ? `?${qs}` : location.pathname);
   route(opts);
 }
@@ -330,7 +365,7 @@ function backToSearch() {
 
 function route(opts = {}) {
   const r = current();
-  const isResults = r.mode === "train" && r.from && r.to && r.by !== "route";
+  const isResults = !!(r.mode && r.from && r.to && r.by !== "route");
   const target = !r.mode ? "home" : r.no ? "status" : isResults ? "results" : "search";
   const apply = () => {
     for (const [name, el] of Object.entries(views)) el.hidden = name !== target;
@@ -339,7 +374,11 @@ function route(opts = {}) {
     let scrollTo = 0;
     if (target === "search") setupSearch(r);
     if (target === "status") openStatus(r);
-    if (target === "results") scrollTo = results.open({ ...r, date: validRouteDate(r.date) }, { pop: opts.pop });
+    if (target === "results") {
+      const other = r.mode === "train" ? "flight" : "train";
+      resultsBy[other].pause();
+      scrollTo = resultsBy[r.mode].open({ ...r, date: validRouteDate(r.date, r.mode) }, { pop: opts.pop });
+    }
     if (target === "home") document.title = "Track a train or flight";
     if (!opts.keepFocus) views[target].querySelector("[data-focus]")?.focus({ preventScroll: true });
     window.scrollTo({ top: scrollTo, behavior: "instant" });
@@ -374,14 +413,14 @@ function route(opts = {}) {
 /* ------------------------------------------------------------------ */
 
 /** A route search date inside the allowed window, or today. */
-function validRouteDate(d) {
-  const [min, max] = routeRange();
+function validRouteDate(d, mode = "train") {
+  const [min, max] = mode === "flight" ? flightRouteRange() : routeRange();
   return /^\d{4}-\d{2}-\d{2}$/.test(d || "") && d >= min && d <= max ? d : today();
 }
 
 function setupSearch(r) {
-  const byRoute = r.mode === "train" && r.by === "route";
-  const cfg = byRoute ? { ...MODES.train, ...MODES.train.route } : MODES[r.mode];
+  const byRoute = r.by === "route" && !!MODES[r.mode]?.route;
+  const cfg = byRoute ? { ...MODES[r.mode], ...MODES[r.mode].route } : MODES[r.mode];
   $("#search-title").textContent = cfg.title;
   $("#q-label").textContent = cfg.label;
   $("#q-hint").textContent = cfg.hint;
@@ -389,8 +428,11 @@ function setupSearch(r) {
   $("#date-help").textContent = cfg.dateHelp;
   $("#cta-text").textContent = cfg.cta;
 
-  document.title = byRoute ? "Find trains between stations" : r.mode === "flight" ? "Track a flight" : "Track a train";
-  byToggle.hidden = r.mode !== "train";
+  document.title = byRoute ? (r.mode === "flight" ? "Find flights between airports" : "Find trains between stations") : r.mode === "flight" ? "Track a flight" : "Track a train";
+  byToggle.hidden = !MODES[r.mode]?.route;
+  const [numberLabel, groupLabel] = BY_LABEL[r.mode] || BY_LABEL.train;
+  $("#by-number-label").textContent = numberLabel;
+  byToggle.setAttribute("aria-label", groupLabel);
   byToggle.dataset.by = byRoute ? "route" : "number";
   for (const b of byToggle.querySelectorAll("button")) {
     const on = b.dataset.by === byToggle.dataset.by;
@@ -420,7 +462,7 @@ function setupSearch(r) {
 
   if (byRoute) {
     routePanel ||= createRoutePanel();
-    routePanel.reset({ from: carry?.from || r.from, to: carry?.to || r.to, time: carry?.time || r.time });
+    routePanel.reset({ from: carry?.from || r.from, to: carry?.to || r.to, time: carry?.time || r.time, kind: r.mode });
   }
 
   const [min, max] = cfg.range();

@@ -30,7 +30,7 @@
   --card: #ffffff;
   --ink: #2a2d3a;
   --ink-soft: #555a68;
-  --muted: #6c6f7e;
+  --muted: #676a79; /* 4.5:1 or better on every light background, the blue flight one included */
   --hair: #eceae4;
 
   --mint-tint: #d8efe2;
@@ -215,6 +215,29 @@ a {
   font-weight: 450;
   letter-spacing: -0.01em;
   line-height: 1.08;
+}
+/* A displayed time: AM/PM set small, "+1" for a later day (see timeNode in util.js). */
+.tm {
+  white-space: nowrap;
+}
+.tm .ampm {
+  font-family: var(--font-body);
+  font-size: max(10.5px, 0.42em);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-variation-settings: normal;
+  color: inherit;
+}
+.tm .plus,
+sup.plus {
+  font-family: var(--font-body);
+  font-size: max(10.5px, 0.36em);
+  font-weight: 800;
+  font-variation-settings: normal;
+  color: var(--deep);
+  margin-left: 2px;
+  vertical-align: super;
+  line-height: 0;
 }
 .sr-only {
   position: absolute;
@@ -1144,8 +1167,9 @@ a {
   padding: 3px 10px;
 }
 .tl-time {
-  width: 50px;
+  min-width: 50px;
   flex: none;
+  white-space: nowrap;
   text-align: right;
   padding-top: 12px;
   font-variant-numeric: tabular-nums;
@@ -1160,6 +1184,32 @@ a {
 .tl-time b {
   font-size: 15.5px;
   font-weight: 800;
+}
+.tl-time .ampm {
+  font-size: 9.5px;
+}
+.tl-time .plus {
+  font-size: 9.5px;
+  margin-left: 1px;
+}
+/* Small phones: a little more room for station names beside two time columns. */
+@media (max-width: 359px) {
+  .tl-row {
+    gap: 6px;
+    padding-right: 8px;
+  }
+  .tl-time b {
+    font-size: 14.5px;
+  }
+  .tl-time small {
+    font-size: 11px;
+  }
+  .tl-name {
+    font-size: 14.5px;
+  }
+}
+.tl-code {
+  display: inline-block; /* a station code never splits across lines */
 }
 .t-early {
   color: var(--early);
@@ -1974,6 +2024,15 @@ a {
   width: 16px;
   height: 16px;
 }
+.segmented.two {
+  grid-template-columns: repeat(2, 1fr);
+}
+.segmented button small {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  margin-left: -3px;
+}
 .segmented button[aria-checked="true"] {
   background: var(--card);
   color: var(--ink);
@@ -2371,7 +2430,7 @@ a {
 .bubble-note {
   display: flex; flex-direction: column; align-items: center;
   font-family: "Caveat", "Segoe Print", "Bradley Hand", cursive; font-size: 19px; line-height: 0.95;
-  color: var(--note); opacity: 0.85; text-align: center;
+  color: var(--note); opacity: 0.9; text-align: center;
   pointer-events: none; user-select: none;
 }
 .bubble-note svg { flex: none; stroke-width: 2.2; stroke-dasharray: 1; animation: scribble 0.9s 0.4s ease-out both; }
@@ -2972,11 +3031,32 @@ a {
   animation-delay: calc(min(var(--i, 0), 8) * 45ms);
   transition: transform 0.35s var(--spring), box-shadow 0.25s;
 }
-a.tcard:hover {
+.tcard.linked:hover {
   box-shadow: var(--shadow), 0 12px 30px rgba(42, 45, 58, 0.09);
 }
-a.tcard:active {
+.tcard.linked:has(.tc-link:active) {
   transform: scale(0.985);
+}
+.tcard.settled {
+  animation: none; /* redrawn in place (seats opened): don't replay the entrance */
+}
+/* The whole card opens live status; this empty link is stretched over it. */
+.tc-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  z-index: 1;
+}
+.tc-link:focus-visible {
+  outline: none;
+}
+.tc-link:focus-visible::after {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+.tc-body {
+  display: block;
 }
 .tcard.muted {
   background: color-mix(in srgb, var(--card) 55%, transparent);
@@ -3006,12 +3086,7 @@ a.tcard:active {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.tc-t sup {
-  font-family: var(--font-body);
-  font-size: 11.5px;
-  font-weight: 800;
-  color: var(--late);
-  margin-left: 2px;
+.tc-t .plus {
   vertical-align: 12px;
 }
 .tc-line {
@@ -3103,7 +3178,7 @@ a.tcard:active {
   height: 17px;
   transition: transform 0.35s var(--spring);
 }
-a.tcard:hover .tc-go svg {
+.tcard.linked:hover .tc-go svg {
   transform: translateX(3px);
 }
 .tc-later {
@@ -3263,5 +3338,364 @@ a.tcard:hover .tc-go svg {
 .fold-btn.quiet {
   border-color: var(--hair);
   background: transparent;
+  color: var(--ink-soft);
+}
+
+/* ============================================================
+   Seats: live availability inside a train card
+   ============================================================ */
+.tc-seats {
+  position: relative;
+  z-index: 2; /* above the card's stretched link */
+  margin-top: 12px;
+}
+.seat-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.seat-label {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.seat-classes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.seat-cls {
+  min-width: 44px;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1.5px solid var(--hair);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.35s var(--spring);
+}
+.seat-cls:hover {
+  border-color: var(--line);
+}
+.seat-cls:active {
+  transform: scale(0.94);
+}
+.seat-cls.on {
+  background: var(--deep);
+  border-color: var(--deep);
+  color: var(--card);
+}
+.seat-panel {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tint) 45%, var(--card));
+  animation: seatOpen 0.35s var(--ease-out) both;
+  transform-origin: top center;
+}
+.seat-panel[hidden] {
+  display: none;
+}
+@keyframes seatOpen {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+.seat-loading {
+  display: grid;
+  gap: 8px;
+}
+.seat-loading .skel {
+  display: block;
+}
+.seat-body,
+.seat-error {
+  display: grid;
+  gap: 10px;
+  animation: seatFade 0.3s var(--ease-out) both;
+}
+@keyframes seatFade {
+  from {
+    opacity: 0;
+  }
+}
+.seat-error p {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.seat-error .pill-btn {
+  justify-self: start;
+}
+.seat-now {
+  --s-bg: var(--hair);
+  --s-ink: var(--muted);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--card);
+}
+.seat-now.available {
+  --s-bg: var(--mint-tint);
+  --s-ink: var(--early);
+}
+.seat-now.rac {
+  --s-bg: var(--apricot-tint);
+  --s-ink: var(--apricot-ink);
+}
+.seat-now.waitlist {
+  --s-bg: var(--rose-tint);
+  --s-ink: var(--rose-ink);
+}
+.seat-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--s-ink);
+  box-shadow: 0 0 0 5px var(--s-bg);
+  margin: 0 3px;
+}
+.seat-what strong {
+  display: block;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--s-ink);
+  line-height: 1.2;
+}
+.seat-now:not(.available):not(.rac):not(.waitlist) .seat-what strong {
+  color: var(--ink-soft);
+}
+.seat-what span {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.seat-fare {
+  text-align: right;
+}
+.seat-fare strong {
+  display: block;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.seat-fare span {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.seat-chance {
+  --c: var(--rose-ink);
+  display: grid;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.seat-chance.mid {
+  --c: var(--apricot-ink);
+}
+.seat-chance.high {
+  --c: var(--early);
+}
+.seat-chance i {
+  position: relative;
+  display: block;
+  height: 6px;
+  border-radius: 99px;
+  background: var(--hair);
+  overflow: hidden;
+}
+.seat-chance i::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--p);
+  border-radius: inherit;
+  background: var(--c);
+  animation: seatGrow 0.8s var(--ease-out) 0.1s both;
+}
+@keyframes seatGrow {
+  from {
+    width: 0;
+  }
+}
+.seat-hint {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.seat-next-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.seat-next ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.seat-next li {
+  --s-ink: var(--muted);
+  padding: 7px 8px;
+  border-radius: 11px;
+  background: var(--card);
+  border-left: 3px solid var(--s-ink);
+}
+.seat-next li.available {
+  --s-ink: var(--early);
+}
+.seat-next li.rac {
+  --s-ink: var(--apricot-ink);
+}
+.seat-next li.waitlist {
+  --s-ink: var(--rose-ink);
+}
+.seat-next b {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.seat-next span {
+  display: block;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--s-ink);
+}
+.seat-src {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.seat-src a {
+  color: var(--deep);
+  font-weight: 800;
+}
+.seat-quota {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  justify-self: start;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--hair);
+}
+.seat-quota button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.seat-quota button[aria-checked="true"] {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+@media (prefers-reduced-motion: reduce) {
+  .seat-panel,
+  .seat-body,
+  .seat-error,
+  .seat-chance i::after {
+    animation: none;
+  }
+}
+/* Small phones: keep the journey line readable between two 12-hour times, and stack the fare. */
+@media (max-width: 359px) {
+  .tc-times {
+    gap: 8px;
+  }
+  .tc-t {
+    font-size: 25px;
+  }
+  .seat-now {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .seat-fare {
+    grid-column: 2;
+    text-align: left;
+  }
+  .seat-fare strong,
+  .seat-fare span {
+    display: inline;
+  }
+  .seat-fare span {
+    margin-left: 6px;
+  }
+}
+
+/* ============================================================
+   Flight results
+   ============================================================ */
+.tc-line.fly i {
+  border-top-style: dotted;
+  border-top-width: 3px;
+}
+.rc-mid.fly i {
+  border-top-style: dotted;
+  border-top-width: 3px;
+}
+.tc-t.was .tm {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  text-decoration-color: color-mix(in srgb, var(--late) 70%, transparent);
+}
+.fc-now {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--late);
+}
+.fc-now svg {
+  width: 15px;
+  height: 15px;
+}
+.fc-meta {
+  display: block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.fcard.cancelled .tc-t,
+.fcard.cancelled .tc-codes {
+  color: var(--muted);
+}
+.fcard.cancelled .tc-t .tm {
+  text-decoration: line-through;
+}
+
+/* The highlighted suggestion sits on a tinted background: keep its second line readable. */
+.st-opt[aria-selected="true"] .st-sub {
   color: var(--ink-soft);
 }

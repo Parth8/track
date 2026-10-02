@@ -41,7 +41,18 @@
    "to_on_time_rating": 9,
    "has_pantry": false,
    "special_train": false,
-   "train_date": "2026-10-02"
+   "train_date": "2026-10-02",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   }
  ],
  "alternate_trains": [
@@ -72,7 +83,18 @@
    "to_on_time_rating": 6,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-03"
+   "train_date": "2026-10-03",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "17290",
@@ -101,7 +123,18 @@
    "to_on_time_rating": -1,
    "has_pantry": false,
    "special_train": false,
-   "train_date": "2026-10-03"
+   "train_date": "2026-10-03",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   }
  ],
  "nearby_station": []

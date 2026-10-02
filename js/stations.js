@@ -173,3 +173,21 @@ export function resolveStation(text) {
   const exactName = all.filter((s) => s.flat === flat || squash(s.alias || "") === flat);
   return exactName.length === 1 ? exactName[0] : null;
 }
+
+/** Everything the From/To fields need to search stations. */
+export const stationSource = {
+  kind: "train",
+  load: loadStations,
+  ready: stationsReady,
+  byCode: stationByCode,
+  search: searchStations,
+  resolve: resolveStation,
+  popular: () => POPULAR.map(stationByCode).filter(Boolean),
+  popularHeading: "Popular stations",
+  noun: "station",
+  placeholder: "Station name or code",
+  loadingText: "Loading stations",
+  loadFail: "Couldn't load the station list. Check your connection and try again.",
+  empty: (q) => `No station matches “${q}”. Try its code, like MYS.`,
+  sub: (st, via) => (via === "alias" && st.alias ? `Also known as ${st.alias}` : null),
+};

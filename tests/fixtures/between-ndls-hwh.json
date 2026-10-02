@@ -41,7 +41,33 @@
    "to_on_time_rating": -1,
    "has_pantry": false,
    "special_train": false,
-   "train_date": "2026-10-01"
+   "train_date": "2026-10-01",
+   "class_type": [
+    {
+     "coach_type": "2S",
+     "coach_name": "Second Sitting"
+    },
+    {
+     "coach_type": "SL",
+     "coach_name": "Sleeper"
+    },
+    {
+     "coach_type": "CC",
+     "coach_name": "AC Chair Car"
+    },
+    {
+     "coach_type": "3A",
+     "coach_name": "AC 3 Tier"
+    },
+    {
+     "coach_type": "2A",
+     "coach_name": "AC 2 Tier"
+    },
+    {
+     "coach_type": "1A",
+     "coach_name": "AC First Class"
+    }
+   ]
   },
   {
    "train_number": "12324",
@@ -70,7 +96,18 @@
    "to_on_time_rating": 4,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-01"
+   "train_date": "2026-10-01",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "12372",
@@ -97,7 +134,18 @@
    "to_on_time_rating": 9,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-01"
+   "train_date": "2026-10-01",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "12314",
@@ -136,7 +184,21 @@
    "to_on_time_rating": 9,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-01"
+   "train_date": "2026-10-01",
+   "class_type": [
+    {
+     "coach_type": "3A",
+     "coach_name": "AC 3 Tier"
+    },
+    {
+     "coach_type": "2A",
+     "coach_name": "AC 2 Tier"
+    },
+    {
+     "coach_type": "1A",
+     "coach_name": "AC First Class"
+    }
+   ]
   },
   {
    "train_number": "12302",
@@ -173,7 +235,18 @@
    "to_on_time_rating": 9,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-01"
+   "train_date": "2026-10-01",
+   "class_type": [
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    },
+    {
+     "coach_type": "1A"
+    }
+   ]
   },
   {
    "train_number": "12304",
@@ -206,7 +279,18 @@
    "to_on_time_rating": 9,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-01"
+   "train_date": "2026-10-01",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "12260",
@@ -239,7 +323,21 @@
    "to_on_time_rating": 7,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-01"
+   "train_date": "2026-10-01",
+   "class_type": [
+    {
+     "coach_type": "3A",
+     "coach_name": "AC 3 Tier"
+    },
+    {
+     "coach_type": "2A",
+     "coach_name": "AC 2 Tier"
+    },
+    {
+     "coach_type": "1A",
+     "coach_name": "AC First Class"
+    }
+   ]
   }
  ],
  "alternate_trains": [
@@ -268,7 +366,21 @@
    "to_on_time_rating": 8,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-02"
+   "train_date": "2026-10-02",
+   "class_type": [
+    {
+     "coach_type": "3A",
+     "coach_name": "AC 3 Tier"
+    },
+    {
+     "coach_type": "2A",
+     "coach_name": "AC 2 Tier"
+    },
+    {
+     "coach_type": "1A",
+     "coach_name": "AC First Class"
+    }
+   ]
   },
   {
    "train_number": "12382",
@@ -299,7 +411,25 @@
    "to_on_time_rating": 10,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-02"
+   "train_date": "2026-10-02",
+   "class_type": [
+    {
+     "coach_type": "SL",
+     "coach_name": "Sleeper"
+    },
+    {
+     "coach_type": "3A",
+     "coach_name": "AC 3 Tier"
+    },
+    {
+     "coach_type": "2A",
+     "coach_name": "AC 2 Tier"
+    },
+    {
+     "coach_type": "1A",
+     "coach_name": "AC First Class"
+    }
+   ]
   },
   {
    "train_number": "12274",
@@ -328,7 +458,18 @@
    "to_on_time_rating": 8,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-03"
+   "train_date": "2026-10-03",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "13066",
@@ -355,7 +496,18 @@
    "to_on_time_rating": -1,
    "has_pantry": false,
    "special_train": false,
-   "train_date": "2026-10-03"
+   "train_date": "2026-10-03",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "12380",
@@ -382,7 +534,18 @@
    "to_on_time_rating": 5,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-04"
+   "train_date": "2026-10-04",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "22858",
@@ -409,7 +572,18 @@
    "to_on_time_rating": 1,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-06"
+   "train_date": "2026-10-06",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   },
   {
    "train_number": "12330",
@@ -436,7 +610,18 @@
    "to_on_time_rating": 7,
    "has_pantry": true,
    "special_train": false,
-   "train_date": "2026-10-07"
+   "train_date": "2026-10-07",
+   "class_type": [
+    {
+     "coach_type": "SL"
+    },
+    {
+     "coach_type": "3A"
+    },
+    {
+     "coach_type": "2A"
+    }
+   ]
   }
  ],
  "nearby_station": []

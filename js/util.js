@@ -48,7 +48,10 @@ export function addDays(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
-export function clock(iso, tz = IST, twelve = false) {
+/** True unless the person chose a 24-hour clock (set on <html> by theme.js). */
+export const twelveHour = () => typeof document === "undefined" || document.documentElement.dataset.clock !== "24";
+
+export function clock(iso, tz = IST, twelve = twelveHour()) {
   if (!iso) return "";
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: tz,
@@ -57,8 +60,38 @@ export function clock(iso, tz = IST, twelve = false) {
     hour12: twelve,
   })
     .format(new Date(iso))
-    .replace(" am", " AM")
-    .replace(" pm", " PM");
+    .replace(/\s?am$/i, " AM")
+    .replace(/\s?pm$/i, " PM");
+}
+
+/** A plain "HH:MM" (like a chosen search time) in the person's clock. */
+export function hm(hhmm, twelve = twelveHour()) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+  if (!m) return hhmm || "";
+  const H = +m[1];
+  if (!twelve) return `${String(H).padStart(2, "0")}:${m[2]}`;
+  return `${H % 12 || 12}:${m[2]} ${H < 12 ? "AM" : "PM"}`;
+}
+
+/** Whole days from baseDate (YYYY-MM-DD) to the local date of iso in tz: the "+1" in timetables. */
+export function dayShift(iso, baseDate, tz = IST) {
+  if (!iso || !baseDate) return 0;
+  return Math.round((Date.parse(`${dateKey(iso, tz)}T00:00:00Z`) - Date.parse(`${baseDate}T00:00:00Z`)) / 86400000);
+}
+
+/**
+ * A time for display: AM/PM set small, and "+1" when it falls on a later day.
+ * Screen readers hear "4:30 PM, next day".
+ */
+export function timeNode(iso, tz = IST, { shift = 0, cls = "", text = null } = {}) {
+  const label = text ?? clock(iso, tz);
+  const m = /^(.*) (AM|PM)$/.exec(label);
+  return h(
+    "span",
+    { class: `tm${cls ? ` ${cls}` : ""}` },
+    m ? [m[1], h("small", { class: "ampm", text: ` ${m[2]}` })] : label,
+    shift > 0 ? [h("sup", { class: "plus", "aria-hidden": "true", text: `+${shift}` }), h("span", { class: "sr-only", text: shift === 1 ? ", next day" : `, ${shift} days later` })] : null
+  );
 }
 
 export function dayLabel(iso, tz = IST) {

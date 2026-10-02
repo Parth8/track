@@ -27,6 +27,7 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 - Find a train by number, or by **From and To**: pick two stations, the day you board and a time, and see every train between them. Tapping one opens its live status for the right run (worked out for you, even when it started the day before) with your stop already set.
 - Station search runs on your device across 8,677 stations, by name, code, older name or nickname ("Mysore", "Bombay", "Trichy"), with each city's main station first
 - Route results show departure and arrival, journey time, which days it runs, on-time record, the next one to leave and the fastest, nearby stations the train uses instead, and trains on the route that don't run that day
+- **Seat availability** on every route result: tap a class (SL, 3A, 2A…) to see live IRCTC availability (available, RAC, waitlist or regret), the fare, the chance a waitlist confirms, and the next few runs. Tatkal is offered for tomorrow's trains.
 - Live running status for the last 4 run dates, via a split-flap date picker
 - "Your stop" countdown with delay, ETA and journey progress. Tap any station to make it your stop.
 - Timeline with scheduled and actual or expected times, platforms, halts and day dividers for overnight runs
@@ -34,6 +35,7 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 - Good to know: weather at your stop, arriving before sunrise or after dark, long halts ahead, overnight journeys, on-time record, coach order at the platform
 
 ### Flights
+- Find a flight by number, or by **From and To**: pick two airports (city, airport name, code or older name like "Bombay"), a day and a time, and see every direct flight with local times at both ends, delays, cancellations, terminals and aircraft. Tapping one opens its live status. Codeshares are left out, so each flight shows once.
 - Phase-aware layout: before takeoff, in the air, landed, cancelled, diverted
 - Live position, altitude and speed from community ADS-B receivers, with an honest fallback when out of range
 - Gate, terminal, check-in desks and baggage belt
@@ -43,6 +45,7 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 - Shareable URLs. The whole state lives in the address bar, for example `?m=train&no=12786&d=2026-09-29&s=KCG`
 - Add to home screen. Opens full-screen like an app, with no app store. The button only appears where the browser can actually add it (iPhone, iPad, Android, Chrome and Edge, Safari on a Mac) and hides once it's added. Chrome and Edge get a one-tap install as soon as they allow it, even with the panel already open. Apple devices, which can't be added by a site, get a two-step picture guide matched to their browser and version
 - Light, dark or match-device appearance (the site's own palette is the default)
+- 12-hour or 24-hour clock, chosen next to the appearance setting (it follows your device until you pick). Times on a later day than the journey's start carry a "+1", as printed timetables do
 - Auto-refresh while visible, paused in background tabs
 - Friendly error screens with next steps, auto-retry countdowns and offline recovery
 - Respects reduced motion. Keyboard and screen-reader friendly.
@@ -54,14 +57,15 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 ```
 Browser (GitHub Pages: static HTML, CSS, ES modules)
    │
-   │  GET /api/train | /api/between | /api/flight | /api/weather
+   │  GET /api/train | /api/between | /api/seats | /api/flight | /api/flights | /api/weather
    ▼
 Cloudflare Worker ── validates input, checks origin, rate-limits, caches
    │
    ├── Trains:  crowd-sourced running feed (primary for today)
    │            official NTES enquiry (primary for past runs, fallback, coach order)
    │            published timetable (trains between two stations)
-   ├── Flights: AeroDataBox (schedule, gate, belt)
+   │            IRCTC seat availability, via the same feed's seat enquiry
+   ├── Flights: AeroDataBox (schedule, gate, belt, airport departure boards)
    │            adsb.lol + adsb.fi (live position, raced in parallel)
    └── Weather: Open-Meteo
    │
@@ -96,13 +100,16 @@ js/
   theme.js            Applies the saved appearance before first paint
   install.js          Add to home screen: which way this browser does it, if at all
   guide.js            Picture guides for adding Track on iPhone, iPad and Mac (static SVG)
-  finder.js           Route finder: station fields, time picks, results list
+  finder.js           Route finder: From/To fields (stations or airports), time picks, train results, seats
+  flight-finder.js    Flight results for a route search
   stations.js         Station list loading and on-device search
+  airports.js         Airport list loading and on-device search
 data/stations.json    Passenger stations: [code, name, older name] (built by tools/)
-tools/                build-stations.mjs: rebuilds data/stations.json from NTES's station list
+data/airports.json    Airports with scheduled flights: [code, city, name, country, size, older name]
+tools/                build-stations.mjs, build-airports.mjs (data lists), build-icons.mjs (app icons)
 worker/worker.js      The Cloudflare Worker (data service)
 tests/                Worker and station tests (node --test), browser tests for the route finder
-icons/                Home-screen and app icons (PNG, drawn from favicon.svg)
+icons/                Home-screen and app icons (PNG, rendered by tools/build-icons.mjs)
 screenshots/          Install-dialog screenshots for Android and desktop Chrome (sample data, not a real journey)
 vendor/maplibre/      MapLibre GL JS 6.11.2 (self-hosted)
 fonts/                Fraunces, Plus Jakarta Sans and Caveat (self-hosted)
@@ -186,19 +193,65 @@ Response shape (abridged):
 ```
 `trains` are sorted by departure. `startDate` is the day the train's run began, which is the date the live tracker needs (a train you board after midnight may have started the day before). A train's `from` or `to` can be a nearby station the timetable suggests, such as Delhi Jn for New Delhi. `others` are trains on the route that don't run that day, with the next date they do.
 
+Each train also lists `classes`, the travel classes it carries on this route (`["SL", "3A", "2A"]`).
+
+### `GET /api/seats?no=12306&from=NDLS&to=HWH&date=2026-10-09&cls=3A&quota=GN`
+| Param | Rule |
+|---|---|
+| `no` | Train number, 5 digits |
+| `from`, `to` | The train's own boarding and destination codes from `/api/between` |
+| `date` | The day you board, today to 120 days ahead |
+| `cls` | `1A 2A 3A 3E EA EC EV CC FC SL 2S` |
+| `quota` | `GN` (General, default) or `TQ` (Tatkal) |
+
+```json
+{
+  "kind": "seats", "number": "12306", "cls": "3A", "className": "AC 3 Tier", "quota": "GN", "quotaName": "General",
+  "days": [{ "date": "2026-10-09", "kind": "waitlist", "count": 47, "label": "Waitlist 47", "raw": "GNWL119/WL47",
+             "fare": 3225, "baseFare": 2825, "catering": 400, "chance": 38 }],
+  "updatedAt": "ISO", "source": "IRCTC"
+}
+```
+`kind` is `available`, `rac`, `waitlist`, `regret`, `closed` or `unknown`. `days` holds the asked-for day and the next few runs. `chance` is a confirmation estimate, for waitlist and RAC only.
+
+### `GET /api/flights?from=DEL&to=BLR&date=2026-10-02&after=17:00`
+| Param | Rule |
+|---|---|
+| `from`, `to` | IATA airport codes, 3 letters, different from each other |
+| `date` | Local departure date at `from`, yesterday to 7 days ahead |
+| `after` | Optional `HH:MM`. From `12:00` on, only the afternoon half of the board is looked up |
+
+```json
+{
+  "kind": "flights", "date": "2026-10-02", "from": { "code": "DEL" }, "to": { "code": "BLR", "name": "Bengaluru", "tz": "Asia/Kolkata" },
+  "flights": [{
+    "number": "6E 6814", "no": "6E6814", "date": "2026-10-02", "airline": { "name": "IndiGo", "iata": "6E" },
+    "status": { "raw": "Expected", "phase": "pre", "delayMin": null },
+    "dep": { "sched": "ISO", "local": "23:40", "localDate": "2026-10-02", "revisedLocal": null, "terminal": "1" },
+    "arr": { "code": "BLR", "sched": "ISO", "local": "02:25", "localDate": "2026-10-03", "terminal": null },
+    "durationMin": 165, "aircraft": "Airbus A321 NEO"
+  }],
+  "partial": false, "partialNote": null, "asOf": "ISO"
+}
+```
+Built from the origin's departure board (AeroDataBox FIDS) in two 12-hour slots. Each slot is cached and shared by every search from that airport and day, whatever the destination, so a search costs at most two paid lookups and usually none. `partial` is `true` when one half of the day couldn't be loaded, and `partialNote` says why.
+
 ### `GET /api/weather?lat=17.39&lon=78.50`
 Current conditions, hourly forecast and sunrise and sunset for the next few days, in the location's own time zone.
 
 ### Error codes
 | Code | Status | Meaning |
 |---|---|---|
-| `invalid_train`, `invalid_flight`, `invalid_station`, `same_station`, `invalid_date`, `date_out_of_range` | 400 | Input failed validation |
+| `invalid_train`, `invalid_flight`, `invalid_station`, `same_station`, `invalid_airport`, `same_airport`, `invalid_class`, `invalid_quota`, `invalid_date`, `date_out_of_range` | 400 | Input failed validation |
 | `forbidden` | 403 | Request came from a site not in `ALLOWED_ORIGINS` |
 | `not_found` | 404 | No run or flight for that number and date |
+| `class_not_found`, `not_running`, `tatkal_closed` | 404 | That class isn't on the train, the train doesn't run that day, or Tatkal isn't open yet |
 | `rate_limited` | 429 | More than 40 requests a minute from one visitor |
 | `upstream_unavailable` | 502 | Every source failed or timed out |
 | `flights_not_configured` | 503 | No AeroDataBox key set |
 | `quota_exhausted` | 503 | Monthly flight lookups used up |
+| `search_not_configured` | 503 | Flight search needs the `QUOTA` KV binding (tracking by number still works) |
+| `search_paused` | 503 | Flight search used this month's `FLIGHT_SEARCH_CAP`; it resumes on the 1st |
 
 ### Freshness and caching
 | Data | Fresh for | Notes |
@@ -208,6 +261,8 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 | Live aircraft position | 20 s | Free, so looked up on every refresh |
 | Weather | 15 min | |
 | Trains between stations | 6 h | Timetables rarely change, so one lookup serves everyone |
+| Seat availability | 10 min | Moves through the day, but one lookup serves everyone checking that train |
+| Airport departure boards (flight search) | 15 min for today, 6 h for later days | Paid lookups, shared by every search from that airport |
 | Backup copy of any result | 6 h | Served, and flagged, if every source is down |
 
 ---
@@ -225,6 +280,13 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 | `ADB_KEY` | **Secret** | AeroDataBox key from RapidAPI (optional; flights stay off without it) |
 | `ADB_HOST` | Text | Optional. Defaults to `aerodatabox.p.rapidapi.com` |
 | `REQUIRE_ORIGIN` | Text | `false` only while testing in a browser tab. Remove afterwards. |
+| `FLIGHT_SEARCH_CAP` | Text | Optional. Paid airport lookups flight search may use per month (default `100`). `0` pauses flight search. |
+
+4. **Flight search** needs a place to count its monthly lookups, so it can stop before live tracking runs out of quota:
+   - Storage & Databases → KV → Create namespace → name it `track-quota`.
+   - Back in the Worker: Settings → Bindings → Add → KV namespace → Variable name `QUOTA`, namespace `track-quota` → Deploy.
+
+   Without it, flight search shows "almost ready" and everything else works. Each search uses at most 2 lookups from the AeroDataBox plan, and searches from the same airport and day share them.
 
 Optionally, add a Rate Limiting binding named `LIMITER` for platform-level rate limits. Without it, the Worker uses a simpler limiter that runs separately in each Cloudflare data center.
 
@@ -243,7 +305,7 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 - **No untrusted HTML.** All API data is written with `textContent`. The only markup inserted is static SVG from `icons.js`.
 - **Secrets stay server-side.** The AeroDataBox key lives in the Worker as a secret and never reaches the browser or this repository.
 - **The Worker validates everything.** It checks each request's origin against an allowlist, rate-limits per visitor, and validates every input before calling a source.
-- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only thing kept on a device is the appearance choice, in `localStorage`.
+- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only things kept on a device are the appearance and clock choices, in `localStorage`. The Worker's KV store holds one number per month: how many flight-search lookups were used.
 - **No referrers are sent.** Referrers are suppressed and credentials are omitted from API calls.
 
 ---
@@ -251,11 +313,13 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 ## Testing
 
 ```
-node --test tests/*.test.mjs           # Worker and station search, offline
+node --test tests/*.test.mjs           # Worker, station and airport search, offline
 python3 -m http.server 8765            # then, in another terminal:
-node tests/finder.e2e.mjs              # route finder in a real browser (needs Playwright)
+node tests/finder.e2e.mjs              # route finders, seats and the clock setting in a real browser (needs Playwright)
 ```
-Worker tests answer upstream calls from recorded responses in `tests/fixtures`, so they run offline and give the same result every time.
+Worker tests answer upstream calls from recorded responses in `tests/fixtures`, so they run offline and give the same result every time. Flight search is tested against a departure board in AeroDataBox's published format (`tests/fids.mjs`).
+
+To refresh the airport list, download `airports.csv` and `countries.csv` from [OurAirports](https://ourairports.com/data/) and run `node tools/build-airports.mjs airports.csv countries.csv > data/airports.json`. To redraw the app icons, run `node tools/build-icons.mjs`.
 
 To refresh the station list, save NTES's station list (the `arrStationList` array) as JSON and run `node tools/build-stations.mjs ntes.json datameet-stations.json > data/stations.json`.
 
@@ -269,7 +333,9 @@ To refresh the station list, save NTES's station list (the `arrStationList` arra
 - **The official railway feed may block some cloud regions.** Visitors outside India may only get the crowd-sourced source.
 - **Flight data runs on a free plan.** Its monthly lookup quota is shared by everyone using this deployment.
 - **Unofficial access.** Railway data is fetched from public pages without an official API. Keep usage personal and cached.
-- **Route search shows direct trains only.** Journeys that need a change of train aren't suggested.
+- **Route search shows direct trains and flights only.** Journeys that need a change aren't suggested.
+- **Flight search has a monthly budget.** It pauses when `FLIGHT_SEARCH_CAP` is reached, so tracking by flight number keeps working. Departure boards for today are up to 15 minutes old; tap a flight for its live status.
+- **Seat availability is a snapshot.** It's up to 10 minutes old and can change before you book. Book on IRCTC.
 
 ---
 
@@ -281,6 +347,8 @@ To refresh the station list, save NTES's station list (the `arrStationList` arra
 | Trains between stations | Published timetable, via the crowd-sourced feed's timetable search | Public pages, unofficial use |
 | Station names and codes | Indian Railways NTES station list | Public data |
 | Older station names (search only) | [datameet/railways](https://github.com/datameet/railways) | CC0 |
+| Seat availability and fares | IRCTC, via the crowd-sourced feed's seat enquiry | Public pages, unofficial use |
+| Airport names and codes | [OurAirports](https://ourairports.com/data/) | Public domain |
 | Flight schedules, gates, belts | [AeroDataBox](https://aerodatabox.com) | Attribution required (shown on every flight screen) |
 | Live aircraft positions | [adsb.lol](https://adsb.lol), [adsb.fi](https://adsb.fi) | ODbL (adsb.lol); non-commercial with credit (adsb.fi) |
 | Map tiles | [OpenFreeMap](https://openfreemap.org), [OpenMapTiles](https://openmaptiles.org) | Free, attribution required |
@@ -304,6 +372,8 @@ Track is not affiliated with Indian Railways, any airline, or any provider above
 Deliberately short. Depth over breadth.
 
 - [x] Find a train by stations, date and time
+- [x] Seat availability on route results
+- [x] Find a flight by airports, date and time
 - [ ] Small test suite for time zones, geometry, delay logic and phase rendering (Worker and station tests are in)
 - [ ] "Should I leave for the station now?" nudge
 - [ ] Clearer disruption explanations (diversions, reschedules, cancellations)

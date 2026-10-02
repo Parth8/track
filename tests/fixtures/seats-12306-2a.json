@@ -1,0 +1,108 @@
+{
+ "success": true,
+ "error": null,
+ "data_from": "IRCTC",
+ "last_updated_at_txt": "Just now",
+ "seat_availibility": [
+  {
+   "Date (DD-MM-YYYY)": "9-10-2026",
+   "Class - 2A": "GNWL79/WL29",
+   "class_type": "Class - 2A",
+   "availablity_date": "9-10-2026",
+   "availablity_status": "GNWL79/WL29",
+   "seat_avl_text": "WAITLIST",
+   "seat_avl": 29,
+   "ticket_fare": 3990,
+   "catering_charge": 400,
+   "total_fare": 4390,
+   "last_updated_at": "2026-10-02T09:20:50+05:30",
+   "show_book_button": true,
+   "date_format": {
+    "change_date": "09 Oct Fri",
+    "date": "09",
+    "month": "Oct",
+    "day": "Fri",
+    "full_day": "Friday"
+   },
+   "alt_cnf_seat": false,
+   "cp_percentage": 38,
+   "cp_perc": "38% (Med Chance)",
+   "cp_prob": "MEDIUM"
+  },
+  {
+   "Date (DD-MM-YYYY)": "16-10-2026",
+   "Class - 2A": "GNWL159/WL93",
+   "class_type": "Class - 2A",
+   "availablity_date": "16-10-2026",
+   "availablity_status": "GNWL159/WL93",
+   "seat_avl_text": "WAITLIST",
+   "seat_avl": 93,
+   "ticket_fare": 3990,
+   "catering_charge": 400,
+   "total_fare": 4390,
+   "last_updated_at": "2026-10-02T09:20:50+05:30",
+   "show_book_button": true,
+   "date_format": {
+    "change_date": "16 Oct Fri",
+    "date": "16",
+    "month": "Oct",
+    "day": "Fri",
+    "full_day": "Friday"
+   },
+   "alt_cnf_seat": false,
+   "cp_percentage": 20,
+   "cp_perc": "20% (Low Chance)",
+   "cp_prob": "LOW"
+  },
+  {
+   "Date (DD-MM-YYYY)": "23-10-2026",
+   "Class - 2A": "GNWL133/WL87",
+   "class_type": "Class - 2A",
+   "availablity_date": "23-10-2026",
+   "availablity_status": "GNWL133/WL87",
+   "seat_avl_text": "WAITLIST",
+   "seat_avl": 87,
+   "ticket_fare": 3990,
+   "catering_charge": 400,
+   "total_fare": 4390,
+   "last_updated_at": "2026-10-02T09:20:50+05:30",
+   "show_book_button": true,
+   "date_format": {
+    "change_date": "23 Oct Fri",
+    "date": "23",
+    "month": "Oct",
+    "day": "Fri",
+    "full_day": "Friday"
+   },
+   "alt_cnf_seat": false,
+   "cp_percentage": 25,
+   "cp_perc": "25% (Low Chance)",
+   "cp_prob": "LOW"
+  },
+  {
+   "Date (DD-MM-YYYY)": "30-10-2026",
+   "Class - 2A": "GNWL48/WL27",
+   "class_type": "Class - 2A",
+   "availablity_date": "30-10-2026",
+   "availablity_status": "GNWL48/WL27",
+   "seat_avl_text": "WAITLIST",
+   "seat_avl": 27,
+   "ticket_fare": 3990,
+   "catering_charge": 400,
+   "total_fare": 4390,
+   "last_updated_at": "2026-10-02T09:20:50+05:30",
+   "show_book_button": true,
+   "date_format": {
+    "change_date": "30 Oct Fri",
+    "date": "30",
+    "month": "Oct",
+    "day": "Fri",
+    "full_day": "Friday"
+   },
+   "alt_cnf_seat": false,
+   "cp_percentage": 52,
+   "cp_perc": "52% (Med Chance)",
+   "cp_prob": "MEDIUM"
+  }
+ ]
+}

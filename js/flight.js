@@ -1,17 +1,22 @@
-import { h, svg, clock, dayLabel, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing } from "./util.js";
+import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing, timeNode, dayShift } from "./util.js";
 import { icons, weatherLook, bodyType } from "./icons.js";
 
 /**
  * Flight status screen. The order changes with the phase:
  * before takeoff the departure leads, in the air the map leads, after landing the belt leads.
  */
+/** "2h 05m" for today; "2d 13h" when departure is more than a day away. */
+const countdown = (ms) => (ms >= 86400000 ? `${Math.floor(ms / 86400000)}d ${Math.floor((ms % 86400000) / 3600000)}h` : duration(ms));
+
 export function renderFlight(f) {
   const dep = f.departure;
   const arr = f.arrival;
   const depTz = dep.tz || "UTC";
   const arrTz = arr.tz || "UTC";
   const phase = f.status.phase;
-  const t12 = (iso, tz) => clock(iso, tz, true);
+  const t12 = (iso, tz) => clock(iso, tz); // follows the person's 12/24-hour choice
+  // "+1" is counted from the local date the flight was scheduled to leave.
+  const baseDate = dateKey(dep.sched, depTz);
   const depCity = dep.city || dep.code;
   const arrCity = arr.city || arr.code;
 
@@ -107,7 +112,7 @@ export function renderFlight(f) {
   const banner = h("section", { class: "phase-banner", "aria-live": "polite" });
   const tone = (d) => banner.classList.add(d == null ? "tone" : d >= 15 ? "warn" : d <= 5 ? "good" : "tone");
   const lead = (t) => h("p", { class: "lead", text: t });
-  const big = (t) => h("p", { class: "big", "data-k": "banner", text: t });
+  const big = (t) => h("p", { class: "big", "data-k": "banner" }, t);
   const sub = (t) => h("p", { class: "sub", text: t });
 
   if (phase === "cancelled") {
@@ -124,7 +129,7 @@ export function renderFlight(f) {
     const statusWord = /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
     banner.append(
       lead(until > 0 ? "Departs in" : "Departure"),
-      big(until > 0 ? duration(until) : t12(depTime, depTz)),
+      big(until > 0 ? countdown(until) : timeNode(depTime, depTz, { shift: dayShift(depTime, baseDate, depTz) })),
       sub([statusWord, dc && dc.cls === "late" ? `Delayed ${fmtMin(d)}, now ${t12(depTime, depTz)}` : `On time at ${t12(depTime, depTz)}`].filter(Boolean).join(". "))
     );
   } else if (phase === "air") {
@@ -150,7 +155,7 @@ export function renderFlight(f) {
     const d = f.status.delayArr;
     tone(d);
     const dc = delayChip(d);
-    banner.append(lead(`Landed in ${arrCity}`), big(t12(arrTime, arrTz)), sub(`${dc ? dc.text : "On time"}, ${ago(arrTime)}.`));
+    banner.append(lead(`Landed in ${arrCity}`), big(timeNode(arrTime, arrTz, { shift: dayShift(arrTime, baseDate, arrTz) })), sub(`${dc ? dc.text : "On time"}, ${ago(arrTime)}.`));
   }
   blocks.banner = banner;
 
@@ -198,7 +203,12 @@ export function renderFlight(f) {
         "div",
         {},
         h("p", { class: "leg-place", text: `${m.code}, ${m.name}` }),
-        h("p", { class: "leg-time" }, h("span", { "data-k": `${side}-t`, text: t12(time, tz) }), changed ? h("s", { text: t12(m.sched, tz) }) : null),
+        h(
+          "p",
+          { class: "leg-time" },
+          h("span", { "data-k": `${side}-t` }, time ? timeNode(time, tz, { shift: dayShift(time, baseDate, tz) }) : "--:--"),
+          changed ? h("s", { text: t12(m.sched, tz) }) : null
+        ),
         h("p", { class: `leg-note ${neutral ? "neutral" : late && late.cls === "late" ? "t-late" : "t-early"}`, text: note })
       ),
       h("div", { class: "leg-chips" }, chips)
