@@ -44,6 +44,7 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 ### Everywhere
 - Shareable URLs. The whole state lives in the address bar, for example `?m=train&no=12786&d=2026-09-29&s=KCG`
 - Add to home screen. Opens full-screen like an app, with no app store. The button only appears where the browser can actually add it (iPhone, iPad, Android, Chrome and Edge, Safari on a Mac) and hides once it's added. Chrome and Edge get a one-tap install as soon as they allow it, even with the panel already open. Apple devices, which can't be added by a site, get a two-step picture guide matched to their browser and version
+- A live island on every status screen: once the big status card scrolls away, a capsule settles at the top with a train or plane icon, a progress ring, the time that matters now (your stop, departure countdown or landing), how it's running, and a second line only when there's more to say (next stop and platform, gate, altitude and speed, baggage belt). It reshapes itself as the details change, and a tap takes you back to the top
 - A settings menu at the top right (home and search screens) for appearance and clock
 - Light, dark or match-device appearance (the site's own palette is the default)
 - 12-hour or 24-hour clock (it follows your device until you pick). Times on a later day than the journey's start carry a "+1", as printed timetables do
@@ -101,6 +102,7 @@ js/
   theme.js            Applies the saved appearance before first paint
   install.js          Add to home screen: which way this browser does it, if at all
   guide.js            Picture guides for adding Track on iPhone, iPad and Mac (static SVG)
+  island.js           The live island at the top of status screens
   finder.js           Route finder: From/To fields (stations or airports), time picks, train results, seats
   flight-finder.js    Flight results for a route search
   stations.js         Station list loading and on-device search

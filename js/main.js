@@ -10,6 +10,7 @@ import { installWay, installPlace, appleGuide, onInstallChange, promptInstall } 
 import { guideArt } from "./guide.js";
 import { createRoutePanel, createResults, routeRange } from "./finder.js";
 import { createFlightResults, flightRouteRange } from "./flight-finder.js";
+import { createIsland } from "./island.js";
 
 const today = () => todayIn(IST);
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
@@ -97,6 +98,7 @@ let session = null;
 let prefill = null; // number and date carried back from the status screen
 let routePanel = null; // created the first time the route finder opens
 const byToggle = $("#by-toggle");
+const island = createIsland(); // the live capsule at the top of a status screen
 
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
@@ -503,6 +505,7 @@ function stopSession() {
   session.io?.disconnect();
   session.mapCtl?.destroy();
   jumpBtn.classList.remove("show");
+  island.stop();
   session = null;
 }
 
@@ -671,6 +674,9 @@ function paint() {
     if (session !== s || s.share !== view.share) return;
     s.shareImage = renderShareImage(view.share).catch(() => null);
   });
+
+  island.update(view.island);
+  island.watch(view.anchor);
 
   s.currentRow = view.currentRow;
   s.io?.disconnect();

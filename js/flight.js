@@ -419,7 +419,53 @@ export function renderFlight(f) {
           ? `${f.number} lands in ${arrCity} at ${t12(arrTime, arrTz)}. Live:`
           : `${f.number} from ${depCity} to ${arrCity}. Live:`,
   };
-  return { node, map, currentRow: null, weather, share };
+  // The island: what matters for this phase in one or two lines, growing only when there's more to say.
+  const now2 = Date.now();
+  const timeAt = (iso, tz) => timeNode(iso, tz, { shift: dayShift(iso, baseDate, tz) });
+  let island;
+  const route = `${f.number} · ${dep.code} → ${arr.code}`;
+  if (phase === "pre") {
+    const until = Date.parse(depTime) - now2;
+    const d = f.status.delayDep;
+    const boarding = /Boarding/.test(f.status.raw);
+    const chip = boarding ? { cls: "accent", text: "Boarding" } : /GateClosed/.test(f.status.raw) ? { cls: "late", text: "Gate closed" } : d != null && d >= 5 ? { cls: "late", text: `Late ${fmtMin(d)}` } : d != null ? { cls: "ok", text: "On time" } : null;
+    island = {
+      top: route,
+      main: until > 0 ? h("span", {}, "Departs in ", h("b", { text: countdown(until) })) : h("span", {}, "Departs ", timeAt(depTime, depTz)),
+      chip,
+      detail: [dep.gate ? `Gate ${dep.gate}` : null, dep.terminal ? `Terminal ${dep.terminal}` : null, dep.checkIn && !dep.gate ? `Check-in ${dep.checkIn}` : null].filter(Boolean),
+      progress: null,
+    };
+  } else if (phase === "air") {
+    const left = Math.max(0, Date.parse(arrTime) - now2);
+    const d = f.status.delayArr;
+    island = {
+      top: route,
+      main: h("span", {}, "Lands in ", h("b", { text: duration(left) }), h("span", { class: "isl-when" }, " · ", timeAt(arrTime, arrTz))),
+      chip: d != null && d >= 5 ? { cls: "late", text: `Late ${fmtMin(d)}` } : d != null ? { cls: "ok", text: "On time" } : null,
+      detail: [
+        reported && f.position.altFt ? `${Math.round(f.position.altFt).toLocaleString("en-IN")} ft` : null,
+        reported && f.position.speedKmh ? `${f.position.speedKmh} km/h` : null,
+        f.distanceKm ? `${Math.round(f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km to go` : null,
+      ].filter(Boolean),
+      progress: fraction,
+    };
+  } else if (phase === "landed") {
+    island = {
+      top: route,
+      main: h("span", {}, "Landed ", timeAt(arrTime, arrTz)),
+      chip: { cls: "ok", text: "Landed" },
+      detail: [arr.belt ? `Belt ${arr.belt}` : null, arr.terminal ? `Terminal ${arr.terminal}` : null].filter(Boolean),
+      progress: 1,
+    };
+  } else {
+    island = { top: route, main: h("span", {}, phase === "cancelled" ? "Cancelled" : "Diverted"), chip: { cls: "bad", text: phase === "cancelled" ? "Cancelled" : "Diverted" }, detail: [], progress: null };
+  }
+  island.mode = "flight";
+  island.spoken = `Flight ${f.number} from ${depCity} to ${arrCity}. ${island.main.textContent}.${island.chip ? ` ${island.chip.text}.` : ""} ${island.detail.join(". ")}`;
+  if (island.chip && island.main.textContent === island.chip.text) island.chip = null;
+
+  return { node, map, currentRow: null, weather, share, island, anchor: blocks.banner };
 }
 
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);

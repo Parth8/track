@@ -353,7 +353,23 @@ export function renderTrain(j, ctx) {
     text: `Train ${j.number} ${mine.passed ? "reached" : "reaches"} ${mine.name} ${mine.passed ? "at" : "around"} ${clock(mineTime)}${lastChip ? ` (${lastChip.text.toLowerCase()})` : ""}. Live:`,
   };
 
-  return { node, map, currentRow, share, weather: mine.lat != null ? [{ lat: mine.lat, lon: mine.lon, apply: addWeather }] : [] };
+  // The island: your stop and its time, how it's running, and what's next while it moves.
+  const islandDetail = [];
+  if (phase === "running" && atStop && atStop !== mine) islandDetail.push(`Halting at ${atStop.name}${atStop.platform ? `, PF ${atStop.platform}` : ""}`);
+  else if (phase === "running" && nextStop && nextStop !== mine) islandDetail.push(`Next: ${nextStop.name}, ${clock(bestArr(nextStop))}`);
+  if (!mine.passed && mine.platform) islandDetail.push(`PF ${mine.platform} at ${mine.name}`);
+  const islandChip = dc ? { cls: dc.cls, text: dc.cls === "ok" ? "On time" : dc.text } : phase === "not_started" ? { cls: "info", text: "Not started" } : null;
+  const island = {
+    mode: "train",
+    top: `${j.number} · ${mine.name}`,
+    main: h("span", {}, mineTime ? timeNode(mineTime) : "--:--", h("span", { class: "isl-when", text: ` · ${whenText}` })),
+    chip: phase === "arrived" ? { cls: "ok", text: "Arrived" } : islandChip,
+    detail: islandDetail,
+    progress: phase === "not_started" ? null : kmDone / kmTotal,
+    spoken: `Train ${j.number}. ${mine.name} at ${clock(mineTime)}, ${whenText}.${islandChip ? ` ${islandChip.text}.` : ""} ${islandDetail.join(". ")}`,
+  };
+
+  return { node, map, currentRow, share, island, anchor: hero, weather: mine.lat != null ? [{ lat: mine.lat, lon: mine.lon, apply: addWeather }] : [] };
 }
 
 function rail(up, down, isHere = false) {

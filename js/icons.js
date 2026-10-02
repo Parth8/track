@@ -5,6 +5,7 @@ const s = (body, vb = "0 0 24 24") =>
 export const icons = {
   back: s('<path d="M19 12H5M11 6l-6 6 6 6"/>'),
   next: s('<path d="M5 12h14M13 6l6 6-6 6"/>'),
+  trainFront: s('<rect x="6" y="3" width="12" height="13.5" rx="3.5"/><path d="M6 10h12M8.5 20.5l1.5-3M15.5 20.5l-1.5-3"/><path d="M9.5 13.6h.01M14.5 13.6h.01" stroke-width="2.6"/>'),
   menu: s('<path d="M4 7h16M4 12h16M4 17h10"/>'),
   up: s('<path d="M6 15l6-6 6 6"/>'),
   down: s('<path d="M6 9l6 6 6-6"/>'),

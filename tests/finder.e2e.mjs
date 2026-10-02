@@ -10,7 +10,7 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import worker from "../worker/worker.js";
-import { fidsAnswer, MemoryKV } from "./fids.mjs";
+import { fidsAnswer, flightAnswer, MemoryKV } from "./fids.mjs";
 
 const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
@@ -50,7 +50,7 @@ function seatAnswer(u) {
 }
 const upstream = async (url) => {
   const u = new URL(url);
-  if (u.hostname.includes("aerodatabox")) return fidsAnswer(url) || new Response(null, { status: 204 });
+  if (u.hostname.includes("aerodatabox")) return fidsAnswer(url) || flightAnswer(url) || new Response(null, { status: 204 });
   if (u.hostname === "sa.railyatri.in") return new Response(JSON.stringify(seatAnswer(u)), { headers: { "Content-Type": "application/json" } });
   const key = `${u.searchParams.get("from")}-${u.searchParams.get("to")}`;
   if (key.startsWith("PURI")) return new Response("down", { status: 503 });
@@ -88,9 +88,10 @@ async function page({ width = 390, height = 844, dark = false, locale = "en-IN",
   const origin = new URL(SITE).origin;
   await ctx.route(`${API}/**`, async (route) => {
     const url = route.request().url();
-    if (url.includes("/api/train") || url.includes("/api/weather"))
+    if (url.includes("/api/train") || url.includes("/api/weather") || (url.includes("/api/flight?") && !env.flightStatus))
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not_found", message: "Not in this test." }) });
-    const res = await callWorker(url, origin, env);
+    const { flightStatus, ...workerEnv } = env;
+    const res = await callWorker(url, origin, workerEnv);
     route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: await res.text() });
   });
   const p = await ctx.newPage();
@@ -560,6 +561,31 @@ await test("trains and flights share the results screen without mixing", async (
   await settle(p, 900);
   assert.equal(await p.locator(".fcard").count(), 0);
   assert.ok((await p.locator(".tcard").count()) > 0);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("the live island appears once the status card scrolls away, and taps back to the top", async () => {
+  const p = await page({ env: { flightStatus: true } });
+  await p.goto(`${SITE}?m=flight&no=6E2131&d=${addDays(istToday(), 2)}`);
+  await p.locator(".phase-banner").waitFor();
+  await settle(p, 600);
+  const island = p.locator(".island");
+  assert.equal(await island.getAttribute("aria-hidden"), "true", "hidden while the status card is in view");
+  await p.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await settle(p, 800);
+  assert.equal(await island.getAttribute("aria-hidden"), "false");
+  assert.match(await island.locator(".isl-top").textContent(), /6E 2131 · DEL → BLR/);
+  assert.match(await island.locator(".isl-main").textContent(), /Departs in \d+d \d+h/);
+  assert.match(await island.locator(".isl-detail").textContent(), /Gate 42B.*Terminal 1/);
+  assert.equal(await island.locator(".isl-glyph svg").count(), 1, "plane icon");
+  assert.match(await island.getAttribute("aria-label"), /Flight 6E 2131 from Delhi to Bengaluru/);
+  await island.click();
+  await p.waitForFunction(() => window.scrollY < 40);
+  await settle(p, 500);
+  assert.equal(await island.getAttribute("aria-hidden"), "true", "hides again at the top");
+  await p.locator("#status-back").click();
+  await settle(p, 500);
+  assert.equal(await p.locator(".island.show").count(), 0, "gone when leaving the status screen");
   assert.deepEqual(p.errors, []);
 });
 

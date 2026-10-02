@@ -101,3 +101,16 @@ export class MemoryKV {
     this.map.set(k, String(v));
   }
 }
+
+/** Answer a flight-status request (…/flights/number/6E2131/2026-10-02) from the same board. */
+export function flightAnswer(url) {
+  const m = /\/flights\/number\/([A-Z0-9]+)\/(\d{4}-\d{2}-\d{2})/.exec(String(url));
+  if (!m) return null;
+  const f = delDepartures(m[2]).departures.find((x) => x.number.replace(" ", "") === m[1]);
+  if (!f) return new Response(null, { status: 204 });
+  const origin = { iata: "DEL", icao: "VIDP", shortName: "Delhi", municipalityName: "Delhi", timeZone: "Asia/Kolkata", location: { lat: 28.56, lon: 77.1 } };
+  return new Response(
+    JSON.stringify([{ ...f, departure: { ...f.departure, airport: origin, gate: "42B" }, arrival: { ...f.arrival, airport: { ...f.arrival.airport, location: { lat: 13.2, lon: 77.7 } } }, greatCircleDistance: { km: 1709 } }]),
+    { headers: { "Content-Type": "application/json" } }
+  );
+}
