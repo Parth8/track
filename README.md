@@ -44,7 +44,7 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 ### Everywhere
 - Shareable URLs. The whole state lives in the address bar, for example `?m=train&no=12786&d=2026-09-29&s=KCG`
 - Add to home screen. Opens full-screen like an app, with no app store. The button only appears where the browser can actually add it (iPhone, iPad, Android, Chrome and Edge, Safari on a Mac) and hides once it's added. Chrome and Edge get a one-tap install as soon as they allow it, even with the panel already open. Apple devices, which can't be added by a site, get a two-step picture guide matched to their browser and version
-- A live island on every status screen: once the big status card scrolls away, a capsule settles at the top with a train or plane icon, a progress ring, the time that matters now (your stop, departure countdown or landing), how it's running, and a second line only when there's more to say (next stop and platform, gate, altitude and speed, baggage belt). It reshapes itself as the details change, and a tap takes you back to the top
+- A live island on every status screen: once the big status card scrolls away, a capsule settles at the top with a train or plane icon, a progress ring, the time that matters now (your stop, departure countdown or landing), how it's running, and a second line only when there's more to say (next stop and platform, gate, altitude and speed, baggage belt). It reshapes itself as the details change, and a tap takes you back to the top. **Pin it** (the pin on the status screen, or on the island) and it stays on top of every screen, keeps itself fresh in the background, and is still there when you close and reopen the app; tap it to open the journey, or tap its pin to let go
 - A settings menu at the top right (home and search screens) for appearance and clock
 - Light, dark or match-device appearance (the site's own palette is the default)
 - 12-hour or 24-hour clock (it follows your device until you pick). Times on a later day than the journey's start carry a "+1", as printed timetables do
@@ -318,7 +318,7 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 - **No untrusted HTML.** All API data is written with `textContent`. The only markup inserted is static SVG from `icons.js`.
 - **Secrets stay server-side.** The AeroDataBox key lives in the Worker as a secret and never reaches the browser or this repository.
 - **The Worker validates everything.** It checks each request's origin against an allowlist, rate-limits per visitor, and validates every input before calling a source.
-- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only things kept on a device are the appearance and clock choices, in `localStorage`. The Worker's KV store holds the month's count of paid flight lookups, airport details, and, for 2 days, a count of paid lookups per visitor keyed by a one-way hash of the address and day (never the address itself).
+- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only things kept on a device are the appearance and clock choices and a pinned journey (if you pin one), in `localStorage`. The Worker's KV store holds the month's count of paid flight lookups, airport details, and, for 2 days, a count of paid lookups per visitor keyed by a one-way hash of the address and day (never the address itself).
 - **No referrers are sent.** Referrers are suppressed and credentials are omitted from API calls.
 
 ---

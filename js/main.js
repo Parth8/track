@@ -98,7 +98,14 @@ let session = null;
 let prefill = null; // number and date carried back from the status screen
 let routePanel = null; // created the first time the route finder opens
 const byToggle = $("#by-toggle");
-const island = createIsland(); // the live capsule at the top of a status screen
+// The live capsule at the top: on a journey's own screen once you scroll, or everywhere when pinned.
+const island = createIsland({
+  onOpen: (mode) => {
+    if (mode === "pinned" && pinned) navigate({ m: pinned.mode, no: pinned.no, d: pinned.date, s: pinned.stop || null });
+    else window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  },
+  onPin: (mode) => togglePin(mode),
+});
 
 /* ------------------------------------------------------------------ */
 /* Boot                                                                */
@@ -134,6 +141,104 @@ for (const btn of byToggle.querySelectorAll("button")) {
     navigate({ m: r.mode, by: by === "route" ? "route" : null }, { replace: true, instant: true, keepFocus: true });
   });
 }
+
+/* ------------------------------------------------------------------ */
+/* Pinned journey: the island stays on top, even after closing the app */
+/* ------------------------------------------------------------------ */
+
+const PIN_KEY = "pinned";
+function readPin() {
+  try {
+    const p = JSON.parse(localStorage.getItem(PIN_KEY) || "null");
+    // Runs older than the tracker's window are over: let them go.
+    if (p && (p.mode === "train" || p.mode === "flight") && p.no && p.date >= addDays(today(), -3) && p.island) return p;
+  } catch {
+    /* private mode or a bad copy: nothing pinned */
+  }
+  return null;
+}
+let pinned = readPin();
+let pinTimer = null;
+let pinFetchedAt = 0;
+const samePin = (s) => !!(pinned && s && s.mode === pinned.mode && s.no === pinned.no && (s.date || today()) === pinned.date);
+const onOwnStatus = () => !views.status.hidden && !!session?.data;
+
+function savePin(p) {
+  pinned = p;
+  try {
+    if (p) localStorage.setItem(PIN_KEY, JSON.stringify(p));
+    else localStorage.removeItem(PIN_KEY);
+  } catch {
+    /* private mode: the pin lasts for this visit */
+  }
+}
+
+/**
+ * Pin or unpin. The status screen's pin button, and the island on that journey's own screen,
+ * toggle that journey. The island pinned on any other screen only unpins.
+ */
+function togglePin(source) {
+  const here = onOwnStatus() ? session : null;
+  if (source === "pinned" || !here || samePin(here)) {
+    if (!pinned) return;
+    savePin(null);
+    toast("Unpinned");
+  } else {
+    if (!here.island) return;
+    savePin({ mode: here.mode, no: here.no, date: here.date || today(), stop: here.stop || null, island: here.island });
+    toast("Pinned. It stays on top, even after you close the app.");
+  }
+  syncIsland();
+  refreshPinned();
+}
+
+/** Decide what the island shows on the current screen. */
+function syncIsland() {
+  const pinBtn = $("#status-pin");
+  const here = onOwnStatus() ? session : null;
+  pinBtn.setAttribute("aria-pressed", String(samePin(here)));
+  pinBtn.setAttribute("aria-label", samePin(here) ? "Unpin from the top" : "Pin to the top, even after closing the app");
+  if (here && (!pinned || samePin(here))) {
+    // This journey's own screen: the island appears once the big status card scrolls away.
+    island.setPinned(samePin(here));
+    if (here.island) island.update(here.island);
+    island.watch(here.anchor);
+  } else if (pinned) {
+    island.setPinned(true);
+    island.pinOnTop(pinned.island);
+  } else island.hide();
+}
+
+/**
+ * Keep a pinned journey fresh while you're elsewhere in the app: at most every 45 seconds,
+ * however much you move around, and paused while the app is hidden.
+ */
+async function refreshPinned(force = false) {
+  clearTimeout(pinTimer);
+  if (!pinned || document.hidden || samePin(onOwnStatus() ? session : null)) return;
+  const wait = 45000 - (Date.now() - pinFetchedAt);
+  if (!force && wait > 0) {
+    pinTimer = setTimeout(() => refreshPinned(true), wait);
+    return;
+  }
+  pinFetchedAt = Date.now();
+  const p = pinned;
+  let done = false;
+  try {
+    const data = await api(`/api/${p.mode}`, { no: p.no, date: p.date }, { timeout: 25000, retries: 0 });
+    const view = p.mode === "train" ? renderTrain(data, { stop: p.stop, foldOpen: false, onPickStop() {}, onToggleFold() {}, onChangeStop() {} }) : renderFlight(data);
+    if (pinned !== p) return;
+    savePin({ ...p, island: view.island });
+    done = p.mode === "train" ? data.status?.phase === "arrived" : ["landed", "cancelled"].includes(data.status?.phase);
+    syncIsland();
+  } catch {
+    /* keep the saved copy: the island shows how old it is */
+  }
+  if (pinned === p) pinTimer = setTimeout(() => refreshPinned(true), done ? 15 * 60000 : p.mode === "train" ? 60000 : 120000);
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refreshPinned();
+});
 byToggle.addEventListener("keydown", (e) => {
   if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
   e.preventDefault();
@@ -398,6 +503,8 @@ function route(opts = {}) {
     if (target === "home") document.title = "Track a train or flight";
     if (!opts.keepFocus) views[target].querySelector("[data-focus]")?.focus({ preventScroll: true });
     window.scrollTo({ top: scrollTo, behavior: "instant" });
+    syncIsland();
+    refreshPinned();
   };
 
   if (!document.startViewTransition || prefersReducedMotion() || opts.instant) return apply();
@@ -505,7 +612,6 @@ function stopSession() {
   session.io?.disconnect();
   session.mapCtl?.destroy();
   jumpBtn.classList.remove("show");
-  island.stop();
   session = null;
 }
 
@@ -530,6 +636,7 @@ $("#status-back").addEventListener("click", (e) => {
   else backToSearch();
 });
 $("#status-refresh").addEventListener("click", () => (session?.data ? load({ manual: true }) : retryNow()));
+$("#status-pin").addEventListener("click", () => togglePin("topbar"));
 $("#status-share").addEventListener("click", share);
 jumpBtn.addEventListener("click", () => session?.currentRow?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "center" }));
 
@@ -675,8 +782,10 @@ function paint() {
     s.shareImage = renderShareImage(view.share).catch(() => null);
   });
 
-  island.update(view.island);
-  island.watch(view.anchor);
+  s.island = view.island;
+  s.anchor = view.anchor;
+  if (samePin(s)) savePin({ ...pinned, stop: s.stop || null, island: view.island });
+  syncIsland();
 
   s.currentRow = view.currentRow;
   s.io?.disconnect();

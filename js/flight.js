@@ -429,7 +429,7 @@ export function renderFlight(f) {
   };
   // The island: what matters for this phase in one or two lines, growing only when there's more to say.
   const now2 = Date.now();
-  const timeAt = (iso, tz) => timeNode(iso, tz, { shift: dayShift(iso, baseDate, tz) });
+  const timeAt = (iso, tz, soft = false) => ({ time: iso, tz, shift: dayShift(iso, baseDate, tz), soft });
   let island;
   const route = `${f.number} · ${dep.code} → ${arr.code}`;
   if (phase === "pre") {
@@ -439,7 +439,7 @@ export function renderFlight(f) {
     const chip = boarding ? { cls: "accent", text: "Boarding" } : /GateClosed/.test(f.status.raw) ? { cls: "late", text: "Gate closed" } : d != null && d >= 5 ? { cls: "late", text: `Late ${fmtMin(d)}` } : d != null ? { cls: "ok", text: "On time" } : null;
     island = {
       top: route,
-      main: until > 0 ? h("span", {}, "Departs in ", h("b", { text: countdown(until) })) : h("span", {}, "Departs ", timeAt(depTime, depTz)),
+      main: until > 0 ? [{ text: "Departs in " }, { strong: countdown(until) }] : [{ text: "Departs " }, timeAt(depTime, depTz)],
       chip,
       detail: [dep.gate ? `Gate ${dep.gate}` : null, dep.terminal ? `Terminal ${dep.terminal}` : null, dep.checkIn && !dep.gate ? `Check-in ${dep.checkIn}` : null].filter(Boolean),
       progress: null,
@@ -449,7 +449,7 @@ export function renderFlight(f) {
     const d = f.status.delayArr;
     island = {
       top: route,
-      main: h("span", {}, "Lands in ", h("b", { text: duration(left) }), h("span", { class: "isl-when" }, " · ", timeAt(arrTime, arrTz))),
+      main: [{ text: "Lands in " }, { strong: duration(left) }, { soft: " · " }, timeAt(arrTime, arrTz, true)],
       chip: d != null && d >= 5 ? { cls: "late", text: `Late ${fmtMin(d)}` } : d != null ? { cls: "ok", text: "On time" } : null,
       detail: [
         reported && f.position.altFt ? `${Math.round(f.position.altFt).toLocaleString("en-IN")} ft` : null,
@@ -461,17 +461,19 @@ export function renderFlight(f) {
   } else if (phase === "landed") {
     island = {
       top: route,
-      main: h("span", {}, "Landed ", timeAt(arrTime, arrTz)),
+      main: [{ text: "Landed " }, timeAt(arrTime, arrTz)],
       chip: { cls: "ok", text: "Landed" },
       detail: [arr.belt ? `Belt ${arr.belt}` : null, arr.terminal ? `Terminal ${arr.terminal}` : null].filter(Boolean),
       progress: 1,
     };
   } else {
-    island = { top: route, main: h("span", {}, phase === "cancelled" ? "Cancelled" : "Diverted"), chip: { cls: "bad", text: phase === "cancelled" ? "Cancelled" : "Diverted" }, detail: [], progress: null };
+    island = { top: route, main: [{ text: phase === "cancelled" ? "Cancelled" : "Diverted" }], chip: { cls: "bad", text: phase === "cancelled" ? "Cancelled" : "Diverted" }, detail: [], progress: null };
   }
   island.mode = "flight";
-  island.spoken = `Flight ${f.number} from ${depCity} to ${arrCity}. ${island.main.textContent}.${island.chip ? ` ${island.chip.text}.` : ""} ${island.detail.join(". ")}`;
-  if (island.chip && island.main.textContent === island.chip.text) island.chip = null;
+  const mainText = island.main.map((x) => (x.time ? clock(x.time, x.tz) : x.text ?? x.strong ?? x.soft ?? "")).join("");
+  island.spoken = `Flight ${f.number} from ${depCity} to ${arrCity}. ${mainText}.${island.chip ? ` ${island.chip.text}.` : ""} ${island.detail.join(". ")}`;
+  if (island.chip && mainText === island.chip.text) island.chip = null;
+  island.updatedAt = f.status.checkedAt || f.status.lastUpdated || new Date().toISOString();
 
   return { node, map, currentRow: null, weather, share, island, anchor: blocks.banner };
 }

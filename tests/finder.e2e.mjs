@@ -60,11 +60,12 @@ const upstream = async (url) => {
 
 // Flight search is switched on (key + KV store) unless a test says otherwise.
 const QUOTA = new MemoryKV();
-async function callWorker(url, origin, env = {}) {
+async function callWorker(url, origin, env = {}, ip = "10.0.0.1") {
   const real = globalThis.fetch;
   globalThis.fetch = upstream;
   try {
-    return await worker.fetch(new Request(url, { headers: { Origin: origin } }), { ALLOWED_ORIGINS: origin, ADB_KEY: "test", QUOTA, ...env }, { waitUntil() {} });
+    // each test page calls from its own address, so the Worker's rate limit never trips across tests
+    return await worker.fetch(new Request(url, { headers: { Origin: origin, "CF-Connecting-IP": ip } }), { ALLOWED_ORIGINS: origin, ADB_KEY: "test", QUOTA, ...env }, { waitUntil() {} });
   } finally {
     globalThis.fetch = real;
   }
@@ -78,20 +79,22 @@ async function test(name, fn) {
     console.log(`ok - ${name}`);
   } catch (err) {
     results.push(["not ok", name]);
-    console.log(`not ok - ${name}\n  ${String(err.stack || err).split("\n").slice(0, 4).join("\n  ")}`);
+    console.log(`not ok - ${name}\n  ${String(err.stack || err).split("\n").slice(0, 9).join("\n  ")}`);
   }
 }
 
 const browser = await chromium.launch();
+let pages = 0;
 async function page({ width = 390, height = 844, dark = false, locale = "en-IN", env = {} } = {}) {
   const ctx = await browser.newContext({ viewport: { width, height }, isMobile: true, hasTouch: true, colorScheme: dark ? "dark" : "light", locale });
   const origin = new URL(SITE).origin;
+  const ip = `10.1.${Math.floor(++pages / 250)}.${pages % 250}`;
   await ctx.route(`${API}/**`, async (route) => {
     const url = route.request().url();
     if (url.includes("/api/train") || url.includes("/api/weather") || (url.includes("/api/flight?") && !env.flightStatus))
       return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not_found", message: "Not in this test." }) });
     const { flightStatus, ...workerEnv } = env;
-    const res = await callWorker(url, origin, workerEnv);
+    const res = await callWorker(url, origin, workerEnv, ip);
     route.fulfill({ status: res.status, headers: Object.fromEntries(res.headers), body: await res.text() });
   });
   const p = await ctx.newPage();
@@ -578,14 +581,49 @@ await test("the live island appears once the status card scrolls away, and taps 
   assert.match(await island.locator(".isl-main").textContent(), /Departs in \d+d \d+h/);
   assert.match(await island.locator(".isl-detail").textContent(), /Gate 42B.*Terminal 1/);
   assert.equal(await island.locator(".isl-glyph svg").count(), 1, "plane icon");
-  assert.match(await island.getAttribute("aria-label"), /Flight 6E 2131 from Delhi to Bengaluru/);
-  await island.click();
+  assert.match(await island.locator(".isl-open").getAttribute("aria-label"), /Flight 6E 2131 from Delhi to Bengaluru/);
+  await island.locator(".isl-open").click();
   await p.waitForFunction(() => window.scrollY < 40);
   await settle(p, 500);
   assert.equal(await island.getAttribute("aria-hidden"), "true", "hides again at the top");
   await p.locator("#status-back").click();
   await settle(p, 500);
   assert.equal(await p.locator(".island.show").count(), 0, "gone when leaving the status screen");
+  assert.deepEqual(p.errors, []);
+});
+
+await test("pinning keeps the island on every screen, after a reload, and it opens the journey", async () => {
+  const p = await page({ env: { flightStatus: true } });
+  const d = addDays(istToday(), 2);
+  await p.goto(`${SITE}?m=flight&no=AI2803&d=${d}`);
+  await p.locator(".phase-banner").waitFor();
+  await settle(p, 500);
+  await p.locator("#status-pin").click();
+  assert.equal(await p.locator("#status-pin").getAttribute("aria-pressed"), "true");
+  assert.match(await p.locator("#toast").textContent(), /Pinned/);
+  // Elsewhere in the app, it stays on top and the page makes room for it
+  await p.goto(`${SITE}?m=train`);
+  await settle(p, 900);
+  const island = p.locator(".island");
+  assert.equal(await island.getAttribute("aria-hidden"), "false");
+  assert.match(await island.locator(".isl-top").textContent(), /AI 2803/);
+  assert.equal(await p.evaluate(() => document.body.classList.contains("island-pinned")), true);
+  const gap = await p.evaluate(() => document.querySelector(".island").getBoundingClientRect().bottom <= document.querySelector("#view-search .topbar").getBoundingClientRect().top);
+  assert.ok(gap, "the island doesn't cover the page");
+  // Closing and reopening: still there, straight away
+  await p.goto(`${SITE}`);
+  await settle(p, 300);
+  assert.equal(await island.getAttribute("aria-hidden"), "false", "shown from the saved copy on reopen");
+  await island.locator(".isl-open").click();
+  await settle(p, 900);
+  assert.deepEqual([params(p).m, params(p).no, params(p).d], ["flight", "AI2803", d]);
+  // Unpin from the island while elsewhere
+  await p.goto(`${SITE}?m=train`);
+  await settle(p, 600);
+  await island.locator(".isl-pin").click();
+  await settle(p, 400);
+  assert.equal(await island.getAttribute("aria-hidden"), "true");
+  assert.equal(await p.evaluate(() => localStorage.getItem("pinned")), null);
   assert.deepEqual(p.errors, []);
 });
 

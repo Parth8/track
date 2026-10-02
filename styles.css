@@ -3899,20 +3899,15 @@ sup.plus {
   z-index: 40;
   top: max(10px, env(safe-area-inset-top, 0px));
   left: 50%;
-  display: grid;
-  grid-template-columns: auto minmax(0, auto) auto;
-  align-items: center;
-  column-gap: 11px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   width: max-content;
   max-width: min(460px, calc(100vw - 24px));
-  padding: 8px 10px 8px 8px;
-  border: 0;
+  padding: 8px;
   border-radius: 26px;
   background: var(--isl-bg);
   color: var(--isl-ink);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
   overflow: hidden;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 10px 30px rgba(10, 12, 16, 0.28), 0 2px 6px rgba(10, 12, 16, 0.18);
   transform: translate(-50%, -140%) scale(0.6, 0.5);
@@ -3928,8 +3923,61 @@ sup.plus {
   opacity: 1;
   pointer-events: auto;
 }
-.island:active {
-  transform: translate(-50%, 0) scale(0.97);
+/* the part you tap to open the journey (or go back up) */
+.isl-open {
+  display: grid;
+  grid-template-columns: auto minmax(0, auto) auto;
+  align-items: center;
+  column-gap: 11px;
+  min-width: 0;
+  padding: 0 2px 0 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 20px;
+  transition: transform 0.3s var(--spring);
+}
+.isl-open:active {
+  transform: scale(0.97);
+}
+/* pin: keeps the island on every screen, and after closing the app */
+.isl-pin {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-top: 4px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--isl-soft);
+  cursor: pointer;
+  transition: background 0.25s, color 0.25s, transform 0.35s var(--spring);
+}
+.isl-pin svg {
+  width: 16px;
+  height: 16px;
+}
+.isl-pin[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--isl-accent) 24%, transparent);
+  color: var(--isl-accent);
+  transform: rotate(-20deg);
+}
+.isl-pin:active {
+  transform: scale(0.9);
+}
+/* pages make room for a pinned island instead of sliding under it */
+body.island-pinned .view {
+  padding-top: calc(20px + var(--island-space, 0px));
+  transition: padding-top 0.45s var(--ease-out);
+}
+.pin-btn[aria-pressed="true"] {
+  background: var(--deep);
+  color: var(--card);
 }
 .isl-icon {
   position: relative;
@@ -4042,9 +4090,10 @@ sup.plus {
   margin: 0 7px;
   color: rgba(255, 255, 255, 0.35);
 }
-.island:focus-visible {
+.isl-open:focus-visible,
+.isl-pin:focus-visible {
   outline: 3px solid var(--isl-accent);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
   .island {

@@ -362,11 +362,12 @@ export function renderTrain(j, ctx) {
   const island = {
     mode: "train",
     top: `${j.number} · ${mine.name}`,
-    main: h("span", {}, mineTime ? timeNode(mineTime) : "--:--", h("span", { class: "isl-when", text: ` · ${whenText}` })),
+    main: [mineTime ? { time: mineTime, tz: IST } : { text: "--:--" }, { soft: ` · ${whenText}` }],
     chip: phase === "arrived" ? { cls: "ok", text: "Arrived" } : islandChip,
     detail: islandDetail,
     progress: phase === "not_started" ? null : kmDone / kmTotal,
     spoken: `Train ${j.number}. ${mine.name} at ${clock(mineTime)}, ${whenText}.${islandChip ? ` ${islandChip.text}.` : ""} ${islandDetail.join(". ")}`,
+    updatedAt: j.status.checkedAt || new Date().toISOString(),
   };
 
   return { node, map, currentRow, share, island, anchor: hero, weather: mine.lat != null ? [{ lat: mine.lat, lon: mine.lon, apply: addWeather }] : [] };
