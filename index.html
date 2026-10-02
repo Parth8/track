@@ -53,7 +53,7 @@
           <p class="greet" id="greet">Hello</p>
           <h1 class="display" id="home-title" tabindex="-1" data-focus>What are we tracking?</h1>
         </header>
-        <button type="button" class="icon-btn theme-btn" id="theme-btn" aria-label="Change appearance"></button>
+        <button type="button" class="icon-btn menu-btn" aria-label="Settings" aria-haspopup="dialog" aria-controls="menu" aria-expanded="false" data-icon="menu"></button>
       </div>
 
       <nav class="mode-cards" aria-label="Choose what to track">
@@ -89,6 +89,7 @@
     <section id="view-search" class="view" hidden aria-labelledby="search-title">
       <div class="topbar">
         <a class="icon-btn" id="search-back" href="./" aria-label="Back" data-icon="back"></a>
+        <button type="button" class="icon-btn menu-btn" aria-label="Settings" aria-haspopup="dialog" aria-controls="menu" aria-expanded="false" data-icon="menu"></button>
       </div>
       <form id="search-form" class="search-form" novalidate>
         <h1 class="display" id="search-title" tabindex="-1" data-focus>Which train?</h1>
@@ -205,13 +206,12 @@
     </div>
   </dialog>
 
-  <!-- ============ Sources and credits ============ -->
-  <dialog class="sheet" id="sources" aria-labelledby="sources-title">
-    <div class="sheet-inner">
-      <span class="sheet-grab" aria-hidden="true"></span>
-      <div class="sheet-head">
-        <h2 class="display" id="sources-title">Sources and credits</h2>
-        <button type="button" class="icon-btn" id="sources-close" aria-label="Close" data-icon="close"></button>
+  <!-- ============ Settings menu (top right) ============ -->
+  <dialog class="menu" id="menu" aria-labelledby="menu-title">
+    <div class="menu-inner">
+      <div class="menu-head">
+        <h2 class="display" id="menu-title">Settings</h2>
+        <button type="button" class="icon-btn" id="menu-close" aria-label="Close" data-icon="close"></button>
       </div>
       <p class="sheet-label" id="appearance-label">Appearance</p>
       <div class="segmented" id="theme-seg" role="radiogroup" aria-labelledby="appearance-label">
@@ -223,6 +223,22 @@
       <div class="segmented two" id="clock-seg" role="radiogroup" aria-labelledby="clock-label">
         <button type="button" role="radio" data-clock="12" aria-label="12-hour, like 4:30 PM"><span>4:30</span><small>PM</small></button>
         <button type="button" role="radio" data-clock="24" aria-label="24-hour, like 16:30"><span>16:30</span></button>
+      </div>
+      <div class="menu-links">
+        <button type="button" class="menu-link" data-open="sources"><span data-icon="info"></span>Sources and credits<span class="menu-go" data-icon="next"></span></button>
+        <a class="menu-link" href="https://buymeacoffee.com/parth8" target="_blank" rel="noopener noreferrer"><span data-icon="cup"></span>Chip in for a chai<span class="menu-go" data-icon="next"></span></a>
+      </div>
+      <p class="menu-note">Saved on this device only.</p>
+    </div>
+  </dialog>
+
+  <!-- ============ Sources and credits ============ -->
+  <dialog class="sheet" id="sources" aria-labelledby="sources-title">
+    <div class="sheet-inner">
+      <span class="sheet-grab" aria-hidden="true"></span>
+      <div class="sheet-head">
+        <h2 class="display" id="sources-title">Sources and credits</h2>
+        <button type="button" class="icon-btn" id="sources-close" aria-label="Close" data-icon="close"></button>
       </div>
       <p class="sheet-label">Where the data comes from</p>
       <div class="src-row"><span>Train running status</span><span>Crowd-sourced and public railway data</span></div>

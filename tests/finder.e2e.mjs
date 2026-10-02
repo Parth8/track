@@ -556,9 +556,18 @@ await test("the clock setting switches every time between 12- and 24-hour, and i
   assert.match(await first.locator(".tc-t").first().textContent(), /^\d{1,2}:\d{2} (AM|PM)$/);
   assert.ok((await first.locator(".tc-t .plus").count()) === 1, "overnight arrival shows +1");
   assert.match(await p.locator(".rc-when span").textContent(), /Leaving after 4:00 PM/);
-  await p.locator("#results-root [data-open=sources]").click();
+  // Settings live in the menu at the top right of home and search
+  await p.goto(`${SITE}?m=train`);
+  await p.locator("#view-search .menu-btn").click();
   await settle(p, 400);
+  assert.equal(await p.locator("#view-search .menu-btn").getAttribute("aria-expanded"), "true");
+  assert.equal(await p.locator("#sources #clock-seg").count(), 0, "not in Sources and credits");
   await p.locator('#clock-seg [data-clock="24"]').click();
+  await p.keyboard.press("Escape");
+  await settle(p, 300);
+  assert.equal(await p.evaluate(() => document.activeElement?.classList.contains("menu-btn")), true, "focus returns to the menu button");
+  await p.goBack();
+  await settle(p, 900);
   assert.equal(await p.locator('#clock-seg [data-clock="24"]').getAttribute("aria-checked"), "true");
   assert.match(await first.locator(".tc-t").first().textContent(), /^\d{2}:\d{2}$/);
   assert.match(await p.locator(".rc-when span").textContent(), /Leaving after 16:00/);

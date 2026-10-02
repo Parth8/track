@@ -1993,8 +1993,109 @@ sup.plus {
   align-items: flex-start;
   gap: 12px;
 }
-.theme-btn {
+.home-top .menu-btn {
   margin-top: 30px;
+}
+.topbar .menu-btn {
+  margin-left: auto;
+}
+
+/* Settings menu: a panel that grows out of the button at the top right */
+.menu {
+  position: fixed;
+  inset: var(--menu-top, 72px) var(--menu-right, 16px) auto auto;
+  margin: 0;
+  width: min(340px, calc(100vw - 24px));
+  max-height: calc(100dvh - var(--menu-top, 72px) - 12px);
+  overflow: auto;
+  border: 0;
+  padding: 0;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 2px 6px rgba(20, 22, 28, 0.08), 0 24px 60px rgba(20, 22, 28, 0.22);
+  transform-origin: top right;
+}
+.menu[open] {
+  animation: menuIn 0.34s var(--spring);
+}
+.menu::backdrop {
+  background: rgba(20, 22, 28, 0.18);
+}
+@keyframes menuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.92);
+  }
+}
+.menu-inner {
+  padding: 14px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.menu-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.menu-head h2 {
+  font-size: 23px;
+}
+.menu-head .icon-btn {
+  width: 38px;
+  height: 38px;
+  box-shadow: none;
+  background: var(--hair);
+  color: var(--ink);
+}
+.menu-links {
+  margin-top: 12px;
+  border-top: 1px solid var(--hair);
+  padding-top: 6px;
+}
+.menu-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+}
+.menu-link:hover {
+  background: color-mix(in srgb, var(--tint) 45%, transparent);
+}
+.menu-link svg {
+  width: 19px;
+  height: 19px;
+  color: var(--muted);
+}
+.menu-link .menu-go {
+  margin-left: auto;
+  display: inline-flex;
+}
+.menu-link .menu-go svg {
+  width: 16px;
+  height: 16px;
+}
+.menu-note {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu[open] {
+    animation: none;
+  }
 }
 .segmented {
   display: grid;

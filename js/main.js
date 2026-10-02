@@ -12,7 +12,6 @@ import { createRoutePanel, createResults, routeRange } from "./finder.js";
 import { createFlightResults, flightRouteRange } from "./flight-finder.js";
 
 const today = () => todayIn(IST);
-const THEME_LABEL = { light: "Light", dark: "Dark", auto: "Match device" };
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
 const CHAI_URL = "https://buymeacoffee.com/parth8"; // swap for your UPI link later
 const INSTALL_NOTE = { home: "add the app to your home screen", dock: "add the app to your Dock", desktop: "install the app" };
@@ -190,8 +189,32 @@ document.addEventListener("click", (e) => {
   const opener = e.target.closest("[data-open='sources']");
   if (opener) {
     e.preventDefault();
+    if (menu.open) menu.close();
     sources.showModal();
   }
+});
+
+/* Settings menu: the button at the top right of home and search opens it beside itself. */
+const menu = $("#menu");
+let menuOpener = null;
+for (const btn of document.querySelectorAll(".menu-btn")) {
+  btn.addEventListener("click", () => {
+    menuOpener = btn;
+    const r = btn.getBoundingClientRect();
+    menu.style.setProperty("--menu-top", `${Math.round(r.bottom + 8)}px`);
+    menu.style.setProperty("--menu-right", `${Math.max(12, Math.round(window.innerWidth - r.right))}px`);
+    btn.setAttribute("aria-expanded", "true");
+    menu.showModal();
+    menu.querySelector('#theme-seg [aria-checked="true"]')?.focus();
+  });
+}
+$("#menu-close").addEventListener("click", () => menu.close());
+menu.addEventListener("click", (e) => {
+  if (e.target === menu) menu.close(); // a tap outside the panel
+});
+menu.addEventListener("close", () => {
+  menuOpener?.setAttribute("aria-expanded", "false");
+  if (!sources.open) menuOpener?.focus({ preventScroll: true });
 });
 $("#sources-close").addEventListener("click", () => sources.close());
 sources.addEventListener("click", (e) => {
@@ -260,12 +283,6 @@ route();
 /* ------------------------------------------------------------------ */
 
 function setupTheme() {
-  $("#theme-btn").addEventListener("click", () => {
-    const order = ["light", "dark", "auto"];
-    const next = order[(order.indexOf(document.documentElement.dataset.theme) + 1) % order.length];
-    setTheme(next);
-    toast(`Appearance: ${THEME_LABEL[next]}`);
-  });
   for (const b of document.querySelectorAll("#theme-seg button")) {
     b.prepend(svg(icons[THEME_ICON[b.dataset.theme]]));
     b.addEventListener("click", () => setTheme(b.dataset.theme));
@@ -322,9 +339,6 @@ function themeChanged() {
 
 function syncThemeUI() {
   const c = document.documentElement.dataset.theme || "light";
-  const btn = $("#theme-btn");
-  btn.replaceChildren(svg(icons[THEME_ICON[c]]));
-  btn.setAttribute("aria-label", `Appearance: ${THEME_LABEL[c]}. Tap to change.`);
   for (const b of document.querySelectorAll("#theme-seg button")) b.setAttribute("aria-checked", String(b.dataset.theme === c));
   $('meta[name="theme-color"]').setAttribute("content", isDarkTheme() ? "#16181d" : "#faf7f2");
 }

@@ -44,8 +44,9 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 ### Everywhere
 - Shareable URLs. The whole state lives in the address bar, for example `?m=train&no=12786&d=2026-09-29&s=KCG`
 - Add to home screen. Opens full-screen like an app, with no app store. The button only appears where the browser can actually add it (iPhone, iPad, Android, Chrome and Edge, Safari on a Mac) and hides once it's added. Chrome and Edge get a one-tap install as soon as they allow it, even with the panel already open. Apple devices, which can't be added by a site, get a two-step picture guide matched to their browser and version
+- A settings menu at the top right (home and search screens) for appearance and clock
 - Light, dark or match-device appearance (the site's own palette is the default)
-- 12-hour or 24-hour clock, chosen next to the appearance setting (it follows your device until you pick). Times on a later day than the journey's start carry a "+1", as printed timetables do
+- 12-hour or 24-hour clock (it follows your device until you pick). Times on a later day than the journey's start carry a "+1", as printed timetables do
 - Auto-refresh while visible, paused in background tabs
 - Friendly error screens with next steps, auto-retry countdowns and offline recovery
 - Respects reduced motion. Keyboard and screen-reader friendly.
@@ -84,7 +85,7 @@ The frontend never talks to a data provider directly and never learns which one 
 ## Project structure
 
 ```
-index.html            Shell, security policy, the four screens, sources sheet
+index.html            Shell, security policy, the four screens, settings menu, sources sheet
 manifest.webmanifest  Name, icons and full-screen mode for add to home screen
 styles.css            Design tokens, light and dark themes, components, motion
 js/
