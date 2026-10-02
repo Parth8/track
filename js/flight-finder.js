@@ -6,7 +6,7 @@ import { h, svg, hm, timeNode, addDays, todayIn, IST, longDate, duration, fmtMin
 import { icons, art } from "./icons.js";
 import { api, ApiError } from "./api.js";
 import { loadAirports, airportByCode } from "./airports.js";
-import { shortDay, weekday, nameSize } from "./finder.js";
+import { shortDay, weekday, nameSize, errIcon } from "./finder.js";
 
 const today = () => todayIn(IST);
 const minutesOf = (hhmm) => (/^\d{2}:\d{2}$/.test(hhmm || "") ? +hhmm.slice(0, 2) * 60 + +hhmm.slice(3) : null);
@@ -28,7 +28,7 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
     return a ? a.name : data?.[side]?.name || code;
   };
 
-  function head(r, data) {
+  function head(r, data, { loading = false } = {}) {
     const fromName = placeOf(r.from, data, "from");
     const toName = placeOf(r.to, data, "to");
     title.textContent = `${r.from} to ${r.to}`;
@@ -58,12 +58,12 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
     };
     return h(
       "section",
-      { class: "card route-card", "aria-label": `${fromName} to ${toName}` },
+      { class: `card route-card${loading ? " loading" : ""}`, "aria-label": `${fromName} to ${toName}` },
       h(
         "div",
         { class: `rc-ends${nameSize(fromName, toName)}` },
         h("div", { class: "rc-end" }, h("span", { class: "rc-code", text: r.from }), h("strong", { class: "display", text: fromName })),
-        h("div", { class: "rc-mid fly", "aria-hidden": "true" }, h("i"), h("b")),
+        h("div", { class: "rc-mid fly", "aria-hidden": "true" }, h("i"), h("b", {}, svg(icons.plane))),
         h("div", { class: "rc-end to" }, h("span", { class: "rc-code", text: r.to }), h("strong", { class: "display", text: toName }))
       ),
       h(
@@ -303,7 +303,7 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
       h(
         "div",
         { class: "empty compact", role: "alert" },
-        h("span", { class: "err-icon" }, svg(err.code === "offline" ? icons.offline : icons.signal)),
+        h("span", { class: "err-icon" }, svg(errIcon(err.code))),
         h("h2", { class: "display", text: t }),
         h("p", { text: b })
       ),
@@ -325,7 +325,7 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
       return paint();
     }
     root.setAttribute("aria-busy", "true");
-    root.replaceChildren(head(r, null), skeleton());
+    root.replaceChildren(head(r, null, { loading: true }), skeleton());
     restoreStepFocus(false);
     try {
       if (!navigator.onLine) throw new ApiError("offline", "You're offline.");

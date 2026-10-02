@@ -3026,7 +3026,7 @@ sup.plus {
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
-  animation: ride 2.6s var(--ease-out) infinite;
+  left: calc(50% - 6px); /* parked in the middle once results are in */
 }
 .rc-meta {
   display: flex;
@@ -3799,4 +3799,90 @@ sup.plus {
 /* The highlighted suggestion sits on a tinted background: keep its second line readable. */
 .st-opt[aria-selected="true"] .st-sub {
   color: var(--ink-soft);
+}
+
+/* The rider on the route card travels only while results load. */
+.route-card.loading .rc-mid b {
+  animation: ride 2.6s var(--ease-out) infinite;
+}
+/* Flights: a small plane instead of a dot */
+.rc-mid.fly b {
+  top: 0;
+  width: 20px;
+  height: 20px;
+  left: calc(50% - 10px);
+  background: none;
+  box-shadow: none;
+  color: var(--accent);
+}
+.route-card.loading .rc-mid.fly b {
+  animation-name: fly;
+}
+.rc-mid.fly b svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+  transform: rotate(90deg);
+}
+@keyframes fly {
+  0% {
+    left: 0;
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  15% {
+    opacity: 1;
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    left: calc(100% - 20px);
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-card.loading .rc-mid b {
+    animation: none;
+  }
+}
+
+/* Trains using a station near the one asked for */
+.section-sub {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+  margin: 2px 2px 14px;
+}
+/* Placeholder bars take the sizes they're given while results load */
+.skel-card .skel {
+  display: block;
+}
+.tc-codes .near {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+}
+.tc-near {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+}
+.tc-near span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--apricot-ink);
+}
+.tc-near svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
 }

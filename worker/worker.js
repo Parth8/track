@@ -22,7 +22,7 @@
  *                             It holds one number per month: how many paid airport lookups
  *                             flight search has used, so it can stop before tracking runs dry.
  *   FLIGHT_SEARCH_CAP text    optional, paid airport lookups flight search may use per month
- *                             (default 100). Each search uses at most 2, and every search from
+ *                             (default 40). Each search uses at most 2, and every search from
  *                             the same airport and day shares them. "0" pauses flight search.
  */
 
@@ -610,6 +610,13 @@ function parseNtes(html, no, date) {
 /* Flights                                                             */
 /* ------------------------------------------------------------------ */
 
+// Names travellers know, where the flight data has another (it calls Akasa Air "Starlight Airline").
+const AIRLINE_NAME = {
+  "6E": "IndiGo", AI: "Air India", IX: "Air India Express", QP: "Akasa Air", SG: "SpiceJet", "9I": "Alliance Air",
+  S5: "Star Air", I7: "IndiaOne Air", "2T": "TruJet", G8: "Go First", UK: "Vistara",
+};
+const airlineName = (iata, given) => AIRLINE_NAME[iata] || given || iata;
+
 const AIRLINE_ICAO = {
   "6E": "IGO", AI: "AIC", IX: "AXB", QP: "AKJ", SG: "SEJ", UK: "VTI", I5: "IAD", S5: "SNJ", "9I": "LLR",
   EK: "UAE", QR: "QTR", EY: "ETD", SQ: "SIA", BA: "BAW", LH: "DLH", AF: "AFR", KL: "KLM", TK: "THY",
@@ -734,7 +741,7 @@ function normaliseFlight(no, date, list) {
     kind: "flight",
     number: `${iata} ${no.slice(2)}`,
     date,
-    airline: { name: airline.name || iata, iata },
+    airline: { name: airlineName(iata, airline.name), iata },
     callsign,
     status: {
       phase,
@@ -756,7 +763,9 @@ function normaliseFlight(no, date, list) {
 /* Flights between two airports                                        */
 /* ------------------------------------------------------------------ */
 
-const SEARCH_CAP_DEFAULT = 100;
+// AeroDataBox's free plan is 400 units a month and a departure board costs 2, so 40 lookups
+// (80 units) leaves most of the plan for tracking flights by number.
+const SEARCH_CAP_DEFAULT = 40;
 const SLOTS = { am: ["00:00", "11:59"], pm: ["12:00", "23:59"] };
 
 /**
@@ -900,7 +909,7 @@ function flightsTo(departures, to) {
       number: /^[A-Z0-9]{2} /.test(number) ? number : `${no.slice(0, 2)} ${no.slice(2)}`,
       no,
       date: localDate,
-      airline: { name: f.airline?.name || no.slice(0, 2), iata: f.airline?.iata || no.slice(0, 2) },
+      airline: { name: airlineName(no.slice(0, 2), f.airline?.name), iata: f.airline?.iata || no.slice(0, 2) },
       status: { raw, phase, delayMin: mins(depSched, depRev) },
       // Local clock times at each airport ("06:00") and local dates, so the page needs no time zones.
       dep: {
@@ -1036,6 +1045,11 @@ function normaliseBetween(from, to, date, body) {
   const rating = (v) => (num(v) != null && num(v) >= 0 ? num(v) : null);
   const days = (t) => (t.run_days || t.train_run_days || []).filter((d) => RUN_DAYS.has(d));
   const station = (c, n) => ({ code: String(c || "").toUpperCase(), name: titleCase(n || c || "") });
+  // "5 Kms from SBC": how far a nearby station the timetable suggests is from the one asked for.
+  const nearKm = (txt) => {
+    const m = /([\d.]+)\s*km/i.exec(String(txt || ""));
+    return m ? Math.round(Number(m[1])) : null;
+  };
   const base = (t) => ({
     number: String(t.train_number || "").trim(),
     name: String(t.train_name || "").replace(/\s+/g, " ").trim(),
@@ -1057,8 +1071,11 @@ function normaliseBetween(from, to, date, body) {
     const startDate = addDays(date, -fromDay);
     const dep = istIso(startDate, fromDay * 1440 + depMin);
     const arr = istIso(startDate, toDay * 1440 + arrMin);
+    const b = base(t);
+    if (b.from.code !== from) b.from.nearKm = nearKm(t.from_distance_text);
+    if (b.to.code !== to) b.to.nearKm = nearKm(t.to_distance_text);
     const train = {
-      ...base(t),
+      ...b,
       startDate,
       dep,
       arr,

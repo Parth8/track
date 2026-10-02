@@ -43,6 +43,14 @@ export const nameSize = (...names) => {
   return "";
 };
 
+/** An error picture that fits the problem: offline, not switched on yet, or a slow source. */
+export function errIcon(code) {
+  if (code === "offline") return icons.offline;
+  if (["not_found", "search_not_configured", "flights_not_configured", "not_configured", "forbidden", "search_paused", "quota_exhausted"].includes(code)) return icons.timer;
+  if (["upstream_unavailable", "timeout", "network", "http_error", "internal_error"].includes(code)) return icons.signal;
+  return icons.info;
+}
+
 /** How far ahead (and back) a route search can go. */
 export const routeRange = () => [addDays(today(), -3), addDays(today(), 30)];
 
@@ -436,7 +444,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
   const keyOf = (r) => `${r.from}|${r.to}|${r.date}`;
   const nameOf = (code, data, side) => stationName(code, data?.[side]?.code === code ? data[side].name : null);
 
-  function head(r, data) {
+  function head(r, data, { loading = false } = {}) {
     const fromName = nameOf(r.from, data, "from");
     const toName = nameOf(r.to, data, "to");
     title.textContent = `${r.from} to ${r.to}`;
@@ -468,7 +476,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
 
     return h(
       "section",
-      { class: "card route-card", "aria-label": `${fromName} to ${toName}` },
+      { class: `card route-card${loading ? " loading" : ""}`, "aria-label": `${fromName} to ${toName}` },
       h(
         "div",
         { class: `rc-ends${nameSize(fromName, toName)}` },
@@ -527,8 +535,11 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
     tags.push(dayDots(t.runDays));
     if (t.onTimeRating != null && t.onTimeRating >= 8) tags.push(h("span", { class: "chip ok", text: "Usually on time" }));
     else if (t.onTimeRating != null && t.onTimeRating <= 3) tags.push(h("span", { class: "chip late", text: "Often late" }));
-    if (t.from.code !== r.from) tags.push(h("span", { class: "chip info", text: `From ${fromName}` }));
-    if (t.to.code !== r.to) tags.push(h("span", { class: "chip info", text: `To ${toName}` }));
+    // A train using a station near the one asked for says so plainly, with how far it is.
+    const near = [];
+    const away = (end, asked) => (end.nearKm ? `, ${end.nearKm} km from ${stationName(asked)}` : `, not ${stationName(asked)}`);
+    if (t.from.code !== r.from) near.push(`Leaves from ${fromName}${away(t.from, r.from)}`);
+    if (t.to.code !== r.to) near.push(`Ends at ${toName}${away(t.to, r.to)}`);
 
     let foot;
     let spoken;
@@ -550,7 +561,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
     }
 
     const label =
-      `${t.number} ${t.name}. Leaves ${fromName} at ${clock(t.dep)}, reaches ${toName} at ${clock(t.arr)}` +
+      `${t.number} ${t.name}. ${near.length ? `${near.join(". ")}. ` : ""}Leaves ${fromName} at ${clock(t.dep)}, reaches ${toName} at ${clock(t.arr)}` +
       `${nextDay === 1 ? " the next day" : nextDay > 1 ? ` ${nextDay} days later` : ""}. ${duration(t.durationMin * 60000)}. ` +
       `${flags.map((f) => f.text).join(". ")}${flags.length ? ". " : ""}${spoken}`;
 
@@ -590,7 +601,8 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
           h("span", { class: "tc-line" }, h("i"), h("b", { text: duration(t.durationMin * 60000) }), h("i")),
           h("span", { class: "tc-t" }, timeNode(t.arr, IST, { shift: nextDay }))
         ),
-        h("span", { class: "tc-codes" }, h("span", { text: t.from.code }), h("span", { text: t.to.code })),
+        h("span", { class: "tc-codes" }, h("span", { class: t.from.code !== r.from ? "near" : null, text: t.from.code }), h("span", { class: t.to.code !== r.to ? "near" : null, text: t.to.code })),
+        near.length ? h("span", { class: "tc-near" }, near.map((n) => h("span", {}, svg(icons.pin), n))) : null,
         h("span", { class: "tc-name" }, h("span", { class: "tc-no tn", text: t.number }), h("span", { text: t.name })),
         h("span", { class: "tc-tags" }, tags)
       ),
@@ -838,29 +850,48 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
         )
       );
     } else {
+      // Trains between exactly the two stations asked for come first. Ones the timetable adds
+      // because they use a station nearby (Yesvantpur for KSR Bengaluru) get their own section,
+      // unless nothing goes exactly between the two, when they're the answer.
+      const exact = trains.filter((t) => t.from.code === r.from && t.to.code === r.to);
+      const nearby = trains.filter((t) => !exact.includes(t));
+      const main = exact.length ? exact : nearby;
+      const extra = exact.length ? nearby : [];
+      const isLater = (t) => tMin == null || minutesOf(hhmm24(t.dep)) >= tMin;
+
       // Badges that help pick: the next one out, and the fastest.
       const flags = new Map();
       const add = (t, f) => t && flags.set(t.number, [...(flags.get(t.number) || []), f]);
-      if (isToday) add(trains.find((t) => Date.parse(t.dep) > Date.now() && (tMin == null || minutesOf(hhmm24(t.dep)) >= tMin)), { cls: "accent", text: "Next to leave" });
-      if (trains.length >= 3) {
-        const fastest = trains.reduce((a, b) => (b.durationMin < a.durationMin ? b : a));
-        if (trains.filter((t) => t.durationMin === fastest.durationMin).length === 1) add(fastest, { cls: "info", text: "Fastest" });
+      if (isToday) add(main.find((t) => Date.parse(t.dep) > Date.now() && isLater(t)), { cls: "accent", text: "Next to leave" });
+      if (main.length >= 3) {
+        const fastest = main.reduce((a, b) => (b.durationMin < a.durationMin ? b : a));
+        if (main.filter((t) => t.durationMin === fastest.durationMin).length === 1) add(fastest, { cls: "info", text: "Fastest" });
       }
 
-      const earlier = tMin == null ? [] : trains.filter((t) => minutesOf(hhmm24(t.dep)) < tMin);
-      const later = trains.filter((t) => !earlier.includes(t));
+      const earlier = main.filter((t) => !isLater(t));
+      const later = main.filter(isLater);
       const showEarlier = current.expanded || !later.length;
+      const hiddenEarlier = showEarlier ? 0 : earlier.length + extra.filter((t) => !isLater(t)).length;
       const noneLater = !later.length && earlier.length;
 
       nodes.push(
         h(
           "p",
           { class: "rc-count" },
-          h("strong", { text: `${trains.length} train${trains.length > 1 ? "s" : ""}` }),
+          h("strong", { text: `${main.length} train${main.length > 1 ? "s" : ""}` }),
           later.length && earlier.length ? ` · ${later.length} after ${hm(r.time)}` : "",
           h("span", { text: "Sorted by departure" })
         )
       );
+      if (!exact.length)
+        nodes.push(
+          h(
+            "div",
+            { class: "banner info", role: "note" },
+            svg(icons.pin),
+            h("span", { text: `No train runs exactly from ${nameOf(r.from, data, "from")} to ${nameOf(r.to, data, "to")}. These use a station nearby.` })
+          )
+        );
       if (noneLater)
         nodes.push(
           h("div", { class: "banner info", role: "note" }, svg(icons.info), h("span", { text: `Nothing leaves after ${hm(r.time)} that day. Here's what leaves earlier.` }))
@@ -868,7 +899,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
 
       const list = h("ol", { class: "train-list", "aria-label": "Trains" });
       let i = 0;
-      if (earlier.length && !showEarlier) {
+      if (hiddenEarlier) {
         list.append(
           h(
             "li",
@@ -890,13 +921,22 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
                 },
               },
               svg(icons.up),
-              `${earlier.length} earlier train${earlier.length > 1 ? "s" : ""}, before ${hm(r.time)}`
+              `${hiddenEarlier} earlier train${hiddenEarlier > 1 ? "s" : ""}, before ${hm(r.time)}`
             )
           )
         );
       }
-      for (const t of showEarlier ? trains : later) list.append(trainCard(t, r, i++, flags.get(t.number) || []));
+      for (const t of showEarlier ? main : later) list.append(trainCard(t, r, i++, flags.get(t.number) || []));
       nodes.push(list);
+
+      const extraShown = showEarlier ? extra : extra.filter(isLater);
+      if (extraShown.length) {
+        nodes.push(
+          h("h2", { class: "section-title display", text: "Using nearby stations" }),
+          h("p", { class: "section-sub", text: "These leave from or arrive at a station close to the one you picked. Check it suits you before you book." }),
+          h("ol", { class: "train-list", "aria-label": "Trains using nearby stations" }, extraShown.map((t) => trainCard(t, r, i++, [])))
+        );
+      }
     }
 
     if (others.length) {
@@ -975,7 +1015,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
     ];
     root.replaceChildren(
       head(r, null),
-      h("div", { class: "empty compact", role: "alert" }, h("span", { class: "err-icon" }, svg(err.code === "offline" ? icons.offline : icons.signal)), h("h2", { class: "display", text: t }), h("p", { text: b })),
+      h("div", { class: "empty compact", role: "alert" }, h("span", { class: "err-icon" }, svg(errIcon(err.code))), h("h2", { class: "display", text: t }), h("p", { text: b })),
       h(
         "div",
         { class: "actions" },
@@ -998,7 +1038,7 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
       return paint();
     }
     root.setAttribute("aria-busy", "true");
-    root.replaceChildren(head(r, null), skeleton());
+    root.replaceChildren(head(r, null, { loading: true }), skeleton());
     restoreStepFocus(false);
     try {
       if (!navigator.onLine) throw new ApiError("offline", "You're offline.");

@@ -17,7 +17,7 @@ const { chromium } = require("playwright");
 const SITE = process.env.SITE || "http://localhost:8765/";
 const API = "https://journey-api.8parthaggarwal1999.workers.dev";
 const fixture = (n) => JSON.parse(readFileSync(new URL(`./fixtures/${n}`, import.meta.url), "utf8"));
-const FIXTURES = { "NDLS-HWH": "between-ndls-hwh.json", "KCG-AP": "between-kcg-ap.json", "MYS-KCG": "between-mys-kcg.json" };
+const FIXTURES = { "NDLS-HWH": "between-ndls-hwh.json", "KCG-AP": "between-kcg-ap.json", "MYS-KCG": "between-mys-kcg.json", "KCG-SBC": "between-kcg-sbc.json" };
 
 const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
 const addDays = (iso, n) => {
@@ -263,12 +263,27 @@ await test("a search lists trains, notes nearby stations, and folds trains befor
   await p.locator(".train-list .fold-btn").click();
   await settle(p);
   assert.equal(await p.locator(".train-list .tcard").count(), 7);
-  assert.ok((await p.locator(".chip", { hasText: "To Sealdah" }).count()) > 0, "nearby destination noted");
-  assert.ok((await p.locator(".chip", { hasText: "From Delhi Jn" }).count()) > 0, "nearby origin noted");
+  assert.ok((await p.locator(".tc-near", { hasText: "Ends at" }).count()) > 0, "nearby destination noted");
+  assert.ok((await p.locator(".tc-near", { hasText: "Leaves from Delhi Jn" }).count()) > 0, "nearby origin noted");
   assert.equal(await p.locator(".ocard").count(), 3, "trains not running that day: first 3");
   await p.locator(".fold-btn.quiet").click();
   await settle(p);
   assert.equal(await p.locator(".ocard").count(), 7, "then all of them");
+  assert.deepEqual(p.errors, []);
+});
+
+await test("trains to a nearby station sit in their own section and say where they really end", async () => {
+  const p = await page();
+  await p.goto(`${SITE}?m=train&from=KCG&to=SBC&d=${addDays(istToday(), 3)}`);
+  await settle(p, 900);
+  const lists = p.locator(".train-list");
+  const exact = await lists.nth(0).locator("li[data-no]").evaluateAll((els) => els.map((e) => e.dataset.no));
+  assert.deepEqual(exact.sort(), ["12785", "12976"], "only trains from KCG to SBC itself come first");
+  assert.match(await p.locator(".section-title", { hasText: "nearby" }).textContent(), /Using nearby stations/);
+  const vb = p.locator('li[data-no="20703"]');
+  assert.equal(await vb.count(), 1);
+  assert.match(await vb.locator(".tc-near").textContent(), /Ends at Yesvantpur Jn, 5 km from KSR Bengaluru/);
+  assert.equal(await vb.locator(".tc-codes .near").textContent(), "YPR");
   assert.deepEqual(p.errors, []);
 });
 

@@ -281,7 +281,7 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 | `ADB_KEY` | **Secret** | AeroDataBox key from RapidAPI (optional; flights stay off without it) |
 | `ADB_HOST` | Text | Optional. Defaults to `aerodatabox.p.rapidapi.com` |
 | `REQUIRE_ORIGIN` | Text | `false` only while testing in a browser tab. Remove afterwards. |
-| `FLIGHT_SEARCH_CAP` | Text | Optional. Paid airport lookups flight search may use per month (default `100`). `0` pauses flight search. |
+| `FLIGHT_SEARCH_CAP` | Text | Optional. Paid airport lookups flight search may use per month (default `40`, which is 80 of the free plan's 400 monthly units). `0` pauses flight search. |
 
 4. **Flight search** needs a place to count its monthly lookups, so it can stop before live tracking runs out of quota:
    - Storage & Databases → KV → Create namespace → name it `track-quota`.

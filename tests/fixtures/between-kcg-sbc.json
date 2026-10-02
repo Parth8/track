@@ -1,0 +1,584 @@
+{
+ "success": true,
+ "train_between_stations": [
+  {
+   "train_number": "22692",
+   "train_name": "Hazrat Nizamuddin - K S R Bengaluru Rajdhani Express",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "from": "SC",
+   "to": "SBC",
+   "from_std": "17:25",
+   "from_sta": "17:15",
+   "to_sta": "05:20",
+   "to_std": "05:20",
+   "from_day": 1,
+   "to_day": 2,
+   "duration_min": 715,
+   "from_station_name": "SECUNDERABAD JN",
+   "to_station_name": "KSR BENGALURU",
+   "distance": 714.3,
+   "on_time_rating": 2,
+   "to_on_time_rating": 2,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "4 Kms from KCG",
+   "to_distance_text": "",
+   "class_type": [
+    {
+     "coach_type": "3A",
+     "coach_count": 11
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 5
+    },
+    {
+     "coach_type": "1A",
+     "coach_count": 1
+    }
+   ]
+  },
+  {
+   "train_number": "12785",
+   "train_name": "Kacheguda - Ashokapuram SF Express",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "from": "KCG",
+   "to": "SBC",
+   "from_std": "19:05",
+   "from_sta": "19:05",
+   "to_sta": "06:10",
+   "to_std": "06:20",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 665,
+   "from_station_name": "KACHEGUDA",
+   "to_station_name": "KSR BENGALURU",
+   "distance": 625.0,
+   "on_time_rating": 8,
+   "to_on_time_rating": 8,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "",
+   "to_distance_text": "",
+   "class_type": [
+    {
+     "coach_type": "SL",
+     "coach_count": 12
+    },
+    {
+     "coach_type": "CC",
+     "coach_count": 1
+    },
+    {
+     "coach_type": "3A",
+     "coach_count": 5
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 3
+    },
+    {
+     "coach_type": "1A",
+     "coach_count": 1
+    }
+   ]
+  },
+  {
+   "train_number": "12735",
+   "train_name": "Garib Rath Express",
+   "run_days": [
+    "Wed",
+    "Fri",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Wed",
+    "Fri",
+    "Sun"
+   ],
+   "from": "SC",
+   "to": "YPR",
+   "from_std": "20:20",
+   "from_sta": "20:15",
+   "to_sta": "08:20",
+   "to_std": "08:20",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 720,
+   "from_station_name": "SECUNDERABAD JN",
+   "to_station_name": "YESVANTPUR JN (BENGALURU)",
+   "distance": 700.0,
+   "on_time_rating": 5,
+   "to_on_time_rating": 5,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "4 Kms from KCG",
+   "to_distance_text": "5 Kms from SBC",
+   "class_type": [
+    {
+     "coach_type": "3A",
+     "coach_count": 11
+    }
+   ]
+  },
+  {
+   "train_number": "17603",
+   "train_name": "Kacheguda - Yelahanka Express",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "from": "KCG",
+   "to": "YNK",
+   "from_std": "21:05",
+   "from_sta": "21:05",
+   "to_sta": "09:35",
+   "to_std": "09:35",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 750,
+   "from_station_name": "KACHEGUDA",
+   "to_station_name": "YELHANKA JN",
+   "distance": 651.0,
+   "on_time_rating": 9,
+   "to_on_time_rating": 9,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "",
+   "to_distance_text": "14 Kms from SBC",
+   "class_type": [
+    {
+     "coach_type": "SL",
+     "coach_count": 11
+    },
+    {
+     "coach_type": "3E",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "3A",
+     "coach_count": 3
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 4
+    },
+    {
+     "coach_type": "1A",
+     "coach_count": 1
+    }
+   ]
+  },
+  {
+   "train_number": "18111",
+   "train_name": "Tatanagar - Yesvantpur Express",
+   "run_days": [
+    "Fri"
+   ],
+   "train_run_days": [
+    "Thu"
+   ],
+   "from": "SC",
+   "to": "YPR",
+   "from_std": "21:10",
+   "from_sta": "21:00",
+   "to_sta": "13:40",
+   "to_std": "13:40",
+   "from_day": 1,
+   "to_day": 2,
+   "duration_min": 990,
+   "from_station_name": "SECUNDERABAD JN",
+   "to_station_name": "YESVANTPUR JN (BENGALURU)",
+   "distance": 920.0,
+   "on_time_rating": 1,
+   "to_on_time_rating": 1,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "4 Kms from KCG",
+   "to_distance_text": "5 Kms from SBC",
+   "class_type": [
+    {
+     "coach_type": "SL",
+     "coach_count": 7
+    },
+    {
+     "coach_type": "3E",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "3A",
+     "coach_count": 8
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 3
+    }
+   ]
+  },
+  {
+   "train_number": "17289",
+   "train_name": "Kakinada Town - Mysuru Express",
+   "run_days": [
+    "Mon",
+    "Fri"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Fri"
+   ],
+   "from": "SC",
+   "to": "SBC",
+   "from_std": "22:05",
+   "from_sta": "21:55",
+   "to_sta": "12:20",
+   "to_std": "12:30",
+   "from_day": 0,
+   "to_day": 1,
+   "duration_min": 855,
+   "from_station_name": "SECUNDERABAD JN",
+   "to_station_name": "KSR BENGALURU",
+   "distance": 700.0,
+   "on_time_rating": -1,
+   "to_on_time_rating": -1,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "4 Kms from KCG",
+   "to_distance_text": "",
+   "class_type": [
+    {
+     "coach_type": "SL",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "3A",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "1A",
+     "coach_count": 0
+    }
+   ]
+  },
+  {
+   "train_number": "20703",
+   "train_name": "Vande Bharat Express",
+   "run_days": [
+    "Mon",
+    "Tue",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Thu",
+    "Fri",
+    "Sat",
+    "Sun"
+   ],
+   "from": "KCG",
+   "to": "YPR",
+   "from_std": "05:45",
+   "from_sta": "05:45",
+   "to_sta": "14:00",
+   "to_std": "14:00",
+   "from_day": 0,
+   "to_day": 0,
+   "duration_min": 495,
+   "from_station_name": "KACHEGUDA",
+   "to_station_name": "YESVANTPUR JN (BENGALURU)",
+   "distance": 610.0,
+   "on_time_rating": 10,
+   "to_on_time_rating": 10,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "",
+   "to_distance_text": "5 Kms from SBC",
+   "class_type": [
+    {
+     "coach_type": "CC",
+     "coach_count": 7
+    },
+    {
+     "coach_type": "EC",
+     "coach_count": 1
+    }
+   ]
+  },
+  {
+   "train_number": "12976",
+   "train_name": "Jaipur - Mysuru SF Express",
+   "run_days": [
+    "Wed",
+    "Fri"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Wed"
+   ],
+   "from": "KCG",
+   "to": "SBC",
+   "from_std": "00:05",
+   "from_sta": "23:55",
+   "to_sta": "12:30",
+   "to_std": "12:50",
+   "from_day": 2,
+   "to_day": 2,
+   "duration_min": 745,
+   "from_station_name": "KACHEGUDA",
+   "to_station_name": "KSR BENGALURU",
+   "distance": 666.0,
+   "on_time_rating": 3,
+   "to_on_time_rating": 3,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "",
+   "to_distance_text": "",
+   "class_type": [
+    {
+     "coach_type": "SL",
+     "coach_count": 5
+    },
+    {
+     "coach_type": "CC",
+     "coach_count": 1
+    },
+    {
+     "coach_type": "3E",
+     "coach_count": 1
+    },
+    {
+     "coach_type": "3A",
+     "coach_count": 6
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 3
+    },
+    {
+     "coach_type": "1A",
+     "coach_count": 1
+    }
+   ]
+  },
+  {
+   "train_number": "12252",
+   "train_name": "Wainganga SF Express",
+   "run_days": [
+    "Fri",
+    "Mon"
+   ],
+   "train_run_days": [
+    "Thu",
+    "Sun"
+   ],
+   "from": "KCG",
+   "to": "YPR",
+   "from_std": "01:10",
+   "from_sta": "01:00",
+   "to_sta": "13:15",
+   "to_std": "13:15",
+   "from_day": 1,
+   "to_day": 1,
+   "duration_min": 725,
+   "from_station_name": "KACHEGUDA",
+   "to_station_name": "YESVANTPUR JN (BENGALURU)",
+   "distance": 610.0,
+   "on_time_rating": 4,
+   "to_on_time_rating": 4,
+   "has_pantry": false,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "",
+   "to_distance_text": "5 Kms from SBC",
+   "class_type": [
+    {
+     "coach_type": "SL",
+     "coach_count": 8
+    },
+    {
+     "coach_type": "3A",
+     "coach_count": 6
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 2
+    },
+    {
+     "coach_type": "1A",
+     "coach_count": 1
+    }
+   ]
+  },
+  {
+   "train_number": "04149",
+   "train_name": "Prayagraj - Yesvantpur Fare Special",
+   "run_days": [
+    "Fri"
+   ],
+   "train_run_days": [
+    "Wed"
+   ],
+   "from": "SC",
+   "to": "YPR",
+   "from_std": "03:10",
+   "from_sta": "03:10",
+   "to_sta": "21:00",
+   "to_std": "21:00",
+   "from_day": 2,
+   "to_day": 2,
+   "duration_min": 1070,
+   "from_station_name": "SECUNDERABAD JN",
+   "to_station_name": "YESVANTPUR JN",
+   "distance": 685,
+   "on_time_rating": -1,
+   "to_on_time_rating": -1,
+   "has_pantry": false,
+   "special_train": true,
+   "train_date": "2026-10-02",
+   "from_distance_text": "4 Kms from KCG",
+   "to_distance_text": "5 Kms from SBC",
+   "class_type": [
+    {
+     "coach_type": "2S",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "SL",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "3A",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 0
+    }
+   ]
+  },
+  {
+   "train_number": "12650",
+   "train_name": "Karnataka Sampark Kranti Express (Via Ballari)",
+   "run_days": [
+    "Tue",
+    "Wed",
+    "Fri",
+    "Sun",
+    "Mon"
+   ],
+   "train_run_days": [
+    "Mon",
+    "Tue",
+    "Thu",
+    "Sat",
+    "Sun"
+   ],
+   "from": "KCG",
+   "to": "YPR",
+   "from_std": "08:30",
+   "from_sta": "08:20",
+   "to_sta": "04:15",
+   "to_std": "04:15",
+   "from_day": 1,
+   "to_day": 2,
+   "duration_min": 1185,
+   "from_station_name": "KACHEGUDA",
+   "to_station_name": "YESVANTPUR JN (BENGALURU)",
+   "distance": 1081.0,
+   "on_time_rating": 5,
+   "to_on_time_rating": 5,
+   "has_pantry": true,
+   "special_train": false,
+   "train_date": "2026-10-02",
+   "from_distance_text": "",
+   "to_distance_text": "5 Kms from SBC",
+   "class_type": [
+    {
+     "coach_type": "SL",
+     "coach_count": 6
+    },
+    {
+     "coach_type": "3E",
+     "coach_count": 0
+    },
+    {
+     "coach_type": "3A",
+     "coach_count": 5
+    },
+    {
+     "coach_type": "2A",
+     "coach_count": 2
+    },
+    {
+     "coach_type": "1A",
+     "coach_count": 1
+    }
+   ]
+  }
+ ],
+ "alternate_trains": [],
+ "nearby_station": []
+}

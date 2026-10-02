@@ -330,3 +330,27 @@ test("flights: an airport with no departures that day gives an empty list, not a
   assert.equal(status, 200);
   assert.deepEqual(body.flights, []);
 });
+
+test("flights: a real AeroDataBox departure board (Delhi, recorded) reads correctly", async () => {
+  const real = fixture("fids-del-real.json");
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify(String(url).includes("T00:00") ? real.am : real.pm), { headers: { "Content-Type": "application/json" } });
+  };
+  const { status, body } = await get(`/api/flights?from=DEL&to=BLR&date=${istToday()}`, { with: flightEnv() });
+  assert.equal(status, 200);
+  assert.equal(body.flights.length, 38);
+  assert.ok(body.flights.every((f) => f.arr.code === "BLR" && /^\d{2}:\d{2}$/.test(f.dep.local) && f.durationMin > 100));
+  const akasa = body.flights.find((f) => f.no.startsWith("QP"));
+  assert.equal(akasa.airline.name, "Akasa Air", "not the data's 'Starlight Airline'");
+  const overnight = body.flights.filter((f) => f.arr.localDate > f.dep.localDate);
+  assert.ok(overnight.length >= 4, "late flights land the next day");
+});
+
+test("between: a nearby station says how far it is from the one asked for", async () => {
+  serve("trains-between-station", fixture("between-kcg-sbc.json"));
+  const { body } = await get(`/api/between?from=KCG&to=SBC&date=${addDays(istToday(), 2)}`);
+  const vb = body.trains.find((t) => t.number === "20703");
+  assert.deepEqual([vb.to.code, vb.to.nearKm], ["YPR", 5]);
+  assert.equal(body.trains.find((t) => t.number === "12785").to.nearKm, undefined, "exact stations have no distance");
+});
