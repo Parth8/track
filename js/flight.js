@@ -471,6 +471,7 @@ export function renderFlight(f) {
     island = { top: route, main: [{ text: phase === "cancelled" ? "Cancelled" : "Diverted" }], chip: { cls: "bad", text: phase === "cancelled" ? "Cancelled" : "Diverted" }, detail: [], progress: null };
   }
   island.mode = "flight";
+  island.live = phase === "air";
   const mainText = island.main.map((x) => (x.time ? clock(x.time, x.tz) : x.text ?? x.strong ?? x.soft ?? "")).join("");
   island.spoken = `Flight ${f.number} from ${depCity} to ${arrCity}. ${mainText}.${island.chip ? ` ${island.chip.text}.` : ""} ${island.detail.join(". ")}`;
   if (island.chip && mainText === island.chip.text) island.chip = null;

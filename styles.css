@@ -3888,32 +3888,41 @@ sup.plus {
 }
 
 /* ============================================================
-   Live island (status screens)
+   Live island
    ============================================================ */
 .island {
-  --isl-bg: #121419;
-  --isl-ink: #f4f2ee;
-  --isl-soft: #a9adb8;
+  --isl-bg: #0b0c0f;
+  --isl-ink: #f5f3ef;
+  --isl-soft: #9a9fab;
   --isl-accent: #8fd3ad;
+  --isl-ease: cubic-bezier(0.32, 0.72, 0, 1);
   position: fixed;
   z-index: 40;
   top: max(10px, env(safe-area-inset-top, 0px));
   left: 50%;
   display: flex;
   align-items: flex-start;
-  gap: 6px;
+  gap: 4px;
   width: max-content;
-  max-width: min(460px, calc(100vw - 24px));
-  padding: 8px;
-  border-radius: 26px;
+  max-width: min(440px, calc(100vw - 20px));
+  padding: 10px;
+  border-radius: 32px;
   background: var(--isl-bg);
   color: var(--isl-ink);
   overflow: hidden;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 10px 30px rgba(10, 12, 16, 0.28), 0 2px 6px rgba(10, 12, 16, 0.18);
-  transform: translate(-50%, -140%) scale(0.6, 0.5);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    0 4px 12px rgba(5, 6, 8, 0.18),
+    0 18px 40px -12px rgba(5, 6, 8, 0.5);
+  /* hidden: a small pill tucked up at the top, ready to grow */
+  transform: translate(-50%, -10px) scale(0.42, 0.6);
+  transform-origin: 50% 0;
   opacity: 0;
   pointer-events: none;
-  transition: transform 0.55s cubic-bezier(0.2, 1.25, 0.35, 1), opacity 0.25s;
+  transition:
+    transform 0.55s var(--isl-ease),
+    opacity 0.22s ease;
 }
 .island[data-mode="flight"] {
   --isl-accent: #b3d4f7;
@@ -3923,52 +3932,252 @@ sup.plus {
   opacity: 1;
   pointer-events: auto;
 }
-/* the part you tap to open the journey (or go back up) */
+/* the content arrives a beat after the capsule, like the real thing */
+.island > * {
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.island.show > * {
+  opacity: 1;
+  transition: opacity 0.35s ease 0.14s;
+}
 .isl-open {
-  display: grid;
-  grid-template-columns: auto minmax(0, auto) auto;
-  align-items: center;
-  column-gap: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   min-width: 0;
-  padding: 0 2px 0 0;
+  padding: 0 4px 0 0;
   border: 0;
+  border-radius: 24px;
   background: none;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  border-radius: 20px;
-  transition: transform 0.3s var(--spring);
+  transition: transform 0.3s var(--isl-ease);
 }
 .isl-open:active {
-  transform: scale(0.97);
+  transform: scale(0.975);
+}
+.isl-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--isl-accent);
+}
+.isl-ring {
+  position: absolute;
+  inset: 0;
+  width: 44px;
+  height: 44px;
+  transform: rotate(-90deg);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+.isl-ring.on {
+  opacity: 1;
+}
+.isl-ring circle {
+  fill: none;
+  stroke-width: 2.4;
+}
+.isl-ring-track {
+  stroke: rgba(255, 255, 255, 0.1);
+}
+.isl-ring-bar {
+  stroke: var(--isl-accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.9s var(--isl-ease);
+}
+.isl-glyph {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.isl-glyph svg {
+  width: 20px;
+  height: 20px;
+}
+.island[data-mode="flight"] .isl-glyph svg {
+  width: 18px;
+  height: 18px;
+  transform: rotate(45deg);
+}
+/* a soft live pulse while the train runs or the plane flies */
+.isl-live {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--isl-accent);
+  box-shadow: 0 0 0 2px var(--isl-bg);
+  opacity: 0;
+}
+.island.live .isl-live {
+  opacity: 1;
+  animation: islLive 2.2s ease-in-out infinite;
+}
+@keyframes islLive {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px var(--isl-bg), 0 0 0 2px color-mix(in srgb, var(--isl-accent) 50%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--isl-bg), 0 0 0 7px color-mix(in srgb, var(--isl-accent) 0%, transparent);
+  }
+}
+.isl-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.isl-icon {
+  flex: none;
+}
+.isl-chip {
+  flex: none;
+}
+.isl-text {
+  display: grid;
+  gap: 1px;
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.25;
+}
+.isl-top {
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: var(--isl-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.isl-age {
+  color: #e6b98f;
+}
+.isl-main {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+.isl-main b {
+  color: var(--isl-accent);
+  font-weight: 750;
+}
+.isl-when {
+  font-weight: 550;
+  color: var(--isl-soft);
+}
+.isl-main .tm .plus {
+  color: var(--isl-accent);
+}
+.isl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px 6px 9px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--isl-ink);
+}
+.isl-chip[hidden] {
+  display: none;
+}
+.isl-chip i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.isl-chip.ok,
+.isl-chip.early {
+  color: #9ee0bb;
+  background: rgba(143, 211, 173, 0.12);
+}
+.isl-chip.late {
+  color: #f4bf93;
+  background: rgba(240, 168, 112, 0.13);
+}
+.isl-chip.bad {
+  color: #f5b9c5;
+  background: rgba(242, 179, 192, 0.13);
+}
+.isl-chip.accent,
+.isl-chip.info {
+  color: #c7ddf7;
+  background: rgba(179, 212, 247, 0.12);
+}
+/* a second row of small capsules, only when there's more to say */
+.isl-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 0 56px;
+}
+.isl-detail[hidden] {
+  display: none;
+}
+.isl-detail span {
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  font-weight: 650;
+  color: #c9ccd4;
+  white-space: nowrap;
 }
 /* pin: keeps the island on every screen, and after closing the app */
 .isl-pin {
   flex: none;
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  margin-top: 4px;
+  width: 36px;
+  height: 36px;
+  margin: 4px 0 0 4px;
   border: 0;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
+  background: transparent;
   color: var(--isl-soft);
   cursor: pointer;
-  transition: background 0.25s, color 0.25s, transform 0.35s var(--spring);
+  transition:
+    background 0.25s,
+    color 0.25s,
+    transform 0.4s var(--isl-ease);
+}
+.isl-pin:hover {
+  background: rgba(255, 255, 255, 0.07);
 }
 .isl-pin svg {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
 }
 .isl-pin[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--isl-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--isl-accent) 18%, transparent);
   color: var(--isl-accent);
   transform: rotate(-20deg);
 }
 .isl-pin:active {
-  transform: scale(0.9);
+  transform: scale(0.88);
+}
+.isl-open:focus-visible,
+.isl-pin:focus-visible {
+  outline: 2px solid var(--isl-accent);
+  outline-offset: 2px;
 }
 /* pages make room for a pinned island instead of sliding under it */
 body.island-pinned .view {
@@ -3979,126 +4188,22 @@ body.island-pinned .view {
   background: var(--deep);
   color: var(--card);
 }
-.isl-icon {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--isl-accent);
-}
-/* journey progress drawn as a ring around the icon */
-.isl-icon.ring {
-  background: conic-gradient(var(--isl-accent) var(--ring), rgba(255, 255, 255, 0.12) 0);
-}
-.isl-icon.ring::before {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border-radius: 50%;
-  background: var(--isl-bg);
-}
-.isl-glyph {
-  position: relative;
-  display: grid;
-  place-items: center;
-}
-.isl-glyph svg {
-  width: 21px;
-  height: 21px;
-}
-.island[data-mode="flight"] .isl-glyph svg {
-  width: 19px;
-  height: 19px;
-  transform: rotate(45deg);
-}
-.isl-text {
-  display: grid;
-  min-width: 0;
-  line-height: 1.2;
-}
-.isl-top {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--isl-soft);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.isl-main {
-  font-size: 15.5px;
-  font-weight: 800;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-variant-numeric: tabular-nums;
-}
-.isl-main b {
-  color: var(--isl-accent);
-}
-.isl-when {
-  font-weight: 600;
-  color: var(--isl-soft);
-}
-.isl-main .tm .plus {
-  color: var(--isl-accent);
-}
-.isl-chip {
-  padding: 5px 10px;
-  border-radius: 99px;
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--isl-ink);
-}
-.isl-chip.ok,
-.isl-chip.early {
-  background: rgba(143, 211, 173, 0.18);
-  color: #a9e2c2;
-}
-.isl-chip.late {
-  background: rgba(240, 168, 112, 0.2);
-  color: #f6c39a;
-}
-.isl-chip.bad {
-  background: rgba(242, 179, 192, 0.2);
-  color: #f6c0cb;
-}
-.isl-chip.accent,
-.isl-chip.info {
-  background: rgba(179, 212, 247, 0.18);
-  color: #cfe2f8;
-}
-/* a second row appears only when there's more to say */
-.isl-detail {
-  grid-column: 1 / -1;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 0;
-  margin: 8px 4px 2px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--isl-soft);
-}
-.isl-detail span + span::before {
-  content: "·";
-  margin: 0 7px;
-  color: rgba(255, 255, 255, 0.35);
-}
-.isl-open:focus-visible,
-.isl-pin:focus-visible {
-  outline: 3px solid var(--isl-accent);
-  outline-offset: 2px;
+@media (max-width: 359px) {
+  .isl-detail {
+    margin-left: 0;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
-  .island {
+  .island,
+  .island > *,
+  .isl-ring-bar {
     transition: opacity 0.2s;
+  }
+  .island {
     transform: translate(-50%, 0);
+  }
+  .island.live .isl-live {
+    animation: none;
   }
 }
 
@@ -4147,4 +4252,138 @@ body.island-pinned .view {
   line-height: 1.5;
   color: var(--ink-soft);
   animation: seatFade 0.3s var(--ease-out) both;
+}
+
+/* ============================================================
+   Finish: calmer motion, quieter depth, crisper type
+   One layer on top of everything above, so the whole app moves and sits the same way.
+   ============================================================ */
+:root {
+  /* A spring that settles instead of bouncing (a touch of overshoot, not 16%) */
+  --spring: linear(0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%, 0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 55%, 1.017 63.9%, 1.01 76%, 1.003 86.4%, 1);
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  /* depth from a hairline edge and soft layered light, not one heavy blur */
+  --shadow: 0 0 0 1px rgba(42, 45, 58, 0.045), 0 1px 2px rgba(42, 45, 58, 0.04), 0 6px 16px -6px rgba(42, 45, 58, 0.07), 0 20px 40px -18px rgba(42, 45, 58, 0.1);
+  --shadow-lift: 0 0 0 1px rgba(42, 45, 58, 0.05), 0 2px 4px rgba(42, 45, 58, 0.05), 0 12px 28px -8px rgba(42, 45, 58, 0.12), 0 32px 60px -24px rgba(42, 45, 58, 0.16);
+}
+:root[data-theme="dark"] {
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 28px -10px rgba(0, 0, 0, 0.45);
+  --shadow-lift: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 2px 4px rgba(0, 0, 0, 0.35), 0 18px 40px -12px rgba(0, 0, 0, 0.55);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="auto"] {
+    --shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 28px -10px rgba(0, 0, 0, 0.45);
+    --shadow-lift: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 2px 4px rgba(0, 0, 0, 0.35), 0 18px 40px -12px rgba(0, 0, 0, 0.55);
+  }
+}
+
+/* Type: balanced headings, no lonely last words, steadier numbers */
+h1,
+h2,
+.display {
+  text-wrap: balance;
+  letter-spacing: -0.015em;
+}
+p,
+.tc-name,
+.seat-hint {
+  text-wrap: pretty;
+}
+::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+/* Cards lift a little under a pointer and settle under a finger */
+@media (hover: hover) {
+  .tcard.linked,
+  .mode-card {
+    transition: transform 0.45s var(--ease-out), box-shadow 0.45s var(--ease-out);
+  }
+  .tcard.linked:hover,
+  .mode-card:hover {
+    box-shadow: var(--shadow-lift);
+    transform: translateY(-2px);
+  }
+}
+.mode-card:active,
+.tcard.linked:has(.tc-link:active) {
+  transform: scale(0.985);
+  transition-duration: 0.2s;
+}
+
+/* The main button: a soft sheen and an inner edge of light */
+.cta:not(.secondary) {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0) 55%),
+    var(--deep);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 1px 2px rgba(20, 22, 28, 0.12),
+    0 10px 24px -10px color-mix(in srgb, var(--deep) 70%, transparent);
+}
+.cta:active {
+  transform: scale(0.975);
+}
+
+/* Round buttons: a hairline edge instead of a heavy shadow */
+.icon-btn {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 6%, transparent), 0 2px 8px -2px rgba(20, 22, 28, 0.08);
+  transition: transform 0.3s var(--ease-out), background 0.25s, box-shadow 0.25s;
+}
+.icon-btn:active {
+  transform: scale(0.9);
+}
+
+/* Toasts: the same glassy capsule as the island */
+.toast {
+  background: rgba(14, 15, 19, 0.88);
+  color: #f5f3ef;
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+  border-radius: 999px;
+  padding: 11px 18px;
+  font-weight: 650;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 12px 30px -10px rgba(5, 6, 8, 0.45);
+  transition: transform 0.5s var(--ease-out), visibility 0.5s;
+}
+
+/* Chips and the segmented controls sit a touch more precisely */
+.chip {
+  letter-spacing: 0.005em;
+}
+.segmented button {
+  transition: background 0.3s var(--ease-out), color 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+}
+
+/* Loading placeholders breathe instead of flashing */
+.skel {
+  animation-duration: 1.8s;
+  animation-timing-function: var(--ease-out);
+}
+
+/* Sheets and the settings menu: softer backdrops */
+.sheet::backdrop,
+.menu::backdrop {
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+
+/* iPhone browsers: Open in Safari, and Copy link */
+.install-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+.install .install-actions .support-btn {
+  margin-top: 8px;
+}
+.install .support-btn.quiet {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--mint-tint);
+  color: var(--mint-deep);
+}
+.install-alt {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
 }

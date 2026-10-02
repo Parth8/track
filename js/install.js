@@ -13,10 +13,15 @@ const isMacSafari =
 const isEdge = !isIOS && !isAndroid && /Edg\//.test(ua);
 const isChrome = !isIOS && !isAndroid && !isEdge && /Chrome\//.test(ua) && !/OPR\//.test(ua);
 
+const iosVersion = (ua.match(/OS (\d+)_/) || [])[1];
+/** Safari can be opened straight from another browser or an app (x-safari-https://) from iOS 17 on. */
+export const canOpenSafari = isIOS && (!iosVersion || +iosVersion >= 17);
+
 /**
  * Which picture guide fits this Apple setup, so the drawing matches the screen in front of them:
  * "safari" (iPhone, iOS 15 to 18), "safari26" (iPhone, Share under •••), "ipad", "chrome" (Chrome on iOS),
- * "mac", "open-safari" (only Safari can add from here), or null for plain text steps.
+ * "mac", "firefox", "edge", "other" (another iPhone browser), "open-safari" (only Safari can add from here),
+ * or null for plain text steps.
  */
 export const appleGuide = (() => {
   if (isMacSafari) return "mac";
@@ -26,7 +31,9 @@ export const appleGuide = (() => {
   const safariVersion = +(ua.match(/Version\/(\d+)/)?.[1] || 0); // iOS 26 Safari still says "OS 18_6"
   const isIPad = /iPad/.test(ua) || /Macintosh/.test(ua);
   if (/CriOS/.test(ua)) return before164 ? "open-safari" : "chrome";
-  if (/FxiOS|EdgiOS|OPiOS|DuckDuckGo/.test(ua)) return before164 ? "open-safari" : null;
+  if (/FxiOS/.test(ua)) return before164 ? "open-safari" : "firefox";
+  if (/EdgiOS/.test(ua)) return before164 ? "open-safari" : "edge";
+  if (/OPiOS|DuckDuckGo|YaBrowser|Brave/.test(ua)) return before164 ? "open-safari" : "other";
   // apps' built-in browsers (Instagram, Facebook, Google app and others) have no Add to Home Screen
   if (!/Safari\//.test(ua) || /FBAN|FBAV|Instagram|GSA\/|Line\/|LinkedInApp|Snapchat|Twitter/.test(ua)) return "open-safari";
   if (isIPad) return "ipad";

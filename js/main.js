@@ -6,7 +6,7 @@ import { createLoader } from "./loader.js";
 import { renderShareImage } from "./share-card.js";
 import { renderTrain, trainCadence } from "./train.js";
 import { renderFlight } from "./flight.js";
-import { installWay, installPlace, appleGuide, onInstallChange, promptInstall } from "./install.js";
+import { installWay, installPlace, appleGuide, canOpenSafari, onInstallChange, promptInstall } from "./install.js";
 import { guideArt } from "./guide.js";
 import { createRoutePanel, createResults, routeRange } from "./finder.js";
 import { createFlightResults, flightRouteRange } from "./flight-finder.js";
@@ -1131,30 +1131,57 @@ function installSteps(root) {
 function appleSteps(kind) {
   const b = (text) => h("b", { text });
   const addHome = ["Scroll down and choose ", b("Add to Home Screen"), "."];
+  const here = location.origin + location.pathname;
+  // From iOS 17, a link can open this very page in Safari, where Add to Home Screen lives.
+  const openSafari = (primary) =>
+    canOpenSafari
+      ? h("a", { class: `support-btn${primary ? "" : " quiet"}`, href: `x-safari-${here}`, rel: "noopener" }, svg(icons.globe), "Open in Safari")
+      : null;
+  const copyLink = () =>
+    h(
+      "button",
+      {
+        type: "button",
+        class: "support-btn quiet",
+        on: {
+          click: async () => {
+            try {
+              await navigator.clipboard.writeText(here);
+              toast("Link copied. Now open Safari and paste it in.");
+            } catch {
+              toast("Couldn't copy. Long-press the address bar instead.");
+            }
+          },
+        },
+      },
+      svg(icons.share),
+      "Copy link"
+    );
   if (kind === "open-safari") {
     return h(
       "div",
       { class: "install-safari" },
-      h("p", { text: "Only Safari can add Track to your home screen from here. Copy the link, open Safari, and paste it in." }),
-      h(
-        "button",
-        {
-          type: "button",
-          class: "support-btn",
-          on: {
-            click: async () => {
-              try {
-                await navigator.clipboard.writeText(location.origin + location.pathname);
-                toast("Link copied. Now open Safari.");
-              } catch {
-                toast("Couldn't copy. Long-press the address bar instead.");
-              }
-            },
-          },
-        },
-        svg(icons.share),
-        "Copy link"
-      )
+      h("p", {
+        text: canOpenSafari
+          ? "Apps' built-in browsers can't add to the home screen. Open Track in Safari, then add it from there in two taps."
+          : "Only Safari can add Track to your home screen from here. Copy the link, open Safari, and paste it in.",
+      }),
+      h("div", { class: "install-actions" }, openSafari(true), copyLink())
+    );
+  }
+  // Other iPhone browsers can add from their own Share menu (iOS 16.4 and later).
+  const textSteps = {
+    firefox: [["Tap the menu ", b("☰"), " at the bottom right."], ["Tap ", b("Share"), ", then ", b("Add to Home Screen"), "."]],
+    edge: [["Tap ", b("•••"), " at the bottom of the screen."], ["Tap ", b("Share"), ", then ", b("Add to Home Screen"), "."]],
+    other: [["Open your browser's ", b("Share"), " menu."], ["Choose ", b("Add to Home Screen"), "."]],
+  }[kind];
+  if (textSteps) {
+    return h(
+      "div",
+      { class: "install-safari" },
+      h("ol", { class: "install-steps" }, textSteps.map((t) => h("li", {}, h("span", {}, t)))),
+      canOpenSafari ? h("p", { class: "install-alt", text: "Don't see it? Safari always can:" }) : null,
+      canOpenSafari ? h("div", { class: "install-actions" }, openSafari(false)) : null
     );
   }
   const captions = {

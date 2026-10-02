@@ -3,19 +3,47 @@
 // Two ways it shows:
 //  - "scroll": on a journey's own status screen, once the big status card scrolls away.
 //  - "pinned": on every screen, for the journey you pinned, even after closing and reopening.
-// It grows and shrinks to fit what it's saying, and morphs between sizes as details change.
+// It grows out of a small pill when it appears, resizes smoothly as its content changes, and
+// updates its parts in place so changes crossfade instead of flickering.
 //
 // Content is plain data (so a pinned journey can be saved on the device):
-//   { mode: "train" | "flight", top, main: [segment], chip: { cls, text }, detail: [text], progress, spoken, updatedAt }
+//   { mode: "train" | "flight", top, main: [segment], chip: { cls, text }, detail: [text],
+//     progress, live, spoken, updatedAt }
 // where a segment is { text } | { strong } | { soft } | { time, tz, shift, soft }.
 
 import { h, svg, ago, timeNode, prefersReducedMotion } from "./util.js";
 import { icons } from "./icons.js";
 
-const SPRING = "cubic-bezier(0.2, 1.25, 0.35, 1)";
+const EASE = "cubic-bezier(0.32, 0.72, 0, 1)"; // the curve iOS uses for its own sheets and islands
+const RING = 2 * Math.PI * 20; // circumference of the progress ring (r = 20)
+const NS = "http://www.w3.org/2000/svg";
 
 export function createIsland({ onOpen, onPin } = {}) {
-  const main = h("button", { type: "button", class: "isl-open" });
+  // Built once; later updates change these parts in place.
+  const ringTrack = document.createElementNS(NS, "circle");
+  const ringBar = document.createElementNS(NS, "circle");
+  for (const c of [ringTrack, ringBar]) {
+    c.setAttribute("cx", "22");
+    c.setAttribute("cy", "22");
+    c.setAttribute("r", "20");
+  }
+  ringTrack.setAttribute("class", "isl-ring-track");
+  ringBar.setAttribute("class", "isl-ring-bar");
+  ringBar.style.strokeDasharray = `${RING}`;
+  ringBar.style.strokeDashoffset = `${RING}`;
+  const ring = document.createElementNS(NS, "svg");
+  ring.setAttribute("class", "isl-ring");
+  ring.setAttribute("viewBox", "0 0 44 44");
+  ring.setAttribute("aria-hidden", "true");
+  ring.append(ringTrack, ringBar);
+
+  const glyph = h("span", { class: "isl-glyph" });
+  const icon = h("span", { class: "isl-icon" }, ring, glyph, h("i", { class: "isl-live", "aria-hidden": "true" }));
+  const top = h("span", { class: "isl-top" });
+  const mainLine = h("span", { class: "isl-main" });
+  const chip = h("span", { class: "isl-chip" });
+  const detail = h("span", { class: "isl-detail" });
+  const main = h("button", { type: "button", class: "isl-open" }, h("span", { class: "isl-row" }, icon, h("span", { class: "isl-text" }, top, mainLine), chip), detail);
   const pin = h("button", { type: "button", class: "isl-pin", "aria-pressed": "false", "aria-label": "Pin to the top" }, svg(icons.pin));
   const el = h("div", { class: "island", "aria-hidden": "true" }, main, pin);
   let mode = "off"; // off | scroll | pinned
@@ -27,6 +55,7 @@ export function createIsland({ onOpen, onPin } = {}) {
   let io = null;
   let last = "";
   let data = null;
+  let glyphMode = "";
 
   const segment = (s) => {
     if (s.time) {
@@ -38,28 +67,37 @@ export function createIsland({ onOpen, onPin } = {}) {
     return s.text ?? "";
   };
 
-  function fill(d) {
-    const ring = d.progress != null ? `${Math.round(Math.min(1, Math.max(0, d.progress)) * 360)}deg` : null;
-    // A saved copy says how old it is, so a reopened app never passes off old news as live.
-    const old = d.updatedAt && Date.now() - Date.parse(d.updatedAt) > 3 * 60000;
-    const age = old ? ` · ${ago(d.updatedAt)}` : "";
-    el.dataset.mode = d.mode;
-    main.setAttribute("aria-label", `${d.spoken}${old ? ` Updated ${ago(d.updatedAt)}.` : ""} ${mode === "pinned" ? "Open this journey." : "Back to the top."}`);
-    main.replaceChildren(
-      ...[
-        h(
-          "span",
-          { class: `isl-icon${ring ? " ring" : ""}`, vars: ring ? { "--ring": ring } : {} },
-          h("span", { class: "isl-glyph" }, svg(d.mode === "flight" ? icons.plane : icons.trainFront))
-        ),
-        h("span", { class: "isl-text" }, h("span", { class: "isl-top", text: `${d.top}${age}` }), h("span", { class: "isl-main" }, d.main.map(segment))),
-        d.chip ? h("span", { class: `isl-chip ${d.chip.cls}`, text: d.chip.text }) : null,
-        d.detail?.length ? h("span", { class: "isl-detail" }, d.detail.map((t) => h("span", { text: t }))) : null,
-      ].filter(Boolean) // an empty slot would otherwise print "null"
-    );
+  /** Swap a part's content, fading the new content in when it actually changed. */
+  function swap(part, nodes, animate) {
+    const before = part.textContent;
+    part.replaceChildren(...nodes);
+    if (animate && part.textContent !== before && !prefersReducedMotion())
+      part.animate([{ opacity: 0, transform: "translateY(3px)" }, { opacity: 1, transform: "none" }], { duration: 300, easing: EASE });
   }
 
-  /** New content: the capsule morphs from its old size to the new one. */
+  function fill(d, animate) {
+    // A saved copy says how old it is, so a reopened app never passes off old news as live.
+    const old = d.updatedAt && Date.now() - Date.parse(d.updatedAt) > 3 * 60000;
+    el.dataset.mode = d.mode;
+    el.classList.toggle("live", !!d.live && !old);
+    if (glyphMode !== d.mode) {
+      glyph.replaceChildren(svg(d.mode === "flight" ? icons.plane : icons.trainFront));
+      glyphMode = d.mode;
+    }
+    const p = d.progress == null ? null : Math.min(1, Math.max(0, d.progress));
+    ring.classList.toggle("on", p != null);
+    ringBar.style.strokeDashoffset = `${RING * (1 - (p ?? 0))}`;
+    main.setAttribute("aria-label", `${d.spoken}${old ? ` Updated ${ago(d.updatedAt)}.` : ""} ${mode === "pinned" ? "Open this journey." : "Back to the top."}`);
+    swap(top, [d.top, old ? h("span", { class: "isl-age", text: ` · ${ago(d.updatedAt)}` }) : null].filter(Boolean), animate);
+    swap(mainLine, d.main.map(segment), animate);
+    chip.hidden = !d.chip;
+    chip.className = `isl-chip ${d.chip?.cls || ""}`;
+    swap(chip, d.chip ? [h("i", { "aria-hidden": "true" }), d.chip.text] : [], animate);
+    detail.hidden = !d.detail?.length;
+    swap(detail, (d.detail || []).map((t) => h("span", { text: t })), animate);
+  }
+
+  /** New content: the capsule resizes smoothly from its old size to the new one. */
   function update(d) {
     if (!d) return;
     data = d;
@@ -67,16 +105,15 @@ export function createIsland({ onOpen, onPin } = {}) {
     if (key === last) return;
     last = key;
     if (!visible || prefersReducedMotion()) {
-      fill(d);
+      fill(d, false);
       return measure();
     }
     const from = el.getBoundingClientRect();
-    fill(d);
+    fill(d, true);
     const to = el.getBoundingClientRect();
     measure();
     if (Math.abs(from.width - to.width) < 1 && Math.abs(from.height - to.height) < 1) return;
-    el.animate([{ width: `${from.width}px`, height: `${from.height}px` }, { width: `${to.width}px`, height: `${to.height}px` }], { duration: 520, easing: SPRING });
-    for (const c of main.children) c.animate([{ opacity: 0, filter: "blur(3px)" }, { opacity: 1, filter: "none" }], { duration: 320, delay: 90, fill: "backwards" });
+    el.animate([{ width: `${from.width}px`, height: `${from.height}px` }, { width: `${to.width}px`, height: `${to.height}px` }], { duration: 480, easing: EASE });
   }
 
   function show(on) {
@@ -107,7 +144,7 @@ export function createIsland({ onOpen, onPin } = {}) {
       io?.disconnect();
       mode = "scroll";
       last = "";
-      if (data) fill(data);
+      if (data) fill(data, false);
       measure();
       if (!anchor || !("IntersectionObserver" in window)) return show(false);
       io = new IntersectionObserver(([e]) => show(!e.isIntersecting && e.boundingClientRect.top < 0), { threshold: 0 });
