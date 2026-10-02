@@ -289,6 +289,8 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
       date_out_of_range: ["That date is out of range", err.message, [edit]],
       rate_limited: ["That's a lot of searching", "Give it a minute, then try again.", [tryAgain, edit]],
       search_paused: ["Flight search is resting", err.message, [byNumber]],
+      visitor_limit: ["That's plenty of searching for today", err.message, [byNumber]],
+      flights_resting: ["Flight data is resting for today", err.message, [byNumber]],
       quota_exhausted: ["Flight data is resting", "This month's free flight lookups are used up. Trains still work.", []],
       // The page is newer than its data service, or flight search isn't switched on there yet.
       not_found: ["Flight search is almost ready", "Finding flights by airport is still being switched on. Track by flight number for now.", [byNumber]],

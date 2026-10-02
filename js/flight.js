@@ -378,6 +378,14 @@ export function renderFlight(f) {
       diverted: ["head", "banner", "map", "route"],
     }[phase] || ["head", "banner", "route", "map"];
 
+  // Shown when the budget kept us from a fresh lookup: honest about how old this is.
+  if (f.status.servedStale) {
+    const when = f.status.checkedAt ? ago(f.status.checkedAt) : "a while ago";
+    blocks.head = [
+      blocks.head,
+      h("div", { class: "banner info", role: "note" }, svg(icons.info), h("span", { text: `Showing the update from ${when}. ${f.status.note || "Live data is catching up."}` })),
+    ];
+  }
   const node = h("div", { class: "status-body" }, order.map((k) => blocks[k]).filter(Boolean), gtkTitle, facts, credit);
 
   const shareTone = ["bad", "warn", "good"].find((c) => banner.classList.contains(c)) || "tone";

@@ -772,6 +772,20 @@ function describe(err, s) {
         body: "Flights run on a free data plan with a monthly limit, and it's used up. It resets at the start of next month. Trains aren't affected.",
         actions: [{ label: "Track a train instead", run: () => navigate({ m: "train" }) }],
       };
+    case "flights_resting":
+      return {
+        icon: icons.timer,
+        title: "Flight lookups are resting for today",
+        body: "Flights run on a small free data plan, shared out day by day. Flights someone already checked still show, and new ones are back tomorrow. Trains aren't affected.",
+        actions: [{ label: "Track a train instead", run: () => navigate({ m: "train" }) }, edit],
+      };
+    case "visitor_limit":
+      return {
+        icon: icons.timer,
+        title: "That's plenty of new flights for today",
+        body: err.message,
+        actions: [edit],
+      };
     case "flights_not_configured":
       return {
         icon: icons.plane2,

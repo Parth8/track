@@ -5,7 +5,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import worker from "../worker/worker.js";
-import { fidsAnswer, MemoryKV } from "./fids.mjs";
+import { fidsAnswer, flightAnswer, MemoryKV } from "./fids.mjs";
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
 const ORIGIN = "https://parth8.github.io";
@@ -19,10 +19,17 @@ class MemoryCache {
   }
   async match(req) {
     const hit = this.store.get(req.url);
-    return hit ? new Response(hit.body, { headers: hit.headers }) : undefined;
+    if (!hit || hit.expires < Date.now()) return undefined; // like the real cache, max-age is honoured
+    return new Response(hit.body, { headers: hit.headers });
   }
   async put(req, res) {
-    this.store.set(req.url, { body: await res.text(), headers: Object.fromEntries(res.headers) });
+    const maxAge = Number(/max-age=(\d+)/.exec(res.headers.get("Cache-Control") || "")?.[1] ?? 1e9);
+    this.store.set(req.url, { body: await res.text(), headers: Object.fromEntries(res.headers), expires: Date.now() + maxAge * 1000 });
+  }
+  /** Test helper: make an entry look expired. */
+  expire(name) {
+    const hit = this.store.get(`https://journey-cache.internal/${name}`);
+    if (hit) hit.expires = 0;
   }
 }
 
@@ -271,7 +278,7 @@ test("flights: only flights that land at To, one row per real flight, earliest f
   assert.equal(body.to.tz, "Asia/Kolkata");
   assert.equal(calls.length, 2, "two half-day slots");
   assert.match(calls[0], /withCodeshared=false/);
-  assert.equal(await e.QUOTA.get(`flight-search/${istToday().slice(0, 7)}`), "2");
+  assert.equal(await e.QUOTA.get(`adb/${istToday().slice(0, 7)}`), "2");
 });
 
 test("flights: an evening search needs one slot; every search from the airport that day shares it", async () => {
@@ -290,24 +297,122 @@ test("flights: an evening search needs one slot; every search from the airport t
   assert.equal(c.body.flights[0].arr.tz, "Asia/Dubai");
 });
 
-test("flights: the monthly cap pauses search, and a missing KV or key says so", async () => {
-  serveFids();
-  const e = flightEnv({ FLIGHT_SEARCH_CAP: "1" });
-  const d = addDays(istToday(), 4);
-  const a = await get(`/api/flights?from=DEL&to=BLR&date=${d}&after=13:00`, { with: e });
+/* ---------- the flight-data budget ---------- */
+
+const DEL_AIRPORT = { iata: "DEL", icao: "VIDP", shortName: "Delhi", fullName: "Indira Gandhi", municipalityName: "Delhi", timeZone: "Asia/Kolkata", location: { lat: 28.56, lon: 77.1 } };
+// AeroDataBox stand-in: departure boards, flights by number, airports, and (free) live positions.
+function serveAll({ live = null } = {}) {
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("adsb")) return new Response(JSON.stringify({ ac: live ? [live] : [] }), { headers: { "Content-Type": "application/json" } });
+    if (/\/airports\/iata\/[A-Z]{3}$/.test(u)) return new Response(JSON.stringify(DEL_AIRPORT), { headers: { "Content-Type": "application/json" } });
+    return fidsAnswer(u) || flightAnswer(u) || new Response(null, { status: 204 });
+  };
+}
+const paid = () => calls.filter((u) => u.includes("aerodatabox"));
+const month = () => `adb/${istToday().slice(0, 7)}`;
+
+test("budget: search stops first, keeping the last of today's share for tracking", async () => {
+  serveAll();
+  const e = flightEnv({ FLIGHT_LOOKUP_CAP: "1" }); // today's share rounds up to 1 call
+  const a = await get(`/api/flights?from=DEL&to=BLR&date=${addDays(istToday(), 4)}`, { with: e });
+  assert.deepEqual([a.status, a.body.error], [503, "search_paused"]);
+  assert.match(a.body.message, /resting until tomorrow/);
+  const t = await get(`/api/flight?no=6E2131&date=${addDays(istToday(), 4)}`, { with: e });
+  assert.equal(t.status, 200, "tracking still gets the last call");
+  const u = await get(`/api/flight?no=AI2803&date=${addDays(istToday(), 4)}`, { with: e });
+  assert.deepEqual([u.status, u.body.error], [503, "flights_resting"]);
+  assert.match(u.body.message, /back tomorrow/);
+  const again = await get(`/api/flight?no=6E2131&date=${addDays(istToday(), 4)}`, { with: e });
+  assert.equal(again.status, 200, "a flight someone already checked stays free");
+  assert.equal(paid().length, 1);
+});
+
+test("budget: one visitor can cause only a few paid lookups a day", async () => {
+  serveAll();
+  const e = flightEnv({ FLIGHT_LOOKUP_CAP: "5000", FLIGHT_VISITOR_DAILY: "2" });
+  const d = addDays(istToday(), 3);
+  assert.equal((await get(`/api/flight?no=6E2131&date=${d}`, { with: e })).status, 200);
+  assert.equal((await get(`/api/flight?no=AI2803&date=${d}`, { with: e })).status, 200);
+  const third = await get(`/api/flight?no=QP1381&date=${d}`, { with: e });
+  assert.deepEqual([third.status, third.body.error], [429, "visitor_limit"]);
+  assert.equal((await get(`/api/flight?no=6E2131&date=${d}`, { with: e })).status, 200, "cached ones stay free");
+  ip++; // someone else
+  assert.equal((await get(`/api/flight?no=QP1381&date=${d}`, { with: e })).status, 200);
+  const keys = [...e.QUOTA.map.keys()].filter((k) => k.startsWith("visitor/"));
+  assert.ok(keys.every((k) => /^visitor\/\d{4}-\d{2}-\d{2}\/[0-9a-f]{16}$/.test(k)), "addresses are stored only as a short hash");
+});
+
+test("boards: tracking any flight on a board someone's search fetched costs nothing", async () => {
+  serveAll();
+  const e = flightEnv();
+  const d = addDays(istToday(), 2);
+  await get(`/api/flights?from=DEL&to=BOM&date=${d}`, { with: e }); // a search for Mumbai, 2 calls
+  calls.length = 0;
+  const a = await get(`/api/flight?no=6E5338&date=${d}`, { with: e }); // a Bengaluru flight on the same board
   assert.equal(a.status, 200);
-  // The afternoon is already cached, so that half still shows; the morning would need a new lookup.
-  const b = await get(`/api/flights?from=DEL&to=BLR&date=${d}`, { with: e });
+  assert.equal(a.body.status.via, "board");
+  assert.equal(a.body.departure.code, "DEL");
+  assert.equal(a.body.departure.tz, "Asia/Kolkata");
+  assert.equal(a.body.arrival.code, "BLR");
+  // At most one call: Delhi's own details, the first time the Worker ever needs them.
+  const firstPaid = paid().map((u) => u.replace(/.*rapidapi.com/, ""));
+  assert.ok(firstPaid.length <= 1 && firstPaid.every((u) => u === "/airports/iata/DEL"), firstPaid.join());
+  calls.length = 0;
+  const b = await get(`/api/flight?no=IX1124&date=${d}`, { with: e });
+  assert.equal(b.body.status.via, "board");
+  assert.equal(paid().length, 0, "nothing paid at all now");
+  if (firstPaid.length) assert.ok(await e.QUOTA.get("airport/DEL"), "airport kept for good");
+});
+
+test("free positions keep a flight in the air current without paying", async () => {
+  // A flight that took off an hour ago
+  const now = Date.now();
+  const at = (ms) => ({ utc: new Date(ms).toISOString().slice(0, 16).replace("T", " ") + "Z", local: new Date(ms + 330 * 60000).toISOString().slice(0, 16).replace("T", " ") + "+05:30" });
+  const d = new Date(now - 60 * 60000 + 330 * 60000).toISOString().slice(0, 10);
+  const body = [{ number: "6E 777", status: "EnRoute", callSign: "IGO777", airline: { name: "IndiGo", iata: "6E" },
+    departure: { airport: DEL_AIRPORT, scheduledTime: at(now - 60 * 60000), runwayTime: at(now - 55 * 60000) },
+    arrival: { airport: { ...DEL_AIRPORT, iata: "BLR", icao: "VOBL", shortName: "Bengaluru", location: { lat: 13.2, lon: 77.7 } }, scheduledTime: at(now + 100 * 60000) } }];
+  serveAll({ live: { lat: 20, lon: 77, alt_baro: 36000, gs: 450, track: 180, seen_pos: 2 } });
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => (String(url).includes("/flights/number/") ? (calls.push(String(url)), new Response(JSON.stringify(body))) : real(url));
+  const e = flightEnv();
+  const a = await get(`/api/flight?no=6E777&date=${d}`, { with: e });
+  assert.equal(a.body.status.phase, "air");
+  assert.equal(paid().length, 1);
+  caches.default.expire(`flight/6E777/${d}`); // its schedule copy has gone stale
+  const b = await get(`/api/flight?no=6E777&date=${d}`, { with: e });
+  assert.equal(b.body.status.phase, "air");
+  assert.equal(b.body.position.altFt, 36000);
+  assert.equal(paid().length, 1, "no new paid call while it's flying");
+});
+
+test("far-off flights are kept for 12 hours; near departure only 10 minutes", async () => {
+  serveAll();
+  const e = flightEnv();
+  await get(`/api/flight?no=6E2131&date=${addDays(istToday(), 5)}`, { with: e });
+  const far = caches.default.store.get(`https://journey-cache.internal/flight/6E2131/${addDays(istToday(), 5)}`);
+  assert.match(far.headers["cache-control"], /max-age=(4[0-3]\d{3})/);
+});
+
+test("when today's share is spent, the last known copy is shown and labelled", async () => {
+  serveAll();
+  const e = flightEnv({ FLIGHT_LOOKUP_CAP: "1" });
+  const d = addDays(istToday(), 1);
+  await get(`/api/flight?no=AI2807&date=${d}`, { with: e });
+  caches.default.expire(`flight/AI2807/${d}`);
+  const b = await get(`/api/flight?no=AI2807&date=${d}`, { with: e });
   assert.equal(b.status, 200);
-  assert.equal(b.body.partial, true);
-  assert.match(b.body.partialNote, /resting until/);
-  const z = await get(`/api/flights?from=DEL&to=BLR&date=${addDays(istToday(), 6)}`, { with: e });
-  assert.equal(z.status, 503);
-  assert.equal(z.body.error, "search_paused");
-  assert.match(z.body.message, /resting until 1 [A-Z][a-z]{2}/);
+  assert.equal(b.body.status.servedStale, true);
+  assert.match(b.body.status.note, /used up/);
+});
+
+test("flight search without the KV store, and flights without a key, say so", async () => {
+  serveAll();
   const c = await get(`/api/flights?from=DEL&to=BLR&date=${addDays(istToday(), 5)}`, { with: { ADB_KEY: "k" } });
   assert.deepEqual([c.status, c.body.error], [503, "search_not_configured"]);
-  const n = await get(`/api/flights?from=DEL&to=BLR&date=${d}`);
+  const n = await get(`/api/flights?from=DEL&to=BLR&date=${addDays(istToday(), 5)}`);
   assert.deepEqual([n.status, n.body.error], [503, "flights_not_configured"]);
 });
 

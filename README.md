@@ -254,13 +254,15 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 | `flights_not_configured` | 503 | No AeroDataBox key set |
 | `quota_exhausted` | 503 | Monthly flight lookups used up |
 | `search_not_configured` | 503 | Flight search needs the `QUOTA` KV binding (tracking by number still works) |
-| `search_paused` | 503 | Flight search used this month's `FLIGHT_SEARCH_CAP`; it resumes on the 1st |
+| `search_paused` | 503 | Today's flight-data share is nearly used; search pauses first so tracking keeps working |
+| `flights_resting` | 503 | Today's share is used up and there's no saved copy of that flight |
+| `visitor_limit` | 429 | This visitor has caused `FLIGHT_VISITOR_DAILY` paid calls today |
 
 ### Freshness and caching
 | Data | Fresh for | Notes |
 |---|---|---|
 | Train status | 45 s | The page refreshes every 60 s while visible |
-| Flight status | 5 to 60 min, by phase | Protects the free flight-data quota |
+| Flight status | 10 min near departure, 2 h a few hours out, 12 h when a day or more away; 5 to 15 min in the air (kept current by free live positions) | Protects the free flight-data quota |
 | Live aircraft position | 20 s | Free, so looked up on every refresh |
 | Weather | 15 min | |
 | Trains between stations | 6 h | Timetables rarely change, so one lookup serves everyone |
@@ -283,13 +285,21 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 | `ADB_KEY` | **Secret** | AeroDataBox key from RapidAPI (optional; flights stay off without it) |
 | `ADB_HOST` | Text | Optional. Defaults to `aerodatabox.p.rapidapi.com` |
 | `REQUIRE_ORIGIN` | Text | `false` only while testing in a browser tab. Remove afterwards. |
-| `FLIGHT_SEARCH_CAP` | Text | Optional. Paid airport lookups flight search may use per month (default `40`, which is 80 of the free plan's 400 monthly units). `0` pauses flight search. |
+| `FLIGHT_LOOKUP_CAP` | Text | Optional. Paid AeroDataBox calls a month for tracking and search together (default `180`, which is 360 of the free plan's 400 units). Released day by day; unused days roll over. |
+| `FLIGHT_VISITOR_DAILY` | Text | Optional. Paid calls one visitor can cause a day (default `3`). Anything already looked up stays free. |
 
-4. **Flight search** needs a place to count its monthly lookups, so it can stop before live tracking runs out of quota:
+4. **The flight-data budget** (needed for flight search, strongly recommended for tracking) lives in a KV store:
    - Storage & Databases → KV → Create namespace → name it `track-quota`.
    - Back in the Worker: Settings → Bindings → Add → KV namespace → Variable name `QUOTA`, namespace `track-quota` → Deploy.
 
-   Without it, flight search shows "almost ready" and everything else works. Each search uses at most 2 lookups from the AeroDataBox plan, and searches from the same airport and day share them.
+   Without it, flight search shows "almost ready" and flight tracking runs unguarded.
+
+   **How the budget stretches.** Each AeroDataBox call costs 2 units; the free plan has 400 a month. Paid calls are the last resort:
+   1. A copy someone already paid for is reused, for as long as the flight's phase allows (12 hours when it's more than a day away, 2 hours when 3 to 24 hours away, 10 minutes near departure).
+   2. A flight known to be in the air is kept current on free live positions (adsb.lol, adsb.fi) instead of a paid refresh.
+   3. A departure board fetched for a search (hundreds of flights in one call) answers tracking for any flight on it.
+   4. Otherwise a paid call, if today's share of the month and the visitor's daily share allow it.
+   5. If not, the last known copy is shown with its age, or a clear "resting for today" message. Trains are never affected.
 
 Optionally, add a Rate Limiting binding named `LIMITER` for platform-level rate limits. Without it, the Worker uses a simpler limiter that runs separately in each Cloudflare data center.
 
@@ -308,7 +318,7 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 - **No untrusted HTML.** All API data is written with `textContent`. The only markup inserted is static SVG from `icons.js`.
 - **Secrets stay server-side.** The AeroDataBox key lives in the Worker as a secret and never reaches the browser or this repository.
 - **The Worker validates everything.** It checks each request's origin against an allowlist, rate-limits per visitor, and validates every input before calling a source.
-- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only things kept on a device are the appearance and clock choices, in `localStorage`. The Worker's KV store holds one number per month: how many flight-search lookups were used.
+- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only things kept on a device are the appearance and clock choices, in `localStorage`. The Worker's KV store holds the month's count of paid flight lookups, airport details, and, for 2 days, a count of paid lookups per visitor keyed by a one-way hash of the address and day (never the address itself).
 - **No referrers are sent.** Referrers are suppressed and credentials are omitted from API calls.
 
 ---
@@ -337,7 +347,7 @@ To refresh the station list, save NTES's station list (the `arrStationList` arra
 - **Flight data runs on a free plan.** Its monthly lookup quota is shared by everyone using this deployment.
 - **Unofficial access.** Railway data is fetched from public pages without an official API. Keep usage personal and cached.
 - **Route search shows direct trains and flights only.** Journeys that need a change aren't suggested.
-- **Flight search has a monthly budget.** It pauses when `FLIGHT_SEARCH_CAP` is reached, so tracking by flight number keeps working. Departure boards for today are up to 15 minutes old; tap a flight for its live status.
+- **Flight data has a daily budget.** The month's AeroDataBox calls are shared out day by day (`FLIGHT_LOOKUP_CAP`). Search pauses first, then new lookups rest until tomorrow, while flights already checked keep showing. Departure boards for today are up to 15 minutes old; tap a flight for its live status.
 - **Seat availability is a snapshot.** It's up to 10 minutes old and can change before you book. Book on IRCTC.
 
 ---

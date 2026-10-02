@@ -18,12 +18,15 @@
  *                             so that no secret value can leave this Worker.
  *   ADB_HOST          text    optional, default aerodatabox.p.rapidapi.com
  *   REQUIRE_ORIGIN    text    optional, "false" lets you test in a browser tab
- *   QUOTA             KV namespace binding. Flight search by route stays off without it.
- *                             It holds one number per month: how many paid airport lookups
- *                             flight search has used, so it can stop before tracking runs dry.
- *   FLIGHT_SEARCH_CAP text    optional, paid airport lookups flight search may use per month
- *                             (default 40). Each search uses at most 2, and every search from
- *                             the same airport and day shares them. "0" pauses flight search.
+ *   QUOTA             KV namespace binding: the flight-data budget. Flight search stays off
+ *                             without it. It holds this month's count of paid lookups, a tiny
+ *                             per-visitor count for today (a hashed address, kept 2 days), and
+ *                             airport details learned once and kept.
+ *   FLIGHT_LOOKUP_CAP text    optional, paid AeroDataBox calls a month for tracking and search
+ *                             together (default 180, which is 360 of the free plan's 400 units).
+ *                             They're released day by day, and unused days roll over.
+ *   FLIGHT_VISITOR_DAILY text optional, paid lookups one visitor can cause a day (default 3).
+ *                             Anything already looked up by anyone stays free and unlimited.
  */
 
 const UA =
@@ -82,13 +85,13 @@ export default {
         case "/api/train":
           return reply(await trainRoute(url, ctx), 200, cors, TTL.train, env);
         case "/api/flight":
-          return reply(await flightRoute(url, env, ctx), 200, cors, TTL.flight, env);
+          return reply(await flightRoute(url, env, ctx, request), 200, cors, TTL.flight, env);
         case "/api/weather":
           return reply(await weatherRoute(url, ctx), 200, cors, TTL.weather, env);
         case "/api/between":
           return reply(await betweenRoute(url, ctx), 200, cors, TTL.between, env);
         case "/api/flights":
-          return reply(await flightsBetweenRoute(url, env, ctx), 200, cors, 300, env);
+          return reply(await flightsBetweenRoute(url, env, ctx, request), 200, cors, 300, env);
         case "/api/seats":
           return reply(await seatsRoute(url, ctx), 200, cors, 300, env);
         default:
@@ -624,34 +627,59 @@ const AIRLINE_ICAO = {
   AA: "AAL", UA: "UAL", DL: "DAL", VS: "VIR", LX: "SWR", QF: "QFA", NH: "ANA", JL: "JAL",
 };
 
-async function flightRoute(url, env, ctx) {
+/**
+ * A flight's status. Paid lookups are the last resort, in this order:
+ *   1. a fresh copy someone already paid for (cached by phase, see flightTtl)
+ *   2. a flight we know is in the air, kept current on free live positions
+ *   3. a departure board someone's search already paid for (hundreds of flights each)
+ *   4. a paid lookup, if today's share of the month and this visitor's share allow it
+ *   5. otherwise the last known copy, labelled, or a clear "resting" message
+ */
+async function flightRoute(url, env, ctx, request) {
   if (!env.ADB_KEY) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
   const raw = (url.searchParams.get("no") || "").toUpperCase().replace(/\s+/g, "");
   if (!/^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(raw)) throw new ApiError(400, "invalid_flight", "Flight numbers look like 6E 6252 or AI 101.");
   const today = istToday();
   const date = validDate(url.searchParams.get("date") || today, addDays(today, -2), addDays(today, 7));
+  const key = `flight/${raw}/${date}`;
 
-  // Paid lookups are cached for minutes, not seconds. See flightTtl.
-  const flight = await cached(ctx, `flight/${raw}/${date}`, flightTtl, async () => {
-    const host = env.ADB_HOST || "aerodatabox.p.rapidapi.com";
-    if (!ADB_HOSTS.has(host)) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
-    const res = await getWithRetry(
-      `https://${host}/flights/number/${raw}/${date}?withAircraftImage=false&withLocation=true&dateLocalRole=Departure`,
-      { headers: { "X-RapidAPI-Key": env.ADB_KEY, "X-RapidAPI-Host": host, Accept: "application/json" } }
-    );
-    if (res.status === 204 || res.status === 404) throw new ApiError(404, "not_found", `No flight ${raw} found on ${date}.`);
-    if (res.status === 429 || res.status === 403)
-      throw new ApiError(503, "quota_exhausted", "This month's free flight lookups are used up. Trains still work.");
-    if (!res.ok) throw new Error(`flight status ${res.status}`);
-    const list = await res.json();
-    if (!Array.isArray(list) || !list.length) throw new ApiError(404, "not_found", `No flight ${raw} found on ${date}.`);
-    return normaliseFlight(raw, date, list);
-  });
+  let flight = (await cacheGet(key))?.data || null;
+  let liveDone = false;
+  if (!flight) {
+    const old = await cacheGet(`${key}/stale`);
+    if (old && mayBeFlying(old.data)) {
+      const live = await livePosition(ctx, old.data).catch(() => null);
+      if (live && ((live.altFt ?? 0) > 1500 || (live.speedKmh ?? 0) > 220)) {
+        flight = old.data;
+        flight.position = live;
+        if (flight.status.phase === "pre") flight.status.inferred = true;
+        flight.status.phase = "air";
+        liveDone = true;
+      }
+    }
+    if (!flight) {
+      flight = await fromBoards(env, ctx, raw, date).catch(() => null);
+      if (flight) putFlight(ctx, key, flight);
+    }
+    if (!flight) {
+      try {
+        await spend(env, request, "track");
+        flight = await fetchFlight(env, ctx, raw, date);
+        putFlight(ctx, key, flight);
+      } catch (err) {
+        const saveable = err instanceof ApiError && ["flights_resting", "visitor_limit", "quota_exhausted", "upstream_unavailable"].includes(err.code);
+        if (!old || !(saveable || !(err instanceof ApiError))) throw err;
+        flight = old.data;
+        flight.status.servedStale = true;
+        flight.status.note = err instanceof ApiError ? err.message : null;
+      }
+    }
+  }
 
   // Live position is free and changes fast, so it is looked up on every request,
   // including shortly before departure in case the schedule feed lags behind reality.
   const depRef = Date.parse(flight.departure.revised || flight.departure.sched || 0);
-  const wantLive = flight.status.phase === "air" || (flight.status.phase === "pre" && Date.now() > depRef - 20 * 60000);
+  const wantLive = !liveDone && (flight.status.phase === "air" || (flight.status.phase === "pre" && Date.now() > depRef - 20 * 60000));
   if (wantLive) {
     const live = await livePosition(ctx, flight).catch(() => null);
     if (live) {
@@ -665,6 +693,129 @@ async function flightRoute(url, env, ctx) {
   return flight;
 }
 
+/** Could this flight be in the air right now, going by what we last knew? */
+function mayBeFlying(f) {
+  const now = Date.now();
+  const dep = Date.parse(f.departure.actual || f.departure.revised || f.departure.sched || 0);
+  const arr = Date.parse(f.arrival.revised || f.arrival.sched || 0);
+  return ["air", "pre"].includes(f.status.phase) && now > dep - 20 * 60000 && (!arr || now < arr + 30 * 60000);
+}
+
+/** The paid lookup itself. */
+async function fetchFlight(env, ctx, raw, date) {
+  const host = env.ADB_HOST || "aerodatabox.p.rapidapi.com";
+  if (!ADB_HOSTS.has(host)) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
+  let res;
+  try {
+    res = await getWithRetry(`https://${host}/flights/number/${raw}/${date}?withAircraftImage=false&withLocation=true&dateLocalRole=Departure`, {
+      headers: { "X-RapidAPI-Key": env.ADB_KEY, "X-RapidAPI-Host": host, Accept: "application/json" },
+    });
+  } catch {
+    throw new ApiError(502, "upstream_unavailable", "Flight data is slow right now. Try again shortly.");
+  }
+  if (res.status === 204 || res.status === 404) throw new ApiError(404, "not_found", `No flight ${raw} found on ${date}.`);
+  if (res.status === 429 || res.status === 403) throw new ApiError(503, "quota_exhausted", "This month's free flight lookups are used up. Trains still work.");
+  if (!res.ok) throw new ApiError(502, "upstream_unavailable", "Flight data is slow right now. Try again shortly.");
+  const list = await res.json();
+  if (!Array.isArray(list) || !list.length) throw new ApiError(404, "not_found", `No flight ${raw} found on ${date}.`);
+  ctx.waitUntil(rememberAirports(env, [list[0].departure?.airport, list[0].arrival?.airport]).catch(() => {}));
+  return normaliseFlight(raw, date, list);
+}
+
+/** Store a flight the way cached() does: a copy fresh for its phase, and a 36-hour fallback. */
+function putFlight(ctx, key, data) {
+  const fetchedAt = Date.parse(data.status?.checkedAt || "") || Date.now();
+  data.status.checkedAt ||= new Date(fetchedAt).toISOString();
+  const put = (k, seconds) =>
+    caches.default.put(cacheKey(k), new Response(JSON.stringify(data), { headers: { "Cache-Control": `max-age=${seconds}`, "X-Fetched-At": String(fetchedAt) } }));
+  const left = Math.max(60, flightTtl(data) - Math.round((Date.now() - fetchedAt) / 1000));
+  ctx.waitUntil(Promise.all([put(key, left), put(`${key}/stale`, 36 * 3600)]).catch(() => {}));
+}
+
+/** A cache entry with its age, or null when there's none (or it has expired). */
+async function cacheGet(name) {
+  const hit = await caches.default.match(cacheKey(name));
+  if (!hit) return null;
+  return { data: await hit.json(), age: Date.now() - Number(hit.headers.get("X-Fetched-At") || Date.now()) };
+}
+
+/* ---------- departure boards double as a free source for every flight on them ---------- */
+
+const boardNumber = (f) => String(f.number || "").replace(/\s+/g, "").toUpperCase();
+
+let indexQueue = Promise.resolve();
+/** Note which board holds each flight, so tracking any of them can use it. One update at a time. */
+function indexBoard(from, date, slot, departures) {
+  const turn = indexQueue.then(() => indexOne(from, date, slot, departures));
+  indexQueue = turn.catch(() => {});
+  return turn;
+}
+
+async function indexOne(from, date, slot, departures) {
+  const key = `seeds/${date}`;
+  const prev = (await cacheGet(key))?.data || {};
+  for (const f of departures) if (f.codeshareStatus !== "IsCodeshared" && !f.isCargo) prev[boardNumber(f)] = `${from}/${slot}`;
+  await caches.default.put(cacheKey(key), new Response(JSON.stringify(prev), { headers: { "Cache-Control": "max-age=172800", "X-Fetched-At": String(Date.now()) } }));
+}
+
+/** A flight built from a departure board someone's search already paid for, if it's fresh enough. */
+async function fromBoards(env, ctx, no, date) {
+  const where = (await cacheGet(`seeds/${date}`))?.data?.[no];
+  if (!where) return null;
+  const [from, slot] = where.split("/");
+  const board = await cacheGet(`fids/${from}/${date}/${slot}`);
+  const item = board?.data?.departures?.find((f) => boardNumber(f) === no);
+  if (!item) return null;
+  const origin = await airportInfo(env, from);
+  if (!origin) return null;
+  const flight = normaliseFlight(no, date, [{ ...item, departure: { ...item.departure, airport: origin } }]);
+  if (board.age / 1000 > flightTtl(flight)) return null; // too old for this phase: look it up properly
+  flight.status.checkedAt = new Date(Date.now() - board.age).toISOString();
+  flight.status.via = "board";
+  return flight;
+}
+
+/* ---------- airports: learned once, kept in KV ---------- */
+
+const airportMemo = new Map();
+
+/** Name, city, time zone and location for an airport code, from memory, KV, or one 1-unit lookup. */
+async function airportInfo(env, code) {
+  if (airportMemo.has(code)) return airportMemo.get(code);
+  const kv = env.QUOTA;
+  const saved = kv?.get ? await kv.get(`airport/${code}`) : null;
+  if (saved) {
+    const a = JSON.parse(saved);
+    airportMemo.set(code, a);
+    return a;
+  }
+  const host = env.ADB_HOST || "aerodatabox.p.rapidapi.com";
+  if (!kv?.get || !ADB_HOSTS.has(host)) return null;
+  await spend(env, null, "airport");
+  const res = await getWithRetry(`https://${host}/airports/iata/${code}`, {
+    headers: { "X-RapidAPI-Key": env.ADB_KEY, "X-RapidAPI-Host": host, Accept: "application/json" },
+  }).catch(() => null);
+  if (!res || !res.ok) return null;
+  const a = await res.json().catch(() => null);
+  if (!a?.timeZone) return null;
+  const info = { iata: a.iata || code, icao: a.icao, name: a.fullName || a.shortName, shortName: a.shortName, municipalityName: a.municipalityName, timeZone: a.timeZone, location: a.location };
+  airportMemo.set(code, info);
+  await kv.put(`airport/${code}`, JSON.stringify(info));
+  return info;
+}
+
+/** Keep airport details that a paid lookup brought anyway, so boards from there never need one. */
+async function rememberAirports(env, list) {
+  const kv = env.QUOTA;
+  if (!kv?.get) return;
+  for (const a of list) {
+    if (!a?.iata || !a.timeZone || airportMemo.has(a.iata)) continue;
+    const info = { iata: a.iata, icao: a.icao, name: a.name, shortName: a.shortName, municipalityName: a.municipalityName, timeZone: a.timeZone, location: a.location };
+    airportMemo.set(a.iata, info);
+    if (!(await kv.get(`airport/${a.iata}`))) await kv.put(`airport/${a.iata}`, JSON.stringify(info));
+  }
+}
+
 /** How long a paid flight lookup stays fresh, by phase. Keeps a free plan alive. */
 function flightTtl(f) {
   const now = Date.now();
@@ -672,14 +823,18 @@ function flightTtl(f) {
   const arr = Date.parse(f.arrival.revised || f.arrival.sched || 0);
   switch (f.status.phase) {
     case "landed":
-      return f.arrival.belt ? 3600 : 900;
+      return f.arrival.belt ? 3 * 3600 : 1200;
     case "cancelled":
     case "diverted":
-      return 1800;
+      return 3 * 3600;
     case "air":
+      // While it flies, free live positions keep it current; this is only the schedule.
       return arr - now < 30 * 60000 ? 300 : 900;
     default:
-      return dep - now > 3 * 3600000 ? 1800 : 600;
+      // Far-off flights rarely change; the last 3 hours before departure is when gates and delays move.
+      if (dep - now > 24 * 3600000) return 12 * 3600;
+      if (dep - now > 3 * 3600000) return 2 * 3600;
+      return 600;
   }
 }
 
@@ -763,9 +918,6 @@ function normaliseFlight(no, date, list) {
 /* Flights between two airports                                        */
 /* ------------------------------------------------------------------ */
 
-// AeroDataBox's free plan is 400 units a month and a departure board costs 2, so 40 lookups
-// (80 units) leaves most of the plan for tracking flights by number.
-const SEARCH_CAP_DEFAULT = 40;
 const SLOTS = { am: ["00:00", "11:59"], pm: ["12:00", "23:59"] };
 
 /**
@@ -773,7 +925,7 @@ const SLOTS = { am: ["00:00", "11:59"], pm: ["12:00", "23:59"] };
  * departure board in two 12-hour slots, each cached and shared by every search from that
  * airport that day, whatever the destination. Codeshares are left out: one row per real flight.
  */
-async function flightsBetweenRoute(url, env, ctx) {
+async function flightsBetweenRoute(url, env, ctx, request) {
   if (!env.ADB_KEY) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
   const code = (k) => (url.searchParams.get(k) || "").trim().toUpperCase();
   const from = code("from");
@@ -788,7 +940,7 @@ async function flightsBetweenRoute(url, env, ctx) {
   // An afternoon or evening search only needs the second half of the day.
   const slots = after && afterMin >= 720 ? ["pm"] : ["am", "pm"];
 
-  const got = await Promise.allSettled(slots.map((slot) => departureSlot(env, ctx, from, date, slot)));
+  const got = await Promise.allSettled(slots.map((slot) => departureSlot(env, ctx, request, from, date, slot)));
   const ok = got.filter((g) => g.status === "fulfilled").map((g) => g.value);
   if (!ok.length) throw got[0].reason;
 
@@ -814,13 +966,13 @@ function partialNote(err) {
 }
 
 /** One half-day of an airport's departure board: a paid lookup, so cached and counted. */
-function departureSlot(env, ctx, from, date, slot) {
+function departureSlot(env, ctx, request, from, date, slot) {
   const today = istToday();
   const ttl = date === today ? 900 : date < today ? 3600 : 21600;
   return cached(ctx, `fids/${from}/${date}/${slot}`, ttl, async () => {
     const host = env.ADB_HOST || "aerodatabox.p.rapidapi.com";
     if (!ADB_HOSTS.has(host)) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
-    await spendSearch(env);
+    await spend(env, request, "search");
     const [a, b] = SLOTS[slot];
     const q = "withLeg=true&direction=Departure&withCancelled=true&withCodeshared=false&withCargo=false&withPrivate=false&withLocation=false";
     let res;
@@ -838,37 +990,78 @@ function departureSlot(env, ctx, from, date, slot) {
       throw new ApiError(503, "quota_exhausted", "This month's free flight lookups are used up. Trains still work.");
     if (!res.ok) throw new ApiError(502, "upstream_unavailable", "Flight schedules are slow right now. Try again shortly.");
     const body = await res.json().catch(() => null);
-    return { departures: Array.isArray(body?.departures) ? body.departures : [], status: {} };
+    const departures = Array.isArray(body?.departures) ? body.departures : [];
+    // Every flight on this board can now be tracked without another paid call.
+    ctx.waitUntil(indexBoard(from, date, slot, departures).catch(() => {}));
+    ctx.waitUntil(rememberAirports(env, departures.map((f) => f.arrival?.airport)).catch(() => {}));
+    return { departures, status: {} };
   });
 }
 
-/**
- * Count one paid lookup against this month's flight-search budget, or refuse.
- * Tracking a flight by number never goes through here, so it keeps working when search pauses.
- */
+/* ---------- the flight-data budget ---------- */
+
+const LOOKUP_CAP_DEFAULT = 180; // paid calls a month: 360 of the free plan's 400 units, 40 kept spare
+const VISITOR_DAILY_DEFAULT = 3;
+const SEARCH_KEEP = 2; // the last calls of each day's share are kept for tracking
+
+const intEnv = (v, d) => {
+  const n = Number.parseInt(v ?? "", 10);
+  return Number.isFinite(n) && n >= 0 ? n : d;
+};
+
+/** How many paid calls this month may have used by now: the month's cap, released day by day. */
+function allowanceToday(cap) {
+  const [y, m, d] = istToday().split("-").map(Number);
+  const days = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return Math.min(cap, Math.ceil((cap * d) / days));
+}
+
+async function visitorKey(request) {
+  const ip = request?.headers?.get("CF-Connecting-IP");
+  if (!ip) return null;
+  // A one-way hash of the address and day: enough to count, useless for anything else.
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${ip}|${istToday()}|journey`));
+  return `visitor/${istToday()}/${[...new Uint8Array(bytes)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
 let spendQueue = Promise.resolve();
-function spendSearch(env) {
-  // One at a time within this Worker, so two slots looked up together both get counted.
-  const turn = spendQueue.then(() => spendOne(env));
+/**
+ * Count one paid call, or refuse with a clear reason. kind: "track", "search" or "airport".
+ * One at a time within this Worker, so two calls made together both get counted.
+ */
+function spend(env, request, kind) {
+  const turn = spendQueue.then(() => spendOne(env, request, kind));
   spendQueue = turn.catch(() => {});
   return turn;
 }
 
-async function spendOne(env) {
+async function spendOne(env, request, kind) {
   const kv = env.QUOTA;
-  if (!kv || typeof kv.get !== "function") throw new ApiError(503, "search_not_configured", "Flight search isn't switched on yet. Track by flight number for now.");
-  const cap = Number.parseInt(env.FLIGHT_SEARCH_CAP ?? "", 10);
-  const limit = Number.isFinite(cap) && cap >= 0 ? cap : SEARCH_CAP_DEFAULT;
-  const month = istToday().slice(0, 7);
-  const key = `flight-search/${month}`;
-  const used = Number(await kv.get(key)) || 0;
-  if (used >= limit) {
-    const m = Number(month.slice(5, 7));
-    const next = `1 ${MONTHS[m % 12]}`;
-    throw new ApiError(503, "search_paused", `Flight search is resting until ${next} to save lookups for live tracking. Tracking by flight number still works.`);
+  if (!kv || typeof kv.get !== "function") {
+    if (kind === "search") throw new ApiError(503, "search_not_configured", "Flight search isn't switched on yet. Track by flight number for now.");
+    return; // tracking works without the budget store, just unguarded
   }
-  // KV isn't atomic across Workers, so a busy minute can overshoot by a lookup or two. Fine for a monthly budget.
-  await kv.put(key, String(used + 1), { expirationTtl: 60 * 60 * 24 * 45 });
+  const cap = intEnv(env.FLIGHT_LOOKUP_CAP, LOOKUP_CAP_DEFAULT);
+  const key = `adb/${istToday().slice(0, 7)}`;
+  const used = Number(await kv.get(key)) || 0;
+  const left = allowanceToday(cap) - used;
+  if (left <= 0)
+    throw kind === "search"
+      ? new ApiError(503, "search_paused", "Flight search is resting until tomorrow to save lookups for live tracking. Tracking by flight number still works.")
+      : new ApiError(503, "flights_resting", "Today's new flight lookups are used up. Flights someone already checked still show, and new ones are back tomorrow. Trains work as usual.");
+  if (kind === "search" && left <= SEARCH_KEEP)
+    throw new ApiError(503, "search_paused", "Flight search is resting until tomorrow so live tracking keeps working. Tracking by flight number still works.");
+  if (kind !== "airport") {
+    const vk = await visitorKey(request);
+    if (vk) {
+      const mine = Number(await kv.get(vk)) || 0;
+      if (mine >= intEnv(env.FLIGHT_VISITOR_DAILY, VISITOR_DAILY_DEFAULT))
+        throw new ApiError(429, "visitor_limit", "You've looked up a few new flights today. Flights others have checked still work, and you can look up more tomorrow.");
+      await kv.put(vk, String(mine + 1), { expirationTtl: 2 * 86400 });
+    }
+  }
+  // KV isn't atomic across Workers, so a busy minute can overshoot by a call or two. Fine for a monthly budget.
+  await kv.put(key, String(used + 1), { expirationTtl: 45 * 86400 });
 }
 
 const hmOf = (x) => (/^\d{4}-\d{2}-\d{2}[ T](\d{2}:\d{2})/.exec(x?.local || "") || [])[1] || null;
