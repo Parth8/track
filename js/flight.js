@@ -21,7 +21,8 @@ export function renderFlight(f) {
   const arrCity = arr.city || arr.code;
 
   const depTime = dep.revised || dep.sched;
-  const arrTime = (phase === "landed" && (arr.actual || arr.revised)) || arr.revised || arr.sched;
+  // In the air, the landing time comes from the plane's live speed and distance left (free and fresh).
+  const arrTime = (phase === "landed" && (arr.actual || arr.revised)) || (phase === "air" && arr.liveEta) || arr.revised || arr.sched;
   const takeoff = dep.actual || depTime;
   const now = Date.now();
   const reported = !!(f.position && Number.isFinite(f.position.lat));

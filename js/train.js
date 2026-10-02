@@ -409,3 +409,25 @@ function gtkItem(icon, tone, title, sub) {
     h("div", {}, h("strong", { text: title }), h("span", { text: sub }))
   );
 }
+
+/**
+ * How often a train screen (or a pinned train island) checks again, by how close it is to you.
+ * Train data comes in as station reports every few minutes, so calm checks miss nothing that matters.
+ *   your stop more than 2 hours away: every 12 minutes
+ *   1 to 2 hours away: every 8 minutes
+ *   under an hour away, or halting at a station: every 5 minutes
+ *   arrived: no more checks
+ */
+export function trainCadence(j, stopCode) {
+  const halts = (j?.stops || []).filter((s) => s.halts);
+  if (!halts.length) return { ms: 12 * 60000, text: "every 12 min" };
+  if (j.status?.phase === "arrived") return { ms: 0, text: "Journey complete" };
+  const mine = halts.find((s) => s.code === stopCode) || halts.at(-1);
+  if (mine.passed) return { ms: 0, text: "You've reached your stop" };
+  const eta = Date.parse(bestArr(mine) || bestDep(mine) || 0);
+  const left = eta - Date.now();
+  const halting = j.status?.phase === "running" && j.position?.state === "at";
+  if (halting || left < 60 * 60000) return { ms: 5 * 60000, text: halting ? "every 5 min while it's at a station" : "every 5 min, now it's close to your stop" };
+  if (left < 2 * 60 * 60000) return { ms: 8 * 60000, text: "every 8 min as it nears your stop" };
+  return { ms: 12 * 60000, text: "every 12 min while your stop is over 2 hours away" };
+}

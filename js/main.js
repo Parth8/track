@@ -4,7 +4,7 @@ import { api, weatherAt, ApiError } from "./api.js";
 import { createFlipDate } from "./flip.js";
 import { createLoader } from "./loader.js";
 import { renderShareImage } from "./share-card.js";
-import { renderTrain } from "./train.js";
+import { renderTrain, trainCadence } from "./train.js";
 import { renderFlight } from "./flight.js";
 import { installWay, installPlace, appleGuide, onInstallChange, promptInstall } from "./install.js";
 import { guideArt } from "./guide.js";
@@ -37,7 +37,8 @@ const MODES = {
     dateHelp: "Pick the day it started its run, even if you board later. Not sure? Use From and to above, and we'll work it out.",
     cta: "Check live status",
     range: () => [addDays(today(), -3), today()],
-    refreshMs: () => 30000,
+    // Calm checks, quicker as the train nears your stop (see trainCadence).
+    refreshMs: (data, stop) => trainCadence(data, stop).ms,
     // Finding a train by its stations instead of its number
     route: {
       dateQ: "When do you board?",
@@ -70,7 +71,9 @@ const MODES = {
     cta: "Track flight",
     range: () => [addDays(today(), -2), addDays(today(), 7)],
     // live position is free, so refresh often while airborne; schedules change slowly
-    refreshMs: (data) => (data?.status?.phase === "air" ? 30000 : 90000),
+    // Positions are free, so in the air the map moves every 30 s. Before take-off the details
+    // themselves only change every 30 to 60 minutes (see the Worker), so checking every 2 is plenty.
+    refreshMs: (data) => (data?.status?.phase === "air" ? 30000 : ["landed", "cancelled"].includes(data?.status?.phase) ? 0 : 120000),
     route: {
       dateQ: "When do you fly?",
       dateHelp: "Local date at the airport you leave from.",
@@ -160,6 +163,7 @@ function readPin() {
 let pinned = readPin();
 let pinTimer = null;
 let pinFetchedAt = 0;
+let lastPinData = null;
 const samePin = (s) => !!(pinned && s && s.mode === pinned.mode && s.no === pinned.no && (s.date || today()) === pinned.date);
 const onOwnStatus = () => !views.status.hidden && !!session?.data;
 
@@ -226,6 +230,7 @@ async function refreshPinned(force = false) {
   let done = false;
   try {
     const data = await api(`/api/${p.mode}`, { no: p.no, date: p.date }, { timeout: 25000, retries: 0 });
+    lastPinData = data;
     const view = p.mode === "train" ? renderTrain(data, { stop: p.stop, foldOpen: false, onPickStop() {}, onToggleFold() {}, onChangeStop() {} }) : renderFlight(data);
     if (pinned !== p) return;
     savePin({ ...p, island: view.island });
@@ -234,7 +239,9 @@ async function refreshPinned(force = false) {
   } catch {
     /* keep the saved copy: the island shows how old it is */
   }
-  if (pinned === p) pinTimer = setTimeout(() => refreshPinned(true), done ? 15 * 60000 : p.mode === "train" ? 60000 : 120000);
+  // The same calm pace as the journey's own screen; in the air, the plane's position is free to follow.
+  const every = p.mode === "train" ? lastPinData && trainCadence(lastPinData, p.stop).ms : lastPinData?.status?.phase === "air" ? 60000 : 180000;
+  if (pinned === p && !done && every) pinTimer = setTimeout(() => refreshPinned(true), every);
 }
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") refreshPinned();
@@ -330,7 +337,7 @@ sources.addEventListener("click", (e) => {
 
 window.addEventListener("popstate", () => route({ pop: true }));
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && session?.data && Date.now() - session.loadedAt > MODES[session.mode].refreshMs(session.data)) load({ silent: true });
+  if (document.visibilityState === "visible" && session?.data && Date.now() - session.loadedAt > (MODES[session.mode].refreshMs(session.data, session.stop) || Infinity)) load({ silent: true });
 });
 window.addEventListener("online", () => {
   if (session?.error) retryNow();
@@ -696,7 +703,8 @@ async function load({ silent = false, manual = false } = {}) {
       btn.removeAttribute("aria-busy");
       const phase = s.data?.status?.phase;
       const finished = (s.mode === "train" && phase === "arrived") || (s.mode === "flight" && ["landed", "cancelled"].includes(phase));
-      if (s.data && !finished) s.timer = setTimeout(() => load({ silent: true }), MODES[s.mode].refreshMs(s.data));
+      const every = s.data ? MODES[s.mode].refreshMs(s.data, s.stop) : 0;
+      if (s.data && !finished && every) s.timer = setTimeout(() => load({ silent: true }), every);
     }
   }
 }
@@ -784,6 +792,7 @@ function paint() {
 
   s.island = view.island;
   s.anchor = view.anchor;
+  view.anchor?.after(freshNote(s));
   if (samePin(s)) savePin({ ...pinned, stop: s.stop || null, island: view.island });
   syncIsland();
 
@@ -793,6 +802,49 @@ function paint() {
     s.io = new IntersectionObserver(([entry]) => jumpBtn.classList.toggle("show", !entry.isIntersecting && window.scrollY > 300), { threshold: 0 });
     s.io.observe(view.currentRow);
   } else jumpBtn.classList.remove("show");
+}
+
+/**
+ * A quiet line under the status card: how often this screen checks, and, behind "Why?",
+ * a kind word on why it isn't every few seconds.
+ */
+function freshNote(s) {
+  const d = s.data;
+  let line = null;
+  if (s.mode === "train") {
+    const c = trainCadence(d, s.stop);
+    line = c.ms ? `Checking ${c.text}` : null;
+  } else if (d.status.phase === "air") line = "Following the plane live. Its position updates every 30 seconds";
+  else if (d.status.phase === "pre" && d.status.windowMin) {
+    const every = d.status.windowMin >= 60 ? `${Math.round(d.status.windowMin / 60)} hour${d.status.windowMin >= 120 ? "s" : ""}` : `${d.status.windowMin} min`;
+    line = `Flight details checked ${d.status.checkedAt ? ago(d.status.checkedAt) : "recently"}, every ${every} at this stage`;
+  } else if (d.status.phase === "landed") line = "Landed. These details are final";
+  if (!line) return document.createDocumentFragment();
+
+  const more = h("p", {
+    class: "fresh-more",
+    id: "fresh-more",
+    hidden: !s.whyOpen,
+    text:
+      s.mode === "train"
+        ? "Trains report in from stations every few minutes, so we check at a calm pace and more often as your stop gets close. Every check costs us a little, and keeping it gentle is how Track stays free, with no ads. Tap refresh at the top whenever you like."
+        : "Each check of flight details costs us a little. So we look more often as departure nears, follow the plane for free while it flies, and check once more after landing for the belt. That's how Track stays free, with no ads, for everyone. Thank you for understanding.",
+  });
+  const why = h("button", {
+    type: "button",
+    class: "fresh-why",
+    "aria-expanded": String(!!s.whyOpen),
+    "aria-controls": "fresh-more",
+    text: "Why?",
+    on: {
+      click: () => {
+        s.whyOpen = !s.whyOpen;
+        more.hidden = !s.whyOpen;
+        why.setAttribute("aria-expanded", String(s.whyOpen));
+      },
+    },
+  });
+  return h("div", { class: "fresh" }, h("p", { class: "fresh-note" }, svg(icons.clock), h("span", {}, `${line}. `, why)), more);
 }
 
 function mountWhenVisible(s, spec) {

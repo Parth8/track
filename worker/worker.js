@@ -25,8 +25,10 @@
  *   FLIGHT_LOOKUP_CAP text    optional, paid AeroDataBox calls a month for tracking and search
  *                             together (default 180, which is 360 of the free plan's 400 units).
  *                             They're released day by day, and unused days roll over.
- *   FLIGHT_VISITOR_DAILY text optional, paid lookups one visitor can cause a day (default 3).
- *                             Anything already looked up by anyone stays free and unlimited.
+ *   FLIGHT_VISITOR_DAILY text optional, new flights (or searches) one visitor can bring in a day
+ *                             (default 3). Refreshing ones they follow, or ones anyone already
+ *                             looked up, doesn't count.
+ *   FLIGHT_PER_FLIGHT_DAILY text optional, paid refreshes one flight can use a day (default 8).
  */
 
 const UA =
@@ -642,36 +644,59 @@ async function flightRoute(url, env, ctx, request) {
   const today = istToday();
   const date = validDate(url.searchParams.get("date") || today, addDays(today, -2), addDays(today, 7));
   const key = `flight/${raw}/${date}`;
+  const item = `${raw}/${date}`;
 
   let flight = (await cacheGet(key))?.data || null;
   let liveDone = false;
   if (!flight) {
-    const old = await cacheGet(`${key}/stale`);
-    if (old && mayBeFlying(old.data)) {
-      const live = await livePosition(ctx, old.data).catch(() => null);
-      if (live && ((live.altFt ?? 0) > 1500 || (live.speedKmh ?? 0) > 220)) {
-        flight = old.data;
+    const old = (await cacheGet(`${key}/stale`))?.data || null;
+    const now = Date.now();
+
+    // In the air, people want the position, and that's free. No paid calls until it has landed.
+    if (old && mayBeFlying(old)) {
+      const live = await livePosition(ctx, old).catch(() => null);
+      const airborne = live && ((live.altFt ?? 0) > 1500 || (live.speedKmh ?? 0) > 220);
+      const arrRef = Date.parse(old.arrival.revised || old.arrival.sched || 0);
+      if (airborne) {
+        flight = old;
         flight.position = live;
         if (flight.status.phase === "pre") flight.status.inferred = true;
         flight.status.phase = "air";
         liveDone = true;
+      } else if (old.status.phase === "air" && (!arrRef || now < arrRef + 15 * 60000)) {
+        // Out of receiver range, or just touching down: keep what we know until 15 minutes after
+        // landing time, then make the one paid check that brings the landing time and belt.
+        flight = old;
+        if (live) flight.position = live;
+        liveDone = true;
       }
     }
+    // A departure board someone's search already paid for
     if (!flight) {
       flight = await fromBoards(env, ctx, raw, date).catch(() => null);
       if (flight) putFlight(ctx, key, flight);
     }
+    // Before take-off: refresh the whole departure board, which updates every flight from that
+    // airport for everyone, for the same cost as looking up this one flight.
+    if (!flight && old && old.status.phase === "pre") {
+      try {
+        flight = await refreshFromBoard(env, ctx, request, raw, date, old);
+        if (flight) putFlight(ctx, key, flight);
+      } catch (err) {
+        if (!(err instanceof ApiError) || ["flights_resting", "flight_rest", "visitor_limit", "quota_exhausted"].includes(err.code)) {
+          flight = restingCopy(old, err);
+        }
+      }
+    }
     if (!flight) {
       try {
-        await spend(env, request, "track");
+        await spend(env, request, "track", item);
         flight = await fetchFlight(env, ctx, raw, date);
         putFlight(ctx, key, flight);
       } catch (err) {
-        const saveable = err instanceof ApiError && ["flights_resting", "visitor_limit", "quota_exhausted", "upstream_unavailable"].includes(err.code);
+        const saveable = err instanceof ApiError && ["flights_resting", "flight_rest", "visitor_limit", "quota_exhausted", "upstream_unavailable"].includes(err.code);
         if (!old || !(saveable || !(err instanceof ApiError))) throw err;
-        flight = old.data;
-        flight.status.servedStale = true;
-        flight.status.note = err instanceof ApiError ? err.message : null;
+        flight = restingCopy(old, err);
       }
     }
   }
@@ -690,6 +715,44 @@ async function flightRoute(url, env, ctx, request) {
       }
     }
   }
+  // While it flies, a landing time worked out from its live speed and the distance left (free).
+  flight.arrival.liveEta = flight.status.phase === "air" ? liveEta(flight) : null;
+  // How often the details are checked at this stage, so the page can say so kindly.
+  flight.status.windowMin = flight.status.phase === "air" ? null : Math.round(flightTtl(flight) / 60);
+  return flight;
+}
+
+function restingCopy(old, err) {
+  old.status.servedStale = true;
+  old.status.note = err instanceof ApiError ? err.message : null;
+  return old;
+}
+
+/** Minutes left at the current ground speed, plus a few for the approach. Null when we can't tell. */
+function liveEta(f) {
+  const p = f.position;
+  const a = f.arrival;
+  if (!p || !(p.speedKmh > 250) || !Number.isFinite(a.lat) || !Number.isFinite(a.lon) || p.source !== "live") return null;
+  const r = Math.PI / 180;
+  const km = 6371 * 2 * Math.asin(Math.sqrt(Math.sin(((a.lat - p.lat) * r) / 2) ** 2 + Math.cos(p.lat * r) * Math.cos(a.lat * r) * Math.sin(((a.lon - p.lon) * r) / 2) ** 2));
+  const mins = (km / p.speedKmh) * 60 + (km > 60 ? 8 : 4);
+  return new Date(Date.now() + mins * 60000).toISOString();
+}
+
+/** Re-fetch the board half-day this flight leaves in, and read the flight from it. */
+async function refreshFromBoard(env, ctx, request, no, date, old) {
+  const dep = old.departure;
+  if (!dep.code || !dep.tz || !dep.sched) return null;
+  const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: dep.tz, hour: "2-digit", hourCycle: "h23" }).format(new Date(dep.sched)));
+  const slot = hour < 12 ? "am" : "pm";
+  const board = await departureSlot(env, ctx, request, dep.code, date, slot, { kind: "track", item: `${no}/${date}`, maxAgeMs: flightTtl(old) * 1000 });
+  const it = board?.departures?.find((f) => boardNumber(f) === no);
+  if (!it) return null;
+  const origin = { iata: dep.code, name: dep.name, shortName: dep.name, municipalityName: dep.city, timeZone: dep.tz, location: { lat: dep.lat, lon: dep.lon } };
+  const flight = normaliseFlight(no, date, [{ ...it, departure: { ...it.departure, airport: origin } }]);
+  // The board doesn't carry the aircraft's transponder code; keep the one we already know for live positions.
+  if (old.aircraft?.hex && !flight.aircraft?.hex) flight.aircraft = { ...(flight.aircraft || {}), ...old.aircraft, model: flight.aircraft?.model || old.aircraft.model };
+  flight.status.via = "board";
   return flight;
 }
 
@@ -816,25 +879,29 @@ async function rememberAirports(env, list) {
   }
 }
 
-/** How long a paid flight lookup stays fresh, by phase. Keeps a free plan alive. */
+/**
+ * How long a flight's details stay fresh before a paid refresh, by what people care about then.
+ * Before take-off: more often as it nears (gates, boarding, delays). In the air: free live
+ * positions only. After landing: one check for the landing time and belt, then nothing more.
+ */
 function flightTtl(f) {
   const now = Date.now();
   const dep = Date.parse(f.departure.revised || f.departure.sched || 0);
-  const arr = Date.parse(f.arrival.revised || f.arrival.sched || 0);
   switch (f.status.phase) {
     case "landed":
-      return f.arrival.belt ? 3 * 3600 : 1200;
+      return 24 * 3600;
     case "cancelled":
     case "diverted":
-      return 3 * 3600;
+      return 6 * 3600;
     case "air":
-      // While it flies, free live positions keep it current; this is only the schedule.
-      return arr - now < 30 * 60000 ? 300 : 900;
-    default:
-      // Far-off flights rarely change; the last 3 hours before departure is when gates and delays move.
-      if (dep - now > 24 * 3600000) return 12 * 3600;
-      if (dep - now > 3 * 3600000) return 2 * 3600;
-      return 600;
+      return 15 * 60; // the schedule copy; positions keep it current for free (see flightRoute)
+    default: {
+      const until = dep - now;
+      if (until > 24 * 3600000) return 12 * 3600;
+      if (until > 6 * 3600000) return 3 * 3600;
+      if (until > 2 * 3600000) return 3600;
+      return 30 * 60;
+    }
   }
 }
 
@@ -940,7 +1007,7 @@ async function flightsBetweenRoute(url, env, ctx, request) {
   // An afternoon or evening search only needs the second half of the day.
   const slots = after && afterMin >= 720 ? ["pm"] : ["am", "pm"];
 
-  const got = await Promise.allSettled(slots.map((slot) => departureSlot(env, ctx, request, from, date, slot)));
+  const got = await Promise.allSettled(slots.map((slot) => departureSlot(env, ctx, request, from, date, slot, { item: `search/${from}/${to}/${date}` })));
   const ok = got.filter((g) => g.status === "fulfilled").map((g) => g.value);
   if (!ok.length) throw got[0].reason;
 
@@ -966,13 +1033,13 @@ function partialNote(err) {
 }
 
 /** One half-day of an airport's departure board: a paid lookup, so cached and counted. */
-function departureSlot(env, ctx, request, from, date, slot) {
+function departureSlot(env, ctx, request, from, date, slot, { kind = "search", item = null, maxAgeMs = null } = {}) {
   const today = istToday();
   const ttl = date === today ? 900 : date < today ? 3600 : 21600;
   return cached(ctx, `fids/${from}/${date}/${slot}`, ttl, async () => {
     const host = env.ADB_HOST || "aerodatabox.p.rapidapi.com";
     if (!ADB_HOSTS.has(host)) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
-    await spend(env, request, "search");
+    await spend(env, request, kind, item);
     const [a, b] = SLOTS[slot];
     const q = "withLeg=true&direction=Departure&withCancelled=true&withCodeshared=false&withCargo=false&withPrivate=false&withLocation=false";
     let res;
@@ -995,13 +1062,14 @@ function departureSlot(env, ctx, request, from, date, slot) {
     ctx.waitUntil(indexBoard(from, date, slot, departures).catch(() => {}));
     ctx.waitUntil(rememberAirports(env, departures.map((f) => f.arrival?.airport)).catch(() => {}));
     return { departures, status: {} };
-  });
+  }, maxAgeMs != null ? { fresh: true, floorMs: maxAgeMs } : {});
 }
 
 /* ---------- the flight-data budget ---------- */
 
 const LOOKUP_CAP_DEFAULT = 180; // paid calls a month: 360 of the free plan's 400 units, 40 kept spare
 const VISITOR_DAILY_DEFAULT = 3;
+const PER_FLIGHT_DAILY_DEFAULT = 8;
 const SEARCH_KEEP = 2; // the last calls of each day's share are kept for tracking
 
 const intEnv = (v, d) => {
@@ -1029,13 +1097,13 @@ let spendQueue = Promise.resolve();
  * Count one paid call, or refuse with a clear reason. kind: "track", "search" or "airport".
  * One at a time within this Worker, so two calls made together both get counted.
  */
-function spend(env, request, kind) {
-  const turn = spendQueue.then(() => spendOne(env, request, kind));
+function spend(env, request, kind, item = null) {
+  const turn = spendQueue.then(() => spendOne(env, request, kind, item));
   spendQueue = turn.catch(() => {});
   return turn;
 }
 
-async function spendOne(env, request, kind) {
+async function spendOne(env, request, kind, item) {
   const kv = env.QUOTA;
   if (!kv || typeof kv.get !== "function") {
     if (kind === "search") throw new ApiError(503, "search_not_configured", "Flight search isn't switched on yet. Track by flight number for now.");
@@ -1051,13 +1119,30 @@ async function spendOne(env, request, kind) {
       : new ApiError(503, "flights_resting", "Today's new flight lookups are used up. Flights someone already checked still show, and new ones are back tomorrow. Trains work as usual.");
   if (kind === "search" && left <= SEARCH_KEEP)
     throw new ApiError(503, "search_paused", "Flight search is resting until tomorrow so live tracking keeps working. Tracking by flight number still works.");
+  // One flight can't eat the day: at most a few paid refreshes each.
+  if (kind === "track" && item) {
+    const fk = `calls/${istToday()}/${item}`;
+    const n = Number(await kv.get(fk)) || 0;
+    if (n >= intEnv(env.FLIGHT_PER_FLIGHT_DAILY, PER_FLIGHT_DAILY_DEFAULT))
+      throw new ApiError(503, "flight_rest", "This flight has had its updates for today, so we're showing the latest we have.");
+    await kv.put(fk, String(n + 1), { expirationTtl: 2 * 86400 });
+  }
+  // Each visitor can bring in a few *new* flights or searches a day; refreshing ones they follow is free of that.
   if (kind !== "airport") {
     const vk = await visitorKey(request);
     if (vk) {
-      const mine = Number(await kv.get(vk)) || 0;
-      if (mine >= intEnv(env.FLIGHT_VISITOR_DAILY, VISITOR_DAILY_DEFAULT))
-        throw new ApiError(429, "visitor_limit", "You've looked up a few new flights today. Flights others have checked still work, and you can look up more tomorrow.");
-      await kv.put(vk, String(mine + 1), { expirationTtl: 2 * 86400 });
+      let seen = [];
+      try {
+        seen = JSON.parse((await kv.get(vk)) || "[]");
+      } catch {
+        seen = [];
+      }
+      const id = item || `${kind}/${Date.now()}`;
+      if (!seen.includes(id)) {
+        if (seen.length >= intEnv(env.FLIGHT_VISITOR_DAILY, VISITOR_DAILY_DEFAULT))
+          throw new ApiError(429, "visitor_limit", "You've looked up a few new flights today. Flights others have checked still work, and you can look up more tomorrow.");
+        await kv.put(vk, JSON.stringify([...seen, id]), { expirationTtl: 2 * 86400 });
+      }
     }
   }
   // KV isn't atomic across Workers, so a busy minute can overshoot by a call or two. Fine for a monthly budget.

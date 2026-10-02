@@ -459,3 +459,94 @@ test("between: a nearby station says how far it is from the one asked for", asyn
   assert.deepEqual([vb.to.code, vb.to.nearKm], ["YPR", 5]);
   assert.equal(body.trains.find((t) => t.number === "12785").to.nearKm, undefined, "exact stations have no distance");
 });
+
+/* ---------- refresh design: free in the air, one check after landing, shared boards ---------- */
+
+const at = (ms) => ({ utc: new Date(ms).toISOString().slice(0, 16).replace("T", " ") + "Z", local: new Date(ms + 330 * 60000).toISOString().slice(0, 16).replace("T", " ") + "+05:30" });
+const BLR = { iata: "BLR", icao: "VOBL", shortName: "Bengaluru", municipalityName: "Bengaluru", timeZone: "Asia/Kolkata", location: { lat: 13.2, lon: 77.7 } };
+function flightBody(no, dep, arr, status, extra = {}) {
+  return [{ number: no, status, callSign: `IGO${no.slice(3)}`, airline: { name: "IndiGo", iata: "6E" }, aircraft: { model: "A320", modeS: "800abc" },
+    departure: { airport: DEL_AIRPORT, scheduledTime: at(dep), ...(status !== "Expected" ? { runwayTime: at(dep) } : {}) },
+    arrival: { airport: BLR, scheduledTime: at(arr), ...(status === "Arrived" ? { runwayTime: at(arr), baggageBelt: "7" } : {}) }, ...extra }];
+}
+
+test("in the air: no paid calls at all, and a landing time from live speed; then one check after landing", async () => {
+  const now = Date.now();
+  const d = new Date(now - 90 * 60000 + 330 * 60000).toISOString().slice(0, 10);
+  let answer = flightBody("6E 901", now - 90 * 60000, now + 60 * 60000, "EnRoute");
+  let live = { lat: 20, lon: 77.5, alt_baro: 36000, gs: 440, track: 180, seen_pos: 1 };
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("adsb")) return new Response(JSON.stringify({ ac: live ? [live] : [] }));
+    return new Response(JSON.stringify(answer));
+  };
+  const e = flightEnv();
+  const a = await get(`/api/flight?no=6E901&date=${d}`, { with: e });
+  assert.equal(a.body.status.phase, "air");
+  assert.ok(a.body.arrival.liveEta, "landing time worked out from live speed");
+  for (let i = 0; i < 3; i++) {
+    caches.default.expire(`flight/6E901/${d}`);
+    caches.default.expire(`pos/800abc`);
+    await get(`/api/flight?no=6E901&date=${d}`, { with: e });
+  }
+  assert.equal(paid().length, 1, "only the first lookup was paid");
+  // Out of receiver range mid-flight: still free
+  live = null;
+  caches.default.expire(`flight/6E901/${d}`);
+  caches.default.expire(`pos/800abc`);
+  const quiet = await get(`/api/flight?no=6E901&date=${d}`, { with: e });
+  assert.equal(quiet.body.status.phase, "air");
+  assert.equal(paid().length, 1);
+  // Well after its landing time: exactly one paid check, then the landed copy is kept for the day
+  const stale = caches.default.store.get(`https://journey-cache.internal/flight/6E901/${d}/stale`);
+  const old = JSON.parse(stale.body);
+  old.arrival.sched = new Date(now - 20 * 60000).toISOString();
+  stale.body = JSON.stringify(old);
+  caches.default.expire(`flight/6E901/${d}`);
+  answer = flightBody("6E 901", now - 150 * 60000, now - 20 * 60000, "Arrived");
+  const landed = await get(`/api/flight?no=6E901&date=${d}`, { with: e });
+  assert.equal(landed.body.status.phase, "landed");
+  assert.equal(landed.body.arrival.belt, "7");
+  assert.equal(paid().length, 2);
+  await get(`/api/flight?no=6E901&date=${d}`, { with: e });
+  assert.equal(paid().length, 2, "no more paid calls after landing");
+  const cc = caches.default.store.get(`https://journey-cache.internal/flight/6E901/${d}`).headers["cache-control"];
+  assert.match(cc, /max-age=8\d{4}/, "kept for a day");
+});
+
+test("before take-off, one board refresh brings everyone's flights from that airport up to date", async () => {
+  serveAll();
+  const e = flightEnv();
+  const d = addDays(istToday(), 1);
+  await get(`/api/flight?no=6E2516&date=${d}`, { with: e }); // a paid lookup to start
+  await get(`/api/flight?no=QP1356&date=${d}`, { with: e });
+  calls.length = 0;
+  caches.default.expire(`flight/6E2516/${d}`);
+  caches.default.expire(`flight/QP1356/${d}`);
+  const a = await get(`/api/flight?no=6E2516&date=${d}`, { with: e });
+  assert.equal(a.body.status.via, "board");
+  assert.deepEqual(paid().map((u) => u.replace(/.*iata\/|\?.*/g, "")), [`DEL/${d}T12:00/${d}T23:59`], "refreshed the evening board");
+  const b = await get(`/api/flight?no=QP1356&date=${d}`, { with: e });
+  assert.equal(b.body.status.via, "board");
+  assert.equal(paid().length, 1, "the second flight came free from the same board");
+  const hoursAway = (Date.parse(a.body.departure.sched) - Date.now()) / 3600000;
+  assert.equal(a.body.status.windowMin, hoursAway > 24 ? 720 : hoursAway > 6 ? 180 : hoursAway > 2 ? 60 : 30, "checked less often the further away it is");
+});
+
+test("one flight gets at most a few paid refreshes a day; refreshing doesn't count against the visitor", async () => {
+  serveAll();
+  const e = flightEnv({ FLIGHT_PER_FLIGHT_DAILY: "2", FLIGHT_VISITOR_DAILY: "1" });
+  const d = addDays(istToday(), 1);
+  for (let i = 0; i < 4; i++) {
+    caches.default.expire(`flight/AI2820/${d}`);
+    caches.default.expire(`fids/DEL/${d}/pm`);
+    const r = await get(`/api/flight?no=AI2820&date=${d}`, { with: e });
+    assert.equal(r.status, 200, `refresh ${i + 1} still answers (visitor limit is 1, but it's the same flight)`);
+  }
+  assert.equal(paid().length, 2, "capped at 2 paid calls for this flight today");
+  const last = await get(`/api/flight?no=AI2820&date=${d}`, { with: e });
+  assert.equal(last.status, 200);
+  const other = await get(`/api/flight?no=6E2131&date=${d}`, { with: e });
+  assert.deepEqual([other.status, other.body.error], [429, "visitor_limit"], "a second new flight is over this visitor's limit");
+});

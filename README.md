@@ -261,8 +261,9 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 ### Freshness and caching
 | Data | Fresh for | Notes |
 |---|---|---|
-| Train status | 45 s | The page refreshes every 60 s while visible |
-| Flight status | 10 min near departure, 2 h a few hours out, 12 h when a day or more away; 5 to 15 min in the air (kept current by free live positions) | Protects the free flight-data quota |
+| Train status | 15 s at the Worker | The page checks every 12 min while your stop is over 2 h away, every 8 min at 1 to 2 h, every 5 min within the hour or while it's halting, and stops once it arrives. The refresh button always fetches the latest |
+| Flight details (paid) | 12 h when over a day away, 3 h at 6 to 24 h, 1 h at 2 to 6 h, 30 min in the last 2 h; none in the air; one check about 15 min after landing (for the belt), then kept for a day | Before take-off, a refresh re-reads the airport's whole departure board, updating every flight from there for everyone. At most 8 paid refreshes per flight a day |
+| Flight position and landing estimate | live, every 30 s on screen | Free community receivers; the landing time in the air comes from live speed and distance left |
 | Live aircraft position | 20 s | Free, so looked up on every refresh |
 | Weather | 15 min | |
 | Trains between stations | 6 h | Timetables rarely change, so one lookup serves everyone |
@@ -286,7 +287,8 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 | `ADB_HOST` | Text | Optional. Defaults to `aerodatabox.p.rapidapi.com` |
 | `REQUIRE_ORIGIN` | Text | `false` only while testing in a browser tab. Remove afterwards. |
 | `FLIGHT_LOOKUP_CAP` | Text | Optional. Paid AeroDataBox calls a month for tracking and search together (default `180`, which is 360 of the free plan's 400 units). Released day by day; unused days roll over. |
-| `FLIGHT_VISITOR_DAILY` | Text | Optional. Paid calls one visitor can cause a day (default `3`). Anything already looked up stays free. |
+| `FLIGHT_VISITOR_DAILY` | Text | Optional. New flights or searches one visitor can bring in a day (default `3`). Refreshing ones they follow, or ones anyone already looked up, doesn't count. |
+| `FLIGHT_PER_FLIGHT_DAILY` | Text | Optional. Paid refreshes one flight can use a day (default `8`). |
 
 4. **The flight-data budget** (needed for flight search, strongly recommended for tracking) lives in a KV store:
    - Storage & Databases → KV → Create namespace → name it `track-quota`.
