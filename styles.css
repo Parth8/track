@@ -5425,3 +5425,220 @@ textarea.jn-input {
     animation-duration: 2.4s;
   }
 }
+
+/* ---------- On the platform: coach finder, berth finder, platform check ---------- */
+.jn-plat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr); /* the coach strip scrolls; it never widens the sheet */
+  gap: 10px;
+}
+.jn-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+.jn-card-t {
+  margin: 0;
+  font-size: 13px !important;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--ink-soft);
+}
+.jn-pf-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px !important;
+  font-weight: 700;
+  color: var(--ink);
+}
+.jn-pf-line svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--accent);
+}
+.jn-pf .jn-fine {
+  margin: 4px 0 0 26px;
+}
+.jn-seatpick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.jn-seatpick [aria-checked="true"] {
+  background: var(--deep);
+  color: var(--card);
+}
+.jn-coach-ends {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  font-size: 11px !important;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.jn-coaches {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 4px 2px 8px;
+  list-style: none;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+}
+.jn-coach {
+  min-width: 44px;
+  height: 44px;
+  padding: 0 8px;
+  border: 1.5px solid var(--hair);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--tint) 30%, var(--card));
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  scroll-snap-align: center;
+  transition: transform 0.2s var(--ease, ease), background 0.2s;
+}
+.jn-coach.utility {
+  color: var(--muted);
+  background: var(--hair);
+}
+.jn-coach.mine {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--card);
+}
+.jn-coach.here {
+  outline: 3px solid color-mix(in srgb, var(--info, #4a3f7a) 55%, transparent);
+  outline-offset: 2px;
+}
+.jn-coach:active {
+  transform: scale(0.95);
+}
+.jn-coach-say {
+  margin: 0;
+  font-size: 14px !important;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.jn-berth-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0;
+  font-size: 15px !important;
+  color: var(--ink);
+}
+.jn-berth-head span {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--muted);
+}
+/* the coach's bays, end to end, with yours marked */
+.jn-bays {
+  display: flex;
+  gap: 3px;
+}
+.jn-bays i {
+  flex: 1;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--hair);
+}
+.jn-bays i.mine {
+  background: var(--accent);
+}
+/* one bay: two facing stacks, the aisle, and the side berths */
+.jn-bay {
+  display: grid;
+  grid-template-columns: 1fr 1fr 14px 1fr;
+  gap: 6px;
+  align-items: end;
+}
+.jn-bay-face {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 4px;
+}
+.jn-bay-face.side {
+  align-self: stretch;
+  justify-content: space-between; /* side lower at the bottom, side upper at the top */
+}
+.jn-bay-aisle {
+  align-self: stretch;
+  border-left: 2px dashed var(--line);
+  margin-left: 6px;
+}
+.jn-b {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tint) 35%, var(--card));
+  border: 1.5px solid var(--hair);
+  font-variant-numeric: tabular-nums;
+}
+.jn-b b {
+  font-size: 14px;
+  color: var(--ink);
+}
+.jn-b small {
+  font-size: 10.5px;
+  font-weight: 800;
+  color: var(--muted);
+}
+.jn-b.mine {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.jn-b.mine b,
+.jn-b.mine small {
+  color: var(--card);
+}
+/* adding a passenger's details */
+.jn-pax-row:has(.jn-pax-edit) {
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+}
+.jn-pax-edit {
+  width: 34px;
+  height: 34px;
+}
+.jn-pax-edit svg {
+  width: 16px;
+  height: 16px;
+}
+.jn-pax-row:has(.jn-pax-form) {
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: start;
+}
+.jn-pax-form {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.jn-pax-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.pill-btn.primary {
+  background: var(--deep);
+  color: var(--card);
+}

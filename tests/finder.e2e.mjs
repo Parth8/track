@@ -53,6 +53,7 @@ const upstream = async (url) => {
   if (u.hostname.includes("aerodatabox")) return fidsAnswer(url) || flightAnswer(url) || new Response(null, { status: 204 });
   if (u.hostname === "sa.railyatri.in") return new Response(JSON.stringify(seatAnswer(u)), { headers: { "Content-Type": "application/json" } });
   if (u.hostname === "www.railyatri.in") return pnrAnswer(u);
+  if (u.hostname === "erail.in") return new Response(ERAIL); // recorded coach order for 12786
   const key = `${u.searchParams.get("from")}-${u.searchParams.get("to")}`;
   if (key.startsWith("PURI")) return new Response("down", { status: 503 });
   const body = FIXTURES[key] ? fixture(FIXTURES[key]) : { success: true, train_between_stations: [], alternate_trains: [] };
@@ -62,6 +63,7 @@ const upstream = async (url) => {
 // PNR 1234567890 is a recorded booking (12786 SBC → KCG, 3A, one passenger in B3/59), moved to
 // 3 days from now; PNR 1234567891 is the same booking with two passengers, one still waitlisted.
 const PNR_PAGE = readFileSync(new URL("./fixtures/pnr-sbc-kcg.html", import.meta.url), "utf8");
+const ERAIL = readFileSync(new URL("./fixtures/erail-12786.txt", import.meta.url), "utf8");
 const PNR_PENDING = readFileSync(new URL("./fixtures/pnr-pending.html", import.meta.url), "utf8");
 function pnrAnswer(u) {
   const pnr = u.pathname.split("/").pop();
@@ -815,7 +817,7 @@ await test("journeys: a PNR fills in the whole trip, and every passenger on it",
   assert.equal(await sheet.locator(".jn-summary .jn-dur").textContent(), "11h 55m");
   assert.equal(await sheet.locator('.jn-classes button[aria-pressed="true"]').textContent(), "3A");
   assert.equal(await sheet.locator("#jn-coach").inputValue(), "B3");
-  assert.equal(await sheet.locator("#jn-seat").inputValue(), "59");
+  assert.equal(await sheet.locator("#jn-seat").inputValue(), "59 UB", "the berth type comes with it");
   assert.equal(await sheet.locator("#jn-pnr").inputValue(), "1234567891");
   // One row per passenger
   assert.equal(await sheet.locator(".jn-pax-row").count(), 2);
@@ -828,7 +830,7 @@ await test("journeys: a PNR fills in the whole trip, and every passenger on it",
   assert.match(saved[0].dep, /T12:15:00\.000Z$/, "05:45 PM in India");
   // The card says it's still waitlisted, and how many are travelling
   const card = p.locator(".jcard");
-  assert.match(await card.locator(".jc-meta").textContent(), /WL 4.*B3 · 59 · 2 travellers/);
+  assert.match(await card.locator(".jc-meta").textContent(), /WL 4.*B3 · 59 UB · 2 travellers/);
   await card.click();
   const det = p.locator("#journey-detail");
   await det.waitFor();
@@ -837,6 +839,50 @@ await test("journeys: a PNR fills in the whole trip, and every passenger on it",
   assert.equal(await det.locator(".jn-leg-dur").textContent(), "11h 55m journey");
   assert.equal(await det.locator(".jn-leg-day").count(), 2, "a date by each station");
   assert.equal(await det.locator(".cta", { hasText: "Share trip" }).count(), 1);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: on the platform, find your coach and your berth, and name who's travelling", async () => {
+  const p = await page();
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 400);
+  await p.locator("#journeys-add").click();
+  const sheet = p.locator("#journey-add");
+  await sheet.locator("#jn-pnr-find").fill("1234567890");
+  await sheet.locator(".cta", { hasText: "Fill in from PNR" }).click();
+  await sheet.locator(".jn-summary").waitFor();
+  await sheet.locator(".cta", { hasText: "Save journey" }).click();
+  await settle(p, 400);
+  await p.locator(".jcard").click();
+  const det = p.locator("#journey-detail");
+  await det.locator(".jn-coach.mine").waitFor();
+  // The coach order, with B3 marked; tap the coach you're standing at
+  assert.equal(await det.locator(".jn-coach").count(), 22);
+  assert.equal(await det.locator(".jn-coach.mine").textContent(), "B3");
+  assert.match(await det.locator(".jn-coach-say").textContent(), /B3 is coach 10 of 22 from the engine end, 13 from the other end/);
+  await det.locator(".jn-coach", { hasText: /^S4$/ }).click();
+  assert.equal(await det.locator(".jn-coach-say").textContent(), "From S4, walk 6 coaches towards S5, about 140 m.");
+  await det.locator(".jn-coach", { hasText: /^B2$/ }).click();
+  assert.equal(await det.locator(".jn-coach-say").textContent(), "From B2, walk 1 coach towards B3, about 20 m.");
+  // The berth inside the coach: bay 8 of 9, upper, on the main side
+  assert.match(await det.locator(".jn-berth-head").textContent(), /Berth 59 · Upper.*Bay 8 of 9/);
+  assert.equal(await det.locator(".jn-b.mine").textContent(), "59UB");
+  assert.match(await det.locator(".jn-bay").getAttribute("aria-label"), /berths 57 to 64.*upper berth in the main bay/);
+  // The platform: only the ticket's for now (no live data in this test)
+  assert.match(await det.locator(".jn-pf-line").textContent(), /Platform 5 on your ticket/);
+  // Add who's travelling; it stays through a re-check
+  await det.locator(".jn-pax-edit").click();
+  await det.locator(".jn-pax-form input").first().fill("Asha Rao");
+  await det.locator(".jn-pax-form input").nth(1).fill("31");
+  await det.locator(".jn-pax-form select").selectOption("F");
+  await det.locator(".pill-btn", { hasText: "Save" }).click();
+  await settle(p, 300);
+  assert.match(await det.locator(".jn-pax-who small").textContent(), /^Asha Rao · 31 · Female/);
+  await det.locator(".jn-bk-refresh").click();
+  await settle(p, 1500);
+  assert.match(await det.locator(".jn-pax-who small").textContent(), /^Asha Rao · 31 · Female/, "kept after checking again");
+  const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("journeys"))[0]);
+  assert.deepEqual(saved.travellers, { 1: { name: "Asha Rao", age: 31, gender: "F" } });
   assert.deepEqual(p.errors, []);
 });
 

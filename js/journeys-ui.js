@@ -25,6 +25,10 @@ import {
   seatFrom,
   bookingDue,
   bookingChip,
+  berthGuide,
+  berthNo,
+  coachWalk,
+  BERTH_NAMES,
 } from "./journeys.js";
 
 const today = () => todayIn(IST);
@@ -68,25 +72,55 @@ function passengerLine(p) {
 }
 const KIND_WORD = { confirmed: "Confirmed", rac: "RAC", waitlist: "Waitlist", cancelled: "Cancelled", unknown: "" };
 
+const GENDERS = { F: "Female", M: "Male", T: "Transgender" };
+/** "Parth Aggarwal · 27 · Male", from what you added; "Passenger 1" until then. */
+const whoLine = (p, t) => (t?.name ? [t.name, t.age, GENDERS[t.gender]].filter(Boolean).join(" · ") : `Passenger ${p.n}`);
+
 /**
  * Who's travelling on the booking: one row each, so a solo trip is one line and a family of six
- * is six. Public PNR status shows seats, not names, so they're Passenger 1, 2 and so on.
+ * is six. Public PNR status shows seats, not names, so each passenger's name, age and gender can
+ * be added by hand (`travellers`, kept by passenger number, so a re-check never overwrites them).
  */
-function passengersBlock(b) {
+function passengersBlock(b, { travellers = {}, onSave } = {}) {
   const ps = b.passengers || [];
-  return h(
-    "ol",
-    { class: `jn-pax${ps.length === 1 ? " solo" : ""}`, "aria-label": `${ps.length} passenger${ps.length > 1 ? "s" : ""}` },
-    ps.map((p) =>
-      h(
-        "li",
-        { class: `jn-pax-row ${p.kind}` },
+  const row = (p) => {
+    const t = travellers[p.n];
+    const li = h("li", { class: `jn-pax-row ${p.kind}` });
+    const show = () =>
+      li.replaceChildren(
         h("span", { class: "jn-pax-n", "aria-hidden": "true", text: String(p.n) }),
-        h("span", { class: "jn-pax-who" }, h("b", { text: passengerLine(p) }), h("small", { text: `Passenger ${p.n}${p.booking ? ` · booked ${p.booking}` : ""}` })),
-        KIND_WORD[p.kind] ? h("span", { class: `jn-pax-kind ${p.kind}`, text: KIND_WORD[p.kind] }) : null
-      )
-    )
-  );
+        h("span", { class: "jn-pax-who" }, h("b", { text: passengerLine(p) }), h("small", { text: `${whoLine(p, t)}${p.booking ? ` · booked ${p.booking}` : ""}` })),
+        KIND_WORD[p.kind] ? h("span", { class: `jn-pax-kind ${p.kind}`, text: KIND_WORD[p.kind] }) : null,
+        onSave ? h("button", { type: "button", class: "icon-btn small jn-pax-edit", "aria-label": `${t?.name ? "Edit" : "Add"} details for passenger ${p.n}`, on: { click: edit } }, svg(icons.edit)) : null
+      );
+    function edit() {
+      const id = (k) => `jn-pax-${p.n}-${k}`;
+      const name = h("input", { class: "jn-input", id: id("name"), value: t?.name || "", maxLength: 40, autocomplete: "off", placeholder: "Name" });
+      const age = h("input", { class: "jn-input", id: id("age"), value: t?.age || "", inputMode: "numeric", maxLength: 3, autocomplete: "off", placeholder: "Age" });
+      const gender = h("select", { class: "jn-input", id: id("gender") }, h("option", { value: "", text: "—" }), Object.entries(GENDERS).map(([k, v]) => h("option", { value: k, text: v, selected: t?.gender === k })));
+      age.addEventListener("input", () => (age.value = age.value.replace(/\D/g, "").slice(0, 3)));
+      const save = () => {
+        const next = { name: name.value.trim().replace(/\s+/g, " "), age: age.value ? Number(age.value) : null, gender: gender.value || null };
+        onSave(p.n, next.name || next.age || next.gender ? next : null);
+      };
+      li.replaceChildren(
+        h("span", { class: "jn-pax-n", "aria-hidden": "true", text: String(p.n) }),
+        h(
+          "div",
+          { class: "jn-pax-form" },
+          h("label", { class: "sr-only", for: id("name"), text: `Passenger ${p.n}'s name` }),
+          name,
+          h("div", { class: "jn-pax-form-row" }, h("label", { class: "sr-only", for: id("age"), text: "Age" }), age, h("label", { class: "sr-only", for: id("gender"), text: "Gender" }), gender),
+          h("div", { class: "jn-pax-form-row" }, h("button", { type: "button", class: "pill-btn", text: "Cancel", on: { click: show } }), h("button", { type: "button", class: "pill-btn primary", text: "Save", on: { click: save } }))
+        )
+      );
+      name.addEventListener("keydown", (e) => e.key === "Enter" && save());
+      name.focus();
+    }
+    show();
+    return li;
+  };
+  return h("ol", { class: `jn-pax${ps.length === 1 ? " solo" : ""}`, "aria-label": `${ps.length} passenger${ps.length > 1 ? "s" : ""}` }, ps.map(row));
 }
 
 function pnrError(e) {
@@ -539,7 +573,16 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
           "div",
           { class: "jn-bk" },
           bookingHead(j.booking),
-          passengersBlock(j.booking),
+          passengersBlock(j.booking, {
+            travellers: j.travellers || {},
+            onSave: (n, t) => {
+              const all = { ...(j.travellers || {}) };
+              if (t) all[n] = t;
+              else delete all[n];
+              updateJourney(j.id, { travellers: all });
+              openDetail(j.id);
+            },
+          }),
           !past && j.pnr
             ? h("button", { type: "button", class: "pill-btn jn-bk-refresh", on: { click: (e) => checkNow(e.currentTarget) } }, svg(icons.refresh), "Check again")
             : null
@@ -556,6 +599,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
         )
       );
     }
+    if (!past) nodes.push(platformGuide(j));
     const pnr = j.pnr
       ? h(
           "button",
@@ -633,6 +677,166 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     }
   }
   const checking = new Set();
+
+  /* ---------------- on the platform: your coach, your berth, your platform ---------------- */
+
+  /** Each seat on the booking (or the one you typed in), with whose it is. */
+  function seatsOf(j) {
+    const ps = (j.booking?.passengers || []).filter((p) => p.coach && p.berth);
+    if (ps.length) return ps.map((p) => ({ n: p.n, who: j.travellers?.[p.n]?.name || `Passenger ${p.n}`, coach: p.coach, berth: Number(p.berth) }));
+    return j.coach ? [{ n: 1, who: "Your seat", coach: j.coach.toUpperCase(), berth: berthNo(j.seat) }] : [];
+  }
+
+  function platformGuide(j) {
+    const seats = seatsOf(j);
+    if (!seats.length && !j.booking?.platform) return null;
+    let pick = 0;
+    const coachBox = h("div", { class: "jn-coachbox" });
+    const berthBox = h("div", { class: "jn-berthbox" });
+    const pfBox = h("div", { class: "jn-pf" });
+    const picker = seats.length > 1 ? h("div", { class: "jn-seatpick", role: "radiogroup", "aria-label": "Whose seat" }) : null;
+    let order = j.coachOrder && Date.now() - Date.parse(j.coachOrder.at) < 7 * 86400000 ? j.coachOrder : null;
+
+    function paintPicker() {
+      if (!picker) return;
+      picker.replaceChildren(
+        ...seats.map((s, i) =>
+          h("button", { type: "button", role: "radio", class: "pill-btn", "aria-checked": String(i === pick), text: `${s.who.split(" ")[0]} · ${s.coach} ${s.berth}`, on: { click: () => ((pick = i), paintPicker(), paintCoach(), paintBerth()) } })
+        )
+      );
+    }
+
+    // The coach order, with yours marked. Tap the coach in front of you to see which way to walk.
+    function paintCoach(at = null) {
+      const seat = seats[pick];
+      if (!seat) return coachBox.replaceChildren();
+      if (!order) return coachBox.replaceChildren(h("p", { class: "jn-fine", text: "Loading the coach order…" }));
+      if (order.error) return coachBox.replaceChildren(h("p", { class: "jn-fine", text: order.error }));
+      const list = order.coaches;
+      const mine = list.findIndex((c) => c.id === seat.coach);
+      const say = h("p", { class: "jn-coach-say", role: "status", "aria-live": "polite" });
+      if (mine < 0) say.textContent = `${seat.coach} isn't in this train's usual coach order. The coach display on the platform shows today's order.`;
+      else if (at == null) say.textContent = `${seat.coach} is coach ${mine + 1} of ${list.length} from the ${order.engineFirst ? "engine" : "front"} end, ${list.length - mine} from the other end. Tap the coach in front of you to see which way to walk.`;
+      else {
+        const w = coachWalk(list, at, seat.coach);
+        say.textContent = !w ? "" : w.steps === 0 ? `That's your coach, ${seat.coach}.` : `From ${list[at].id}, walk ${w.steps} coach${w.steps > 1 ? "es" : ""} towards ${w.toward}, about ${w.meters} m.`;
+      }
+      const strip = h(
+        "ol",
+        { class: "jn-coaches", "aria-label": "Coach order. Tap the coach you're at." },
+        list.map((c, i) =>
+          h(
+            "li",
+            {},
+            h("button", {
+              type: "button",
+              class: `jn-coach${i === mine ? " mine" : ""}${i === at ? " here" : ""}${/^(SLR|LPR|EOG|SLRD|PC)$/.test(c.kind) ? " utility" : ""}`,
+              "aria-label": `${c.id}${i === mine ? ", your coach" : ""}${i === at ? ", you're here" : ""}`,
+              "aria-pressed": String(i === at),
+              text: c.id,
+              on: { click: () => paintCoach(i === at ? null : i) },
+            })
+          )
+        )
+      );
+      coachBox.replaceChildren(
+        h("p", { class: "jn-coach-ends", "aria-hidden": "true" }, h("span", { text: order.engineFirst ? "Engine end" : "One end" }), h("span", { text: "Other end" })),
+        strip,
+        say,
+        h("p", { class: "jn-fine small", text: "The usual order, as published. Trains can reverse at some stations and rakes change now and then, so the order holds but the engine may be at either end. The platform's coach display shows today's." })
+      );
+      if (mine >= 0) requestAnimationFrame(() => strip.children[mine]?.scrollIntoView({ block: "nearest", inline: "center", behavior: "instant" }));
+    }
+
+    // Inside the coach: the berth's bay, and where it sits in that bay.
+    function paintBerth() {
+      const seat = seats[pick];
+      const g = seat && berthGuide(j.cls, seat.berth);
+      if (!g) {
+        const type = (j.booking?.passengers || []).find((p) => p.n === seat?.n)?.berthType;
+        return berthBox.replaceChildren(...(seat?.berth && type ? [h("p", { class: "jn-fine", text: `Berth ${seat.berth} is a ${type.toLowerCase()} berth.` })] : []));
+      }
+      const main = g.places.slice(0, -2);
+      const half = main.length / 2;
+      const cell = (p) => h("span", { class: `jn-b${p.n === g.berth ? " mine" : ""}`, "aria-hidden": "true" }, h("b", { text: String(p.n) }), h("small", { text: p.type }));
+      berthBox.replaceChildren(
+        h("p", { class: "jn-berth-head" }, h("b", { text: `Berth ${g.berth} · ${BERTH_NAMES[g.type]}` }), h("span", { text: `Bay ${g.bay} of ${g.bays}` })),
+        h(
+          "div",
+          { class: "jn-bays", "aria-hidden": "true" },
+          Array.from({ length: g.bays }, (_, i) => h("i", { class: i + 1 === g.bay ? "mine" : "" }))
+        ),
+        h(
+          "div",
+          { class: "jn-bay", role: "img", "aria-label": `Bay ${g.bay}, berths ${g.first} to ${g.last}. Berth ${g.berth} is the ${BERTH_NAMES[g.type].toLowerCase()} berth${g.side ? " on the side, along the aisle" : " in the main bay"}.` },
+          h("span", { class: "jn-bay-face" }, main.slice(0, half).map(cell)),
+          h("span", { class: "jn-bay-face" }, main.slice(half).map(cell)),
+          h("span", { class: "jn-bay-aisle" }),
+          h("span", { class: "jn-bay-face side" }, g.places.slice(-2).map(cell))
+        ),
+        h(
+          "p",
+          { class: "jn-fine small", text: `Berths ${g.first}–${g.last}, ${g.bay > g.bays / 2 ? "nearer the end with the highest berth numbers" : "nearer the end with berth 1"}. ${g.side ? "Along the aisle, on the side." : "In the main bay."} Numbers are marked above every bay. Standard ${CLASS_NAMES[g.cls]} layout.` }
+        )
+      );
+    }
+
+    // Platform: the ticket's tentative one, against what the live tracker shows for your station
+    // (on the day, the live run; before that, the most recent run).
+    async function paintPf() {
+      const ticket = j.booking?.platform || null;
+      const live = isTrackable(j);
+      let seen = j.platformSeen && Date.now() - Date.parse(j.platformSeen.at) < (live ? 10 * 60000 : 12 * 3600000) && j.platformSeen.live === live ? j.platformSeen : null;
+      const show = () => {
+        const pf = seen?.pf || null;
+        const lines = [];
+        if (live && pf) lines.push(ticket && ticket !== pf ? `Live status says platform ${pf}. Your ticket said ${ticket}.` : `Live status says platform ${pf}${ticket ? ", as on your ticket" : ""}.`);
+        else if (ticket && pf) lines.push(pf === ticket ? `Platform ${ticket} on your ticket, and on the last run too.` : `Your ticket says platform ${ticket}, but the last run used ${pf}.`);
+        else if (ticket) lines.push(`Platform ${ticket} on your ticket, for now.`);
+        else if (pf) lines.push(`The last run used platform ${pf}.`);
+        if (!lines.length) return pfBox.replaceChildren();
+        pfBox.replaceChildren(
+          h("p", { class: "jn-pf-line" }, svg(icons.gate), lines[0]),
+          h("p", { class: "jn-fine small", text: "Platforms are confirmed on the day and can change at short notice. The station's displays and announcements have the final word." })
+        );
+      };
+      show();
+      if (seen) return;
+      try {
+        const data = await api("/api/train", { no: j.no, date: live ? j.startDate : addDays(today(), -1) }, { timeout: 20000, retries: 0 });
+        const stop = (data.stops || []).find((s) => s.code === j.from.code);
+        seen = { pf: stop?.platform || null, live, at: new Date().toISOString() };
+        updateJourney(j.id, { platformSeen: seen });
+        show();
+      } catch {
+        /* the ticket's platform stands on its own */
+      }
+    }
+
+    paintPicker();
+    paintCoach();
+    paintBerth();
+    paintPf();
+    if (!order && seats.length) {
+      api("/api/coaches", { no: j.no }, { timeout: 15000, retries: 1 })
+        .then((d) => {
+          order = { coaches: d.coaches, engineFirst: d.engineFirst, at: new Date().toISOString() };
+          updateJourney(j.id, { coachOrder: order });
+        })
+        .catch((e) => (order = { error: e instanceof ApiError && e.code === "no_coach_order" ? "There's no published coach order for this train. The platform's coach display shows it on the day." : "Couldn't load the coach order just now." }))
+        .finally(() => paintCoach());
+    }
+
+    return h(
+      "section",
+      { class: "jn-plat", "aria-label": "On the platform" },
+      h("p", { class: "sheet-label", text: "On the platform" }),
+      pfBox,
+      picker,
+      seats.length ? h("div", { class: "jn-card" }, h("p", { class: "jn-card-t", text: "Find your coach" }), coachBox) : null,
+      seats.some((s) => s.berth) ? h("div", { class: "jn-card" }, h("p", { class: "jn-card-t", text: "Find your berth" }), berthBox) : null
+    );
+  }
 
   function downloadIcs(j) {
     const link = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}`, location.href).href;

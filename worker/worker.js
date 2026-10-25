@@ -9,6 +9,7 @@
  *   /api/between?from=MYS&to=KCG&date=2026-10-02
  *   /api/seats?no=12306&from=NDLS&to=HWH&date=2026-10-09&cls=3A&quota=GN
  *   /api/flights?from=DEL&to=BLR&date=2026-10-02&after=17:00
+ *   /api/coaches?no=12786     (the train's published coach order, kept a day)
  *   /api/pnr?pnr=1234567890   (a booking's status; the PNR is never logged, and is cached
  *                              only under a hash of it, for 5 minutes)
  *
@@ -38,7 +39,7 @@
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
-const TTL = { train: 15, flight: 90, weather: 900, timetable: 43200, between: 21600, seats: 600, pnr: 300, stale: 21600 };
+const TTL = { train: 15, flight: 90, weather: 900, timetable: 43200, between: 21600, seats: 600, pnr: 300, coaches: 86400, stale: 21600 };
 const TRAIN_FRESH_FLOOR_MS = 5000; // a manual refresh re-fetches unless the copy is under 5 s old
 const ADB_HOSTS = new Set(["aerodatabox.p.rapidapi.com"]);
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -100,6 +101,8 @@ export default {
           return reply(await flightsBetweenRoute(url, env, ctx, request), 200, cors, 300, env);
         case "/api/seats":
           return reply(await seatsRoute(url, ctx), 200, cors, 300, env);
+        case "/api/coaches":
+          return reply(await coachesRoute(url, ctx), 200, cors, 3600, env);
         case "/api/pnr":
           return reply(await pnrRoute(url, ctx, env), 200, cors, 0, env); // personal: never kept by the browser or a proxy
         default:
@@ -1601,6 +1604,65 @@ async function weatherRoute(url, ctx) {
 }
 
 /* ------------------------------------------------------------------ */
+/* /api/coaches: a train's published coach order                       */
+/* ------------------------------------------------------------------ */
+
+// From erail.in's public train data, which carries the railway's published composition: each
+// coach as "kind,id,class" from the engine end, e.g. ",,En:LPR,LPR,LPR:GN,GN,GN:H,H1,1A:…".
+// It's the usual order: the railway can change a rake on the day, and at some stations the
+// train reverses, so which end the engine is at depends on the station. The app's guide only
+// needs the order itself ("B3 is 8 coaches from S4, towards S3"), so it holds either way.
+
+async function coachesRoute(url, ctx) {
+  const no = (url.searchParams.get("no") || "").trim();
+  if (!/^\d{5}$/.test(no)) throw new ApiError(400, "invalid_train", "Train numbers have 5 digits.");
+  return cached(ctx, `coaches/${no}`, TTL.coaches, async () => {
+    const slow = () => new ApiError(502, "upstream_unavailable", "The coach order is slow to load right now. Try again shortly.");
+    let text;
+    try {
+      const res = await getWithRetry(`https://erail.in/rail/getTrains.aspx?TrainNo=${no}&DataSource=0&Language=0&Cache=true`, {
+        headers: { "User-Agent": UA, Referer: "https://erail.in/" },
+      }, { timeout: 10000, retries: 1 });
+      if (!res.ok) throw slow();
+      text = await res.text();
+    } catch (err) {
+      log("warn", "coaches failed", no, String(err && err.message));
+      throw err instanceof ApiError ? err : slow();
+    }
+    const order = parseComposition(text, no);
+    if (!order) throw new ApiError(404, "no_coach_order", "There's no published coach order for this train.");
+    return order;
+  });
+}
+
+const COACH_ID = /^[A-Z]{1,5}\d{0,2}$/;
+
+/** The composition field of this train's record, read strictly: every coach must look like one. */
+function parseComposition(text, no) {
+  const record = String(text)
+    .split("^")
+    .slice(1)
+    .map((r) => r.split("~"))
+    .find((f) => f[0] === no); // this train's record, never another's
+  if (!record) return null;
+  const field = record.find((f) => /(^|:)[A-Z]{1,5},[A-Z]{1,5}\d{0,2},[A-Z0-9]{1,5}:/.test(f));
+  if (!field) return null;
+  const coaches = [];
+  let engineFirst = false;
+  for (const group of field.split(":").filter(Boolean)) {
+    const [kind, id, cls] = group.split(",").map((x) => (x || "").trim().toUpperCase());
+    if (!kind && !id && /^EN/.test(cls)) {
+      if (coaches.length === 0) engineFirst = true; // the order starts at the engine
+      continue;
+    }
+    if (!COACH_ID.test(id) || !COACH_ID.test(kind)) return null;
+    coaches.push({ id, kind, cls: /^(1A|2A|3A|3E|SL|CC|EC|EA|EV|2S|FC)$/.test(cls) ? cls : null });
+  }
+  if (coaches.length < 4 || coaches.length > 30) return null;
+  return { kind: "coaches", no, engineFirst, coaches, source: "erail", status: {} };
+}
+
+/* ------------------------------------------------------------------ */
 /* /api/pnr: a booking's status, read from RailYatri's PNR page        */
 /* ------------------------------------------------------------------ */
 
@@ -1729,15 +1791,18 @@ const decodeHtml = (s) =>
 
 /** The page as people see it: visible text in reading order, and the links. */
 function pageText(html) {
-  const body = String(html)
-    .replace(/<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ");
-  const links = [...body.matchAll(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/gi)].map((m) => decodeHtml(m[1]));
+  const code = String(html).replace(/<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
+  const body = code.replace(/<!--[\s\S]*?-->/g, " ");
+  const hrefs = (s) => [...s.matchAll(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/gi)].map((m) => decodeHtml(m[1]));
+  const links = hrefs(body);
+  // Links in commented-out parts of the page: never shown to anyone, so never trusted on their
+  // own. Only seat data is read from them, and only where the visible page agrees.
+  const hidden = hrefs([...code.matchAll(/<!--([\s\S]*?)-->/g)].map((m) => m[1]).join(" "));
   const tokens = body
     .split(/<[^>]*>/)
     .map((t) => decodeHtml(t).replace(/\s+/g, " ").trim())
     .filter(Boolean);
-  return { tokens, links };
+  return { tokens, links, hidden };
 }
 
 /** A label as written, reduced to its words: "PF# (TENTATIVE)" → "PF TENTATIVE", "Day of boarding:" → "DAY OF BOARDING". */
@@ -1919,7 +1984,7 @@ function passengersFrom(tokens, start) {
  * Returns { data } when every required field reads cleanly, else { reason, missing, conflicts }.
  */
 function extractPnr(html, askedPnr) {
-  const { tokens, links } = pageText(html);
+  const { tokens, links, hidden } = pageText(html);
   const out = { missing: [], conflicts: [] };
 
   // Where the booking starts: the PNR itself on the page. A different PNR there means a different
@@ -1987,6 +2052,21 @@ function extractPnr(html, askedPnr) {
 
   const passengers = passengersFrom(tokens, start);
   if (!passengers.length) out.missing.push("passengers");
+  // Berth type (lower, upper…) two ways: the seat data some versions of the page carry in a link
+  // (used only for a passenger whose coach and berth there match what the page shows), and the
+  // standard berth numbering of the coach. Kept when they agree or only one knows; left out when
+  // they disagree.
+  const linked = linkedSeats([...links, ...hidden]);
+  passengers.forEach((p, i) => {
+    if (!p.coach || !p.berth) return;
+    const l = linked.length === passengers.length ? linked[i] : null;
+    const fromData = l && l.coach === p.coach && l.berth === p.berth && BERTH_TYPES[l.type] ? BERTH_TYPES[l.type] : null;
+    const fromLayout = berthByLayout(cls, Number(p.berth));
+    const shown = p.berthType; // written on the page itself, e.g. "CNF/B3/59/UB"
+    const all = [shown, fromData, fromLayout].filter(Boolean);
+    p.berthType = all.length && all.every((x) => x === all[0]) ? all[0] : null;
+    p.berthFrom = p.berthType ? (shown || fromData ? "railway" : "layout") : null;
+  });
 
   const required = ["train", "from", "to", "date", "passengers"];
   const bad = [...out.missing, ...out.conflicts].filter((f) => required.includes(f));
@@ -2034,6 +2114,37 @@ function pnrStationName(name) {
 }
 
 /** One passenger, from how the page reads: "Confirmed" + "B3/59", "CNF/B3/59/LB", "RAC 12", "GNWL 45/WL 12". */
+// Standard berth numbering, repeating every bay: 3A and Sleeper have 8 berths a bay (6 in the
+// main bay, 2 on the side), 2A has 6 (4 + 2), First AC numbers lower then upper.
+const BERTH_LAYOUTS = {
+  "3A": ["LB", "MB", "UB", "LB", "MB", "UB", "SL", "SU"],
+  SL: ["LB", "MB", "UB", "LB", "MB", "UB", "SL", "SU"],
+  "2A": ["LB", "UB", "LB", "UB", "SL", "SU"],
+  "1A": ["LB", "UB"],
+};
+const berthByLayout = (cls, n) => (BERTH_LAYOUTS[cls] && n > 0 && n <= 90 ? BERTH_TYPES[BERTH_LAYOUTS[cls][(n - 1) % BERTH_LAYOUTS[cls].length]] : null);
+
+/**
+ * Seats as data, from a link that carries passenger_details[][…] fields: one entry per passenger,
+ * in order, each { coach, berth, type } read from current_status_details ("B3/59") and berth ("UB").
+ */
+function linkedSeats(links) {
+  const link = links.find((l) => /passenger_details/.test(l) && l.includes("?"));
+  if (!link) return [];
+  let q;
+  try {
+    q = new URLSearchParams(link.slice(link.indexOf("?") + 1));
+  } catch {
+    return [];
+  }
+  const seats = q.getAll("passenger_details[][current_status_details]");
+  const types = q.getAll("passenger_details[][berth]");
+  return seats.map((s, i) => {
+    const m = /^([A-Z]{1,2}\d{1,2})\s*\/\s*(\d{1,3})$/.exec(String(s).trim().toUpperCase());
+    return { coach: m ? m[1] : null, berth: m ? m[2] : null, type: String(types[i] || "").trim().toUpperCase() };
+  });
+}
+
 function pnrPassenger(n, booking, current, seatText) {
   const cur = String(current || "").toUpperCase();
   const seat = /\b([A-Z]{1,2}\d{1,2})\s*[/,\s]\s*(\d{1,3})(?:\s*[/,\s]\s*([A-Z]{2}))?\b/.exec(`${cur} ${String(seatText || "").toUpperCase()}`);
@@ -2051,7 +2162,9 @@ function pnrPassenger(n, booking, current, seatText) {
     coach: seat ? seat[1] : null,
     berth: seat ? seat[2] : null,
     berthType: (seat && BERTH_TYPES[seat[3]]) || null,
+    berthFrom: null,
     position,
   };
 }
 export { extractPnr };
+export { parseComposition };

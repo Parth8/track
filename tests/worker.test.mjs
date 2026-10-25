@@ -572,7 +572,7 @@ test("pnr: a booking reads as train, stations, day, class, chart and each passen
   assert.equal(body.journeyMin, 11 * 60 + 55);
   assert.deepEqual([body.cls, body.className, body.platform, body.chart, body.overall], ["3A", "AC 3 Tier", "5", "not_prepared", "confirmed"]);
   assert.equal(body.passengers.length, 1);
-  assert.deepEqual(body.passengers[0], { n: 1, kind: "confirmed", booking: "Confirmed", current: "Confirmed", coach: "B3", berth: "59", berthType: null, position: null });
+  assert.deepEqual(body.passengers[0], { n: 1, kind: "confirmed", booking: "Confirmed", current: "Confirmed", coach: "B3", berth: "59", berthType: "Upper", berthFrom: "layout", position: null });
 });
 
 test("pnr: several passengers, waitlisted and RAC, each read on its own", async () => {
@@ -651,7 +651,7 @@ const GOLDEN = {
   platform: "5",
   chart: "not_prepared",
   overall: "confirmed",
-  passengers: [{ n: 1, kind: "confirmed", booking: "Confirmed", current: "Confirmed", coach: "B3", berth: "59", berthType: null, position: null }],
+  passengers: [{ n: 1, kind: "confirmed", booking: "Confirmed", current: "Confirmed", coach: "B3", berth: "59", berthType: "Upper", berthFrom: "layout", position: null }],
 };
 const core = (d) => d && Object.fromEntries(Object.keys(GOLDEN).map((k) => [k, d[k]]));
 const readPnr = (html, pnr = "1234567890") => extractPnr(html, pnr);
@@ -751,4 +751,44 @@ test("pnr extraction: every passenger is kept, even with ads between the rows", 
   );
   // "2 minutes late" further down the page is not a second passenger on a solo booking
   assert.equal(readPnr(pnrPage).data.passengers.length, 1);
+});
+
+/* ---------- berth type: the page, its seat data, and the coach's standard numbering ---------- */
+
+test("pnr: the berth type comes from the railway's seat data and the standard layout, when they agree", () => {
+  // The real page carries seat data in a commented-out link (berth=UB for B3/59)
+  const data = (berth, seat = "B3%2F59") => `<!-- <a href="/astros/get-passenger-details?passenger_details%5B%5D%5Bberth%5D=${berth}&amp;passenger_details%5B%5D%5Bcurrent_status_details%5D=${seat}">x</a> -->`;
+  const withData = (b, s) => pnrPage.replace("</body>", `${data(b, s)}</body>`);
+  const p = (html) => readPnr(html).data.passengers[0];
+  assert.deepEqual([p(withData("UB")).berthType, p(withData("UB")).berthFrom], ["Upper", "railway"], "data and layout agree");
+  assert.deepEqual([p(pnrPage).berthType, p(pnrPage).berthFrom], ["Upper", "layout"], "59 in a 3A coach is an upper berth");
+  assert.equal(p(withData("LB")).berthType, null, "they disagree: shown as neither");
+  assert.equal(p(withData("LB", "B4%2F12")).berthType, "Upper", "seat data for another seat is ignored");
+  // A class whose numbering isn't standard gives no type from the layout
+  assert.equal(p(pnrPage.replace(">AC 3 Tier<", ">AC Chair Car<")).berthType, null);
+});
+
+/* ---------- /api/coaches ---------- */
+
+const erail = readFileSync(new URL("./fixtures/erail-12786.txt", import.meta.url), "utf8"); // recorded, public
+const serveErail = (body = erail) => upstream.set("erail.in/rail/getTrains", () => new Response(body));
+
+test("coaches: the published order, from the engine end, each coach with its class", async () => {
+  serveErail();
+  const { status, body } = await get("/api/coaches?no=12786");
+  assert.equal(status, 200);
+  assert.equal(body.engineFirst, true);
+  assert.equal(body.coaches.map((c) => c.id).join(" "), "LPR GN GN H1 A2 A1 B6 B5 B4 B3 B2 B1 S7 S6 S5 S4 S3 S2 S1 GN GN SLRD");
+  assert.deepEqual(body.coaches.find((c) => c.id === "B3"), { id: "B3", kind: "B", cls: "3A" });
+  await get("/api/coaches?no=12786");
+  assert.equal(calls.filter((u) => u.includes("erail")).length, 1, "kept for a day");
+});
+
+test("coaches: refuses another train's record, or an order that doesn't read cleanly", async () => {
+  serveErail(erail.replace("^12786~", "^12785~"));
+  assert.deepEqual([(await get("/api/coaches?no=12786")).body.error], ["no_coach_order"]);
+  caches.default.store.clear();
+  serveErail(erail.replace("B,B3,3A", "B,B3 ;drop,3A"));
+  assert.deepEqual([(await get("/api/coaches?no=12786")).body.error], ["no_coach_order"]);
+  assert.deepEqual([(await get("/api/coaches?no=abc")).status], [400]);
 });

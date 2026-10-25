@@ -13,6 +13,7 @@ export const icons = {
   copy: s('<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/>'),
   seat: s('<path d="M7 4v9a2 2 0 0 0 2 2h7l2 5M7 13h9M5 20h3"/>'),
   note: s('<path d="M6 4h9l4 4v12H6z"/><path d="M15 4v4h4M9 12h7M9 16h5"/>'),
+  edit: s('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>'),
   ticket: s('<path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2.5a2.5 2.5 0 0 0 0 5V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2.5a2.5 2.5 0 0 0 0-5z"/><path d="M14 5v2M14 11v2M14 17v2"/>'),
     menu: s('<path d="M4 7h16M4 12h16M4 17h10"/>'),
   up: s('<path d="M6 15l6-6 6 6"/>'),

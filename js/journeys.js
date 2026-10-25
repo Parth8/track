@@ -242,6 +242,59 @@ export function bookingChip(b) {
   return null;
 }
 
+/* ---------------- finding your coach, and your berth inside it ---------------- */
+
+// Standard berth numbering, repeating every bay. In each bay of 3A and Sleeper, berths 1–6 face
+// each other on the main side (lower, middle, upper twice) and 7–8 run along the side; 2A has
+// no middle berths. Most coaches of a class have the same number of bays.
+const LAYOUTS = {
+  "3A": { per: ["LB", "MB", "UB", "LB", "MB", "UB", "SL", "SU"], bays: 9 },
+  SL: { per: ["LB", "MB", "UB", "LB", "MB", "UB", "SL", "SU"], bays: 9 },
+  "2A": { per: ["LB", "UB", "LB", "UB", "SL", "SU"], bays: 8 },
+};
+export const BERTH_NAMES = { LB: "Lower", MB: "Middle", UB: "Upper", SL: "Side lower", SU: "Side upper" };
+
+/**
+ * Where a berth is in its coach: its type, its bay (counting from berth 1's end), the berths in
+ * that bay, and each berth's place, for a drawing. Null for classes without a standard layout.
+ */
+export function berthGuide(cls, berth) {
+  const L = LAYOUTS[cls];
+  const n = Number(berth);
+  if (!L || !Number.isInteger(n) || n < 1 || n > 90) return null;
+  const size = L.per.length;
+  const bay = Math.ceil(n / size);
+  const first = (bay - 1) * size + 1;
+  return {
+    cls,
+    berth: n,
+    type: L.per[(n - 1) % size],
+    bay,
+    bays: Math.max(L.bays, bay),
+    first,
+    last: first + size - 1,
+    side: (n - 1) % size >= size - 2,
+    places: L.per.map((type, i) => ({ type, n: first + i })),
+  };
+}
+
+/** Seat "34 LB" or "59" → the berth number. */
+export const berthNo = (seat) => Number((/(\d{1,3})/.exec(String(seat || "")) || [])[1]) || null;
+
+const COACH_M = 24; // an LHB coach is about 24 m long
+
+/**
+ * From the coach you're standing at to yours, in coaches. Works whichever way the train faces,
+ * because it only uses the order: "8 coaches, towards S3".
+ */
+export function coachWalk(order, fromIndex, coachId) {
+  const to = order.findIndex((c) => c.id === coachId);
+  if (to < 0 || fromIndex < 0 || fromIndex >= order.length) return null;
+  const steps = to - fromIndex;
+  if (steps === 0) return { steps: 0, toward: null, meters: 0 };
+  return { steps: Math.abs(steps), toward: order[fromIndex + Math.sign(steps)].id, meters: Math.round((Math.abs(steps) * COACH_M) / 10) * 10 };
+}
+
 /* ---------------- calendar ---------------- */
 
 const icsTime = (iso) => new Date(iso).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
