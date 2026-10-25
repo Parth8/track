@@ -768,27 +768,80 @@ test("pnr: the berth type comes from the railway's seat data and the standard la
   assert.equal(p(pnrPage.replace(">AC 3 Tier<", ">AC Chair Car<")).berthType, null);
 });
 
-/* ---------- /api/coaches ---------- */
+/* ---------- /api/coaches: several sources, cross-checked ---------- */
 
-const erail = readFileSync(new URL("./fixtures/erail-12786.txt", import.meta.url), "utf8"); // recorded, public
-const serveErail = (body = erail) => upstream.set("erail.in/rail/getTrains", () => new Response(body));
+// Recorded, public answers for 12786 from each source.
+const rec = (n) => readFileSync(new URL(`./fixtures/${n}`, import.meta.url), "utf8");
+const SRC = { erail: rec("erail-12786.txt"), confirmtkt: rec("confirmtkt-12786.html"), etrain: rec("etrain-12786.html"), tt: rec("railyatri-tt-12786.json") };
+function serveCoaches(over = {}) {
+  const body = { ...SRC, ...over };
+  const text = (k) => () => (body[k] == null ? new Response("down", { status: 503 }) : new Response(body[k]));
+  upstream.set("erail.in/rail/getTrains", text("erail"));
+  upstream.set("confirmtkt.com/train-schedule/", text("confirmtkt"));
+  upstream.set("etrain.info/train/", text("etrain"));
+  upstream.set("railyatri.in/live-train-status/", () => new Response('<script id="__NEXT_DATA__">{"buildId":"TEST"}</script>'));
+  upstream.set("/_next/data/", text("tt"));
+}
 
-test("coaches: the published order, from the engine end, each coach with its class", async () => {
-  serveErail();
+test("coaches: the order two of three sources agree on, naming the one that doesn't", async () => {
+  serveCoaches();
   const { status, body } = await get("/api/coaches?no=12786");
   assert.equal(status, 200);
-  assert.equal(body.engineFirst, true);
   assert.equal(body.coaches.map((c) => c.id).join(" "), "LPR GN GN H1 A2 A1 B6 B5 B4 B3 B2 B1 S7 S6 S5 S4 S3 S2 S1 GN GN SLRD");
-  assert.deepEqual(body.coaches.find((c) => c.id === "B3"), { id: "B3", kind: "B", cls: "3A" });
+  assert.equal(body.agreement, "majority");
+  assert.deepEqual(body.sources.map((s) => [s.name, s.agrees]), [["erail", true], ["confirmtkt", true], ["etrain", false]]);
+  assert.equal(body.engineFirst, true, "every source that marks the engine puts it first");
+  // etrain's rake is a different one (B5, S8), so its coach details aren't borrowed
+  assert.equal(body.coaches.find((c) => c.id === "B3").build, undefined);
   await get("/api/coaches?no=12786");
   assert.equal(calls.filter((u) => u.includes("erail")).length, 1, "kept for a day");
 });
 
-test("coaches: refuses another train's record, or an order that doesn't read cleanly", async () => {
-  serveErail(erail.replace("^12786~", "^12785~"));
-  assert.deepEqual([(await get("/api/coaches?no=12786")).body.error], ["no_coach_order"]);
+test("coaches: both timetables agree at SBC; where platforms differ, both are passed on, not picked", async () => {
+  serveCoaches();
+  const { body } = await get("/api/coaches?no=12786");
+  const sbc = body.stops.find((s) => s.code === "SBC");
+  assert.deepEqual([sbc.arr, sbc.dep, sbc.pf], ["17:45", "18:00", "5"]);
+  assert.deepEqual(sbc.from, { arr: "both", dep: "both", pf: "both" });
+  const kcg = body.stops.find((s) => s.code === "KCG");
+  assert.equal(kcg.pf, null);
+  assert.deepEqual(kcg.from.pf, { railyatri: "4", confirmtkt: "3" });
+  assert.equal(body.stops.some((s) => s.reversal), false, "no reversal is claimed when no source flags one");
+});
+
+test("coaches: a list read from the other end is the same rake, and then the engine's end is unknown", async () => {
+  // ConfirmTkt's list turned around, and its engine still listed first: the sources now put the
+  // engine at opposite ends of the same rake, so no end is claimed.
+  const ct = SRC.confirmtkt.replace(/"CoachPosition":"([^"]*)"/, (_, list) => {
+    const groups = list.split(":").filter(Boolean);
+    const [engine, ...rest] = groups;
+    return `"CoachPosition":"${[engine, ...rest.reverse()].join(":")}:"`;
+  });
+  serveCoaches({ confirmtkt: ct });
+  const { body } = await get("/api/coaches?no=12786");
+  const c = body.sources.find((s) => s.name === "confirmtkt");
+  assert.deepEqual([c.agrees, c.reversed], [true, true]);
+  assert.equal(body.directions, "mixed");
+  assert.equal(body.engineFirst, null);
+});
+
+test("coaches: any one source down, the others still answer; all down, a clear 404", async () => {
+  serveCoaches({ erail: null, etrain: null });
+  const one = await get("/api/coaches?no=12786");
+  assert.equal(one.body.agreement, "single");
+  assert.equal(one.body.coaches.find((c) => c.id === "B3").cls, "3A");
   caches.default.store.clear();
-  serveErail(erail.replace("B,B3,3A", "B,B3 ;drop,3A"));
+  serveCoaches({ erail: null, etrain: null, confirmtkt: null, tt: null });
   assert.deepEqual([(await get("/api/coaches?no=12786")).body.error], ["no_coach_order"]);
+});
+
+test("coaches: another train's record, or a coach that doesn't read cleanly, is never used", async () => {
+  serveCoaches({ erail: SRC.erail.replace("^12786~", "^12785~"), confirmtkt: null, etrain: null });
+  const r = await get("/api/coaches?no=12786");
+  assert.equal(r.body.coaches, null, "no order from someone else's record");
+  assert.ok(r.body.stops.length > 10, "the timetable still answers");
+  caches.default.store.clear();
+  serveCoaches({ erail: SRC.erail.replace("B,B3,3A", "B,B3 ;drop,3A"), confirmtkt: null, etrain: null });
+  assert.equal((await get("/api/coaches?no=12786")).body.coaches, null);
   assert.deepEqual([(await get("/api/coaches?no=abc")).status], [400]);
 });

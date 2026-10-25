@@ -20,7 +20,8 @@ import {
   pastStats,
   journeyIcs,
   boardDay,
-  ticketTimes,
+  timetableTimes,
+  coachInfo,
   bookingFrom,
   seatFrom,
   bookingDue,
@@ -32,6 +33,8 @@ import {
 } from "./journeys.js";
 
 const today = () => todayIn(IST);
+/** replaceChildren without the empty slots, which it would otherwise print as "null". */
+const fill = (el, ...kids) => el.replaceChildren(...kids.flat().filter((k) => k != null && k !== false));
 const CLASS_NAMES = { "1A": "AC First Class", "2A": "AC 2 Tier", "3A": "AC 3 Tier", "3E": "AC 3 Economy", EA: "Anubhuti", EC: "Executive Chair", EV: "Vistadome", CC: "AC Chair Car", FC: "First Class", SL: "Sleeper", "2S": "Second Sitting" };
 const daysUntil = (iso) => Math.round((Date.parse(`${iso.slice(0, 10)}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / 86400000);
 const boardDate = boardDay;
@@ -47,7 +50,7 @@ export async function checkBooking(j, { fresh = false } = {}) {
   if (data.no !== j.no) throw new ApiError("pnr_other_train", `This PNR is for train ${data.no}, not ${j.no}.`, 409);
   const before = j.booking;
   const booking = bookingFrom(data);
-  updateJourney(j.id, { booking, pnrLinked: true, cls: j.cls || data.cls || null, ...(seatFrom(booking) || {}), ...(ticketTimes(data) || {}) });
+  updateJourney(j.id, { booking, pnrLinked: true, cls: j.cls || data.cls || null, ...(seatFrom(booking) || {}) });
   return bookingNews(j, before, booking);
 }
 
@@ -62,6 +65,23 @@ function bookingNews(j, before, after) {
   return a && b && a !== b ? `${j.no} on ${shortDay(boardDate(j))} moved from ${a} to ${b}` : null;
 }
 
+/**
+ * Where the times come from, said plainly: checked against two timetables and the ticket, or
+ * what didn't line up. Nothing when there's nothing to say.
+ */
+function timesNote(j) {
+  const c = j.timeCheck;
+  if (!c) return null;
+  const both = c.sources && c.sources.fromDep === "both" && c.sources.toArr === "both";
+  let text = null;
+  if (c.onlyTicket) text = "Times as on your ticket. The timetable couldn't be reached to check them.";
+  else if (c.fromMatch === "arrival") text = `Your ticket shows ${clock(j.fromArr)}, when the train gets to ${j.from.name}. It leaves at ${clock(j.dep)}${both ? ", as both timetables say" : ""}.`;
+  else if (c.fromMatch === "neither") text = `Your ticket shows ${c.ticketFrom} at ${j.from.name}, which doesn't match the timetable (${clock(j.dep)}). Check the time on IRCTC.`;
+  else if (both) text = "Times checked against two timetables and your ticket.";
+  if (c.toMatch === false) text = `${text ? `${text} ` : ""}Your ticket's arrival (${c.ticketTo}) differs from the timetable's.`;
+  return text ? h("p", { class: "jn-fine small jn-times-note", text }) : null;
+}
+
 /** "B3 · 59 Lower", "RAC 7", "Waitlist 12", from one passenger. */
 function passengerLine(p) {
   if (p.coach && p.berth) return [p.coach, [p.berth, p.berthType].filter(Boolean).join(" ")].join(" · ");
@@ -70,6 +90,8 @@ function passengerLine(p) {
   if (p.kind === "cancelled") return "Cancelled";
   return p.current || "Status not shown";
 }
+const NUMBERED_COACH = /^[A-Z]{1,2}\d{1,2}$/;
+const ordinal = (n) => `${n}${["th", "st", "nd", "rd"][(n % 100 >> 3) ^ 1 && n % 10] || "th"}`;
 const KIND_WORD = { confirmed: "Confirmed", rac: "RAC", waitlist: "Waitlist", cancelled: "Cancelled", unknown: "" };
 
 const GENDERS = { F: "Female", M: "Male", T: "Transgender" };
@@ -87,7 +109,7 @@ function passengersBlock(b, { travellers = {}, onSave } = {}) {
     const t = travellers[p.n];
     const li = h("li", { class: `jn-pax-row ${p.kind}` });
     const show = () =>
-      li.replaceChildren(
+      fill(li, 
         h("span", { class: "jn-pax-n", "aria-hidden": "true", text: String(p.n) }),
         h("span", { class: "jn-pax-who" }, h("b", { text: passengerLine(p) }), h("small", { text: `${whoLine(p, t)}${p.booking ? ` · booked ${p.booking}` : ""}` })),
         KIND_WORD[p.kind] ? h("span", { class: `jn-pax-kind ${p.kind}`, text: KIND_WORD[p.kind] }) : null,
@@ -103,7 +125,7 @@ function passengersBlock(b, { travellers = {}, onSave } = {}) {
         const next = { name: name.value.trim().replace(/\s+/g, " "), age: age.value ? Number(age.value) : null, gender: gender.value || null };
         onSave(p.n, next.name || next.age || next.gender ? next : null);
       };
-      li.replaceChildren(
+      fill(li, 
         h("span", { class: "jn-pax-n", "aria-hidden": "true", text: String(p.n) }),
         h(
           "div",
@@ -501,7 +523,16 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
         "div",
         { class: "jn-leg" },
         h("span", { class: "jn-leg-dot", "aria-hidden": "true" }),
-        h("div", {}, h("p", { class: "jn-leg-place" }, h("b", { text: s.name }), h("span", { class: "tc-code", text: s.code })), h("p", { class: "jn-leg-sub", text: [side === "from" ? "Board" : "Get off", pf ? `PF ${pf}` : null].filter(Boolean).join(" · ") })),
+        h(
+          "div",
+          {},
+          h("p", { class: "jn-leg-place" }, h("b", { text: s.name }), h("span", { class: "tc-code", text: s.code })),
+          h("p", { class: "jn-leg-sub", text: [side === "from" ? "Board" : "Get off", pf ? `PF ${pf}` : null].filter(Boolean).join(" · ") }),
+          // The train is at your station before it leaves: say when it gets in, and the halt.
+          side === "from" && !actual && j.fromArr && j.fromArr !== j.dep
+            ? h("p", { class: "jn-leg-sub", text: `Arrives ${clock(j.fromArr)}, ${Math.round((Date.parse(j.dep) - Date.parse(j.fromArr)) / 60000)} min halt` })
+            : null
+        ),
         h(
           "div",
           { class: "jn-leg-time" },
@@ -521,6 +552,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
         tripMin(j) > 0 ? h("p", { class: "jn-leg-dur" }, svg(icons.clock), `${duration(tripMin(j) * 60000)} journey`) : null,
         leg("to")
       ),
+      timesNote(j),
     ];
 
     if (past) {
@@ -659,7 +691,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       )
     );
     nodes.push(h("div", { class: "jn-actions" }, actions));
-    detail.body.replaceChildren(...nodes.filter(Boolean)); // an empty slot would print "null"
+    fill(detail.body, nodes);
     detail.d.dataset.id = j.id;
     if (!detail.d.open) detail.d.showModal();
 
@@ -683,148 +715,210 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
   /** Each seat on the booking (or the one you typed in), with whose it is. */
   function seatsOf(j) {
     const ps = (j.booking?.passengers || []).filter((p) => p.coach && p.berth);
-    if (ps.length) return ps.map((p) => ({ n: p.n, who: j.travellers?.[p.n]?.name || `Passenger ${p.n}`, coach: p.coach, berth: Number(p.berth) }));
-    return j.coach ? [{ n: 1, who: "Your seat", coach: j.coach.toUpperCase(), berth: berthNo(j.seat) }] : [];
+    if (ps.length)
+      return ps.map((p) => ({ n: p.n, who: j.travellers?.[p.n]?.name || `Passenger ${p.n}`, coach: p.coach, berth: Number(p.berth), type: p.berthType, typeFrom: p.berthFrom }));
+    return j.coach ? [{ n: 1, who: "Your seat", coach: j.coach.toUpperCase(), berth: berthNo(j.seat), type: null, typeFrom: null }] : [];
   }
+
+  const NAMES = { erail: "erail.in", confirmtkt: "ConfirmTkt", etrain: "etrain.info", railyatri: "RailYatri" };
+  const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+  const listOf = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+  // Bays in a coach, only for builds whose numbering is known. LHB and ICF coaches differ.
+  const BAYS = { "3A:LHB": 9, "SL:LHB": 10, "3A:ICF": 8, "SL:ICF": 9 };
+  const motion = () => !prefersReducedMotion();
 
   function platformGuide(j) {
     const seats = seatsOf(j);
     if (!seats.length && !j.booking?.platform) return null;
+    let info = j.coachOrder && Date.now() - Date.parse(j.coachOrder.at) < 3 * 86400000 ? j.coachOrder : null;
+    let failed = null;
     let pick = 0;
+    let here = null;
     const coachBox = h("div", { class: "jn-coachbox" });
     const berthBox = h("div", { class: "jn-berthbox" });
     const pfBox = h("div", { class: "jn-pf" });
     const picker = seats.length > 1 ? h("div", { class: "jn-seatpick", role: "radiogroup", "aria-label": "Whose seat" }) : null;
-    let order = j.coachOrder && Date.now() - Date.parse(j.coachOrder.at) < 7 * 86400000 ? j.coachOrder : null;
+    const stopAt = (code) => info?.stops?.find((s) => s.code === code) || null;
 
     function paintPicker() {
       if (!picker) return;
-      picker.replaceChildren(
+      fill(picker, 
         ...seats.map((s, i) =>
-          h("button", { type: "button", role: "radio", class: "pill-btn", "aria-checked": String(i === pick), text: `${s.who.split(" ")[0]} · ${s.coach} ${s.berth}`, on: { click: () => ((pick = i), paintPicker(), paintCoach(), paintBerth()) } })
+          h("button", { type: "button", role: "radio", class: "pill-btn", "aria-checked": String(i === pick), text: `${s.who.split(" ")[0]} · ${s.coach} ${s.berth}`, on: { click: () => ((pick = i), (here = null), paintPicker(), paintCoach(), paintBerth()) } })
         )
       );
     }
 
-    // The coach order, with yours marked. Tap the coach in front of you to see which way to walk.
-    function paintCoach(at = null) {
+    /** Who lists this order, and who doesn't. */
+    function sourcesLine() {
+      const src = info.sources || [];
+      const yes = src.filter((s) => s.agrees).map((s) => NAMES[s.name] || s.name);
+      const no = src.filter((s) => !s.agrees).map((s) => NAMES[s.name] || s.name);
+      const turned = src.some((s) => s.reversed) ? " (one lists it from the other end)" : "";
+      if (info.agreement === "all") return `${listOf(yes)} list the same order${turned}.`;
+      if (info.agreement === "majority") return `${listOf(yes)} list this order${turned}. ${listOf(no)} ${no.length > 1 ? "list" : "lists"} a different one.`;
+      if (info.agreement === "tie") return `The sources list different orders. This one is ${yes[0]}'s, the most recently dated. Go by the platform's coach display.`;
+      return `Only ${yes[0]} lists an order for this train right now.`;
+    }
+
+    /**
+     * Which end leads as the train pulls in: said only when every source that shows the engine
+     * puts it at the same end, and counting only the reversals a timetable actually lists.
+     */
+    function frontLine(list) {
+      if (info.engineFirst == null || !info.stops?.length) return null;
+      const i = info.stops.findIndex((s) => s.code === j.from.code);
+      if (i < 0) return null;
+      const before = info.stops.slice(0, i).filter((s) => s.reversal);
+      const engineLeads = before.length % 2 === 0 ? info.engineFirst : !info.engineFirst;
+      const lead = engineLeads ? list[0] : list.at(-1);
+      const why = before.length
+        ? `RailYatri's timetable lists the engine changing ends at ${listOf(before.map((s) => s.code))}.`
+        : `The sources that show the engine put it at the ${engineLeads ? list[0].id : list.at(-1).id} end, and RailYatri's timetable lists no reversal before ${j.from.name}.`;
+      const atHere = info.stops[i].reversal ? ` It's listed as reversing at ${j.from.name}, so the engine may move to the other end while it's here.` : "";
+      return `Probably the ${lead.id} end comes in first, behind the engine. ${why}${atHere}`;
+    }
+
+    // The coach order, drawn as the train. Tap the coach in front of you to see which way to walk.
+    function paintCoach() {
       const seat = seats[pick];
-      if (!seat) return coachBox.replaceChildren();
-      if (!order) return coachBox.replaceChildren(h("p", { class: "jn-fine", text: "Loading the coach order…" }));
-      if (order.error) return coachBox.replaceChildren(h("p", { class: "jn-fine", text: order.error }));
-      const list = order.coaches;
+      if (!seat) return fill(coachBox);
+      if (!info && !failed) return fill(coachBox, h("div", { class: "jn-coaches-skel", "aria-hidden": "true" }, Array.from({ length: 9 }, () => h("i", { class: "skel" }))), h("p", { class: "jn-fine", text: "Checking the coach order with three sources…" }));
+      if (!info?.coaches) return fill(coachBox, h("p", { class: "jn-fine", text: failed || "None of the sources lists a coach order for this train. The coach display on the platform shows it on the day." }));
+      const list = info.coaches;
       const mine = list.findIndex((c) => c.id === seat.coach);
       const say = h("p", { class: "jn-coach-say", role: "status", "aria-live": "polite" });
-      if (mine < 0) say.textContent = `${seat.coach} isn't in this train's usual coach order. The coach display on the platform shows today's order.`;
-      else if (at == null) say.textContent = `${seat.coach} is coach ${mine + 1} of ${list.length} from the ${order.engineFirst ? "engine" : "front"} end, ${list.length - mine} from the other end. Tap the coach in front of you to see which way to walk.`;
+      let walk = null;
+      if (mine < 0) say.textContent = `${seat.coach} isn't in the order the sources list for this train. The coach display on the platform shows today's order.`;
+      else if (here == null) say.textContent = `${seat.coach} is coach ${mine + 1} of ${list.length} from the ${list[0].id} end, and ${list.length - mine} from the ${list.at(-1).id} end. Tap the coach you're standing at.`;
       else {
-        const w = coachWalk(list, at, seat.coach);
-        say.textContent = !w ? "" : w.steps === 0 ? `That's your coach, ${seat.coach}.` : `From ${list[at].id}, walk ${w.steps} coach${w.steps > 1 ? "es" : ""} towards ${w.toward}, about ${w.meters} m.`;
+        walk = coachWalk(list, here, seat.coach);
+        say.textContent = !walk ? "" : walk.steps === 0 ? `That's your coach, ${seat.coach}.` : `From ${list[here].id}, walk ${walk.steps} coach${walk.steps > 1 ? "es" : ""} towards ${walk.toward}, about ${walk.meters} m.`;
       }
+      const lo = here == null || mine < 0 ? -1 : Math.min(here, mine);
+      const hi = here == null || mine < 0 ? -1 : Math.max(here, mine);
+      const engine = (end) => (info.engineFirst === (end === "start") ? h("li", { class: "jn-loco", "aria-hidden": "true" }, h("span", { text: "Engine" })) : null);
       const strip = h(
         "ol",
-        { class: "jn-coaches", "aria-label": "Coach order. Tap the coach you're at." },
+        { class: `jn-coaches${here != null ? " walking" : ""}`, "aria-label": "Coach order. Tap the coach you're at." },
+        engine("start"),
         list.map((c, i) =>
           h(
             "li",
             {},
             h("button", {
               type: "button",
-              class: `jn-coach${i === mine ? " mine" : ""}${i === at ? " here" : ""}${/^(SLR|LPR|EOG|SLRD|PC)$/.test(c.kind) ? " utility" : ""}`,
-              "aria-label": `${c.id}${i === mine ? ", your coach" : ""}${i === at ? ", you're here" : ""}`,
-              "aria-pressed": String(i === at),
-              text: c.id,
-              on: { click: () => paintCoach(i === at ? null : i) },
-            })
+              class: `jn-coach${i === mine ? " mine" : ""}${i === here ? " here" : ""}${i > lo && i < hi ? " path" : ""}${NUMBERED_COACH.test(c.id) ? "" : " utility"}`,
+              vars: { "--d": String(Math.abs(i - (here ?? 0))) },
+              "aria-label": `${c.id}${i === mine ? ", your coach" : ""}${i === here ? ", you're here" : ""}`,
+              "aria-pressed": String(i === here),
+              on: { click: () => ((here = i === here ? null : i), paintCoach()) },
+            }, h("b", { text: c.id }), c.cls ? h("small", { text: c.cls }) : null)
           )
-        )
+        ),
+        engine("end")
       );
-      coachBox.replaceChildren(
-        h("p", { class: "jn-coach-ends", "aria-hidden": "true" }, h("span", { text: order.engineFirst ? "Engine end" : "One end" }), h("span", { text: "Other end" })),
-        strip,
-        say,
-        h("p", { class: "jn-fine small", text: "The usual order, as published. Trains can reverse at some stations and rakes change now and then, so the order holds but the engine may be at either end. The platform's coach display shows today's." })
+      const front = frontLine(list);
+      fill(coachBox, [
+          h("p", { class: "jn-coach-ends", "aria-hidden": "true" }, h("span", { text: `${list[0].id} end` }), h("span", { text: `${list.at(-1).id} end` })),
+          strip,
+          say,
+          front ? h("p", { class: "jn-coach-front" }, svg(icons.trainFront), front) : null,
+          h("p", { class: "jn-fine small", text: `${sourcesLine()} Coach orders change now and then; the coach display on the platform shows today's.` }),
+        ]
       );
-      if (mine >= 0) requestAnimationFrame(() => strip.children[mine]?.scrollIntoView({ block: "nearest", inline: "center", behavior: "instant" }));
+      // Keep both you and your coach in view, gliding there rather than jumping.
+      requestAnimationFrame(() => {
+        const a = (strip.querySelector(".here") || strip.querySelector(".mine"))?.closest("li");
+        const b = strip.querySelector(".mine")?.closest("li") || a;
+        if (!a) return;
+        const mid = (Math.min(a.offsetLeft, b.offsetLeft) + Math.max(a.offsetLeft + a.offsetWidth, b.offsetLeft + b.offsetWidth)) / 2;
+        strip.scrollTo({ left: mid - strip.clientWidth / 2, behavior: motion() && here != null ? "smooth" : "instant" });
+      });
     }
 
     // Inside the coach: the berth's bay, and where it sits in that bay.
     function paintBerth() {
       const seat = seats[pick];
-      const g = seat && berthGuide(j.cls, seat.berth);
-      if (!g) {
-        const type = (j.booking?.passengers || []).find((p) => p.n === seat?.n)?.berthType;
-        return berthBox.replaceChildren(...(seat?.berth && type ? [h("p", { class: "jn-fine", text: `Berth ${seat.berth} is a ${type.toLowerCase()} berth.` })] : []));
-      }
+      if (!seat?.berth) return fill(berthBox);
+      const g = berthGuide(j.cls, seat.berth);
+      const from = seat.typeFrom === "railway" ? "as on your booking" : seat.typeFrom === "layout" ? `by the standard numbering of ${CLASS_NAMES[j.cls] || j.cls} coaches` : null;
+      if (!g) return fill(berthBox, h("p", { class: "jn-fine", text: seat.type ? `Berth ${seat.berth} is a ${seat.type.toLowerCase()} berth${from ? `, ${from}` : ""}.` : `Berth ${seat.berth}. ${CLASS_NAMES[j.cls] || "This class"} coaches don't all number their berths the same way, so we can't place it for sure.` }));
+      const build = info?.coaches?.find((c) => c.id === seat.coach)?.build || null;
+      const bays = build ? BAYS[`${g.cls}:${build}`] || null : null;
       const main = g.places.slice(0, -2);
       const half = main.length / 2;
-      const cell = (p) => h("span", { class: `jn-b${p.n === g.berth ? " mine" : ""}`, "aria-hidden": "true" }, h("b", { text: String(p.n) }), h("small", { text: p.type }));
-      berthBox.replaceChildren(
-        h("p", { class: "jn-berth-head" }, h("b", { text: `Berth ${g.berth} · ${BERTH_NAMES[g.type]}` }), h("span", { text: `Bay ${g.bay} of ${g.bays}` })),
-        h(
-          "div",
-          { class: "jn-bays", "aria-hidden": "true" },
-          Array.from({ length: g.bays }, (_, i) => h("i", { class: i + 1 === g.bay ? "mine" : "" }))
-        ),
+      const cell = (p, k) => h("span", { class: `jn-b${p.n === g.berth ? " mine" : ""}`, vars: { "--k": String(k) }, "aria-hidden": "true" }, h("b", { text: String(p.n) }), h("small", { text: p.type }));
+      fill(berthBox, [
+        h("p", { class: "jn-berth-head" }, h("b", { text: `Berth ${g.berth} · ${BERTH_NAMES[g.type]}` }), h("span", { text: bays ? `Bay ${g.bay} of ${bays}` : `Bay ${g.bay}` })),
+        bays ? h("div", { class: "jn-bays", "aria-hidden": "true" }, Array.from({ length: bays }, (_, i) => h("i", { class: i + 1 === g.bay ? "mine" : "", vars: { "--k": String(i) } }))) : null,
         h(
           "div",
           { class: "jn-bay", role: "img", "aria-label": `Bay ${g.bay}, berths ${g.first} to ${g.last}. Berth ${g.berth} is the ${BERTH_NAMES[g.type].toLowerCase()} berth${g.side ? " on the side, along the aisle" : " in the main bay"}.` },
-          h("span", { class: "jn-bay-face" }, main.slice(0, half).map(cell)),
-          h("span", { class: "jn-bay-face" }, main.slice(half).map(cell)),
+          h("span", { class: "jn-bay-face" }, main.slice(0, half).map((p, k) => cell(p, k))),
+          h("span", { class: "jn-bay-face" }, main.slice(half).map((p, k) => cell(p, k + half))),
           h("span", { class: "jn-bay-aisle" }),
-          h("span", { class: "jn-bay-face side" }, g.places.slice(-2).map(cell))
+          h("span", { class: "jn-bay-face side" }, g.places.slice(-2).map((p, k) => cell(p, k + main.length)))
         ),
         h(
           "p",
-          { class: "jn-fine small", text: `Berths ${g.first}–${g.last}, ${g.bay > g.bays / 2 ? "nearer the end with the highest berth numbers" : "nearer the end with berth 1"}. ${g.side ? "Along the aisle, on the side." : "In the main bay."} Numbers are marked above every bay. Standard ${CLASS_NAMES[g.cls]} layout.` }
-        )
+          {
+            class: "jn-fine small",
+            text: `Berths ${g.first}–${g.last}: the ${ordinal(g.bay)} bay from the end with berth 1${bays ? `, so nearer the berth ${bays * g.places.length} end` : ""}. ${g.side ? "Along the aisle, on the side." : "In the main bay."} ${BERTH_NAMES[g.type]}${from ? `, ${from}` : ""}. Numbers are marked above every bay.`,
+          }
+        ),
+                ]
       );
     }
 
-    // Platform: the ticket's tentative one, against what the live tracker shows for your station
-    // (on the day, the live run; before that, the most recent run).
+    // Platform: every source side by side. They're all planned platforms; the day decides.
     async function paintPf() {
-      const ticket = j.booking?.platform || null;
       const live = isTrackable(j);
       let seen = j.platformSeen && Date.now() - Date.parse(j.platformSeen.at) < (live ? 10 * 60000 : 12 * 3600000) && j.platformSeen.live === live ? j.platformSeen : null;
       const show = () => {
-        const pf = seen?.pf || null;
-        const lines = [];
-        if (live && pf) lines.push(ticket && ticket !== pf ? `Live status says platform ${pf}. Your ticket said ${ticket}.` : `Live status says platform ${pf}${ticket ? ", as on your ticket" : ""}.`);
-        else if (ticket && pf) lines.push(pf === ticket ? `Platform ${ticket} on your ticket, and on the last run too.` : `Your ticket says platform ${ticket}, but the last run used ${pf}.`);
-        else if (ticket) lines.push(`Platform ${ticket} on your ticket, for now.`);
-        else if (pf) lines.push(`The last run used platform ${pf}.`);
-        if (!lines.length) return pfBox.replaceChildren();
-        pfBox.replaceChildren(
-          h("p", { class: "jn-pf-line" }, svg(icons.gate), lines[0]),
-          h("p", { class: "jn-fine small", text: "Platforms are confirmed on the day and can change at short notice. The station's displays and announcements have the final word." })
+        const says = [];
+        if (j.booking?.platform) says.push(["your ticket", j.booking.platform]);
+        const st = stopAt(j.from.code);
+        if (st?.pf && st.from?.pf === "both") says.push(["both timetables (RailYatri, ConfirmTkt)", st.pf]);
+        else if (st?.pf) says.push([`${NAMES[st.from?.pf] ? `${NAMES[st.from.pf]}'s` : "the"} timetable`, st.pf]);
+        else if (st?.from?.pf && typeof st.from.pf === "object") for (const [k, v] of Object.entries(st.from.pf)) says.push([`${NAMES[k]}'s timetable`, v]);
+        if (seen?.pf) says.push([live ? "live status" : "the last run", seen.pf]);
+        if (!says.length) return fill(pfBox);
+        const values = [...new Set(says.map(([, v]) => v))];
+        const liveSays = live && seen?.pf;
+        const line = liveSays
+          ? `Live status says platform ${seen.pf}.${values.length > 1 ? ` Before today: ${says.filter(([w]) => w !== "live status").map(([w, v]) => `${w} ${v}`).join(", ")}.` : ""}`
+          : values.length === 1
+            ? `Platform ${values[0]}. ${cap(listOf(says.map(([w]) => w)))} ${says.length > 1 ? "all say so" : "says so"}.`
+            : `The sources differ: ${says.map(([w, v]) => `${w} ${v}`).join(", ")}.`;
+        fill(pfBox, 
+          h("p", { class: "jn-pf-line" }, svg(icons.gate), h("span", { text: line })),
+          h("p", { class: "jn-fine small", text: "All of these are planned platforms, often from the same railway plan, so agreeing makes it likely, not certain. It's confirmed on the day; the station's displays and announcements have the final word." })
         );
       };
       show();
       if (seen) return;
       try {
         const data = await api("/api/train", { no: j.no, date: live ? j.startDate : addDays(today(), -1) }, { timeout: 20000, retries: 0 });
-        const stop = (data.stops || []).find((s) => s.code === j.from.code);
+        const stop = (data.stops || []).find((x) => x.code === j.from.code);
         seen = { pf: stop?.platform || null, live, at: new Date().toISOString() };
         updateJourney(j.id, { platformSeen: seen });
         show();
       } catch {
-        /* the ticket's platform stands on its own */
+        /* the other sources stand on their own */
       }
     }
 
-    paintPicker();
-    paintCoach();
-    paintBerth();
-    paintPf();
-    if (!order && seats.length) {
-      api("/api/coaches", { no: j.no }, { timeout: 15000, retries: 1 })
+    const paintAll = () => (paintPicker(), paintCoach(), paintBerth(), paintPf());
+    paintAll();
+    if (!info) {
+      api("/api/coaches", { no: j.no }, { timeout: 20000, retries: 1 })
         .then((d) => {
-          order = { coaches: d.coaches, engineFirst: d.engineFirst, at: new Date().toISOString() };
-          updateJourney(j.id, { coachOrder: order });
+          info = coachInfo(d);
+          updateJourney(j.id, { coachOrder: info });
         })
-        .catch((e) => (order = { error: e instanceof ApiError && e.code === "no_coach_order" ? "There's no published coach order for this train. The platform's coach display shows it on the day." : "Couldn't load the coach order just now." }))
-        .finally(() => paintCoach());
+        .catch((e) => (failed = e instanceof ApiError && e.code === "no_coach_order" ? null : "Couldn't reach the coach order just now."))
+        .finally(paintAll);
     }
 
     return h(
@@ -834,7 +928,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       pfBox,
       picker,
       seats.length ? h("div", { class: "jn-card" }, h("p", { class: "jn-card-t", text: "Find your coach" }), coachBox) : null,
-      seats.some((s) => s.berth) ? h("div", { class: "jn-card" }, h("p", { class: "jn-card-t", text: "Find your berth" }), berthBox) : null
+      seats.some((x) => x.berth) ? h("div", { class: "jn-card" }, h("p", { class: "jn-card-t", text: "Find your berth" }), berthBox) : null
     );
   }
 
@@ -969,7 +1063,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       }
     }
 
-    add.body.replaceChildren(
+    fill(add.body, 
       h("label", { class: "field-label", for: "jn-pnr-find", text: "Your PNR" }),
       h("div", { class: "jn-pnr-row" }, pnrIn),
       pnrErr,
@@ -994,22 +1088,51 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
    */
   async function journeyFromPnr(d, pnr) {
     const booking = bookingFrom(d);
-    // The ticket's own times win over the timetable's: they're what was booked (the two can differ
-    // by a few minutes when a timetable changes).
-    const base = { cls: d.cls || null, pnr, pnrLinked: true, booking, ...(seatFrom(booking) || {}), ...(ticketTimes(d) || {}) };
-    if (d.boardDate) {
-      try {
-        const between = await api("/api/between", { from: d.from.code, to: d.to.code, date: d.boardDate }, { timeout: 15000, retries: 1 });
-        const tr = (between.trains || []).find((x) => x.number === d.no);
-        if (tr) return { no: tr.number, name: d.name || tr.name, startDate: tr.startDate, from: tr.from, to: tr.to, dep: tr.dep, arr: tr.arr, schedMin: tr.durationMin, km: tr.distanceKm ?? null, classes: tr.classes || [], ...base };
-      } catch {
-        /* the ticket's own details are enough */
-      }
-    }
+    // Three looks at the same trip, side by side: the timetable search (for the day the run
+    // starts, distance and classes), the train's stops from two timetables (for the times at
+    // your stations), and the ticket (checked against those times, never assumed to be either).
+    const [between, info] = await Promise.all([
+      d.boardDate ? api("/api/between", { from: d.from.code, to: d.to.code, date: d.boardDate }, { timeout: 15000, retries: 1 }).catch(() => null) : null,
+      api("/api/coaches", { no: d.no }, { timeout: 20000, retries: 1 }).catch(() => null),
+    ]);
+    const tr = (between?.trains || []).find((x) => x.number === d.no && x.from.code === d.from.code && x.to.code === d.to.code);
+    const tt = info?.stops ? timetableTimes(info.stops, d.from.code, d.to.code, d.boardDate, { from: d.from.time, to: d.to.time }) : null;
+    const base = { cls: d.cls || null, pnr, pnrLinked: true, booking, ...(seatFrom(booking) || {}), ...(info?.coaches || info?.stops ? { coachOrder: coachInfo(info) } : {}) };
+    if (tr)
+      return {
+        no: tr.number,
+        name: d.name || tr.name,
+        startDate: tr.startDate,
+        from: tr.from,
+        to: tr.to,
+        dep: tt?.dep || tr.dep,
+        arr: tt?.arr || tr.arr,
+        fromArr: tt?.fromArr || null,
+        schedMin: tt?.schedMin ?? tr.durationMin,
+        timeCheck: tt?.check || null,
+        km: tr.distanceKm ?? null,
+        classes: tr.classes || [],
+        ...base,
+      };
+    // No timetable search: the stops' times if we have them, else the ticket's own, marked as such.
     const day = d.boardDate || today();
-    const dep = new Date(`${day}T${d.from.time || "00:00"}:00+05:30`).toISOString();
-    const arr = new Date(Date.parse(dep) + (d.journeyMin || 0) * 60000).toISOString();
-    return { no: d.no, name: d.name || "", startDate: day, from: { code: d.from.code, name: d.from.name }, to: { code: d.to.code, name: d.to.name }, dep, arr, schedMin: d.journeyMin, km: null, classes: d.cls ? [d.cls] : [], ...base };
+    const dep = tt?.dep || new Date(`${day}T${d.from.time || "00:00"}:00+05:30`).toISOString();
+    const arr = tt?.arr || new Date(Date.parse(dep) + (d.journeyMin || 0) * 60000).toISOString();
+    return {
+      no: d.no,
+      name: d.name || "",
+      startDate: day,
+      from: { code: d.from.code, name: d.from.name },
+      to: { code: d.to.code, name: d.to.name },
+      dep,
+      arr,
+      fromArr: tt?.fromArr || null,
+      schedMin: tt?.schedMin ?? d.journeyMin,
+      timeCheck: tt?.check || { ticketFrom: d.from.time, ticketTo: d.to.time, fromMatch: null, toMatch: null, onlyTicket: true },
+      km: null,
+      classes: d.cls ? [d.cls] : [],
+      ...base,
+    };
   }
 
   function stepDetails() {
@@ -1071,7 +1194,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       editing ? "Save changes" : "Save journey"
     );
 
-    add.body.replaceChildren(
+    fill(add.body, 
       h(
         "div",
         { class: "jn-summary" },

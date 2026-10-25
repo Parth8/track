@@ -1604,62 +1604,254 @@ async function weatherRoute(url, ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* /api/coaches: a train's published coach order                       */
+/* /api/coaches: a train's coach order and stops, from several sources */
 /* ------------------------------------------------------------------ */
 
-// From erail.in's public train data, which carries the railway's published composition: each
-// coach as "kind,id,class" from the engine end, e.g. ",,En:LPR,LPR,LPR:GN,GN,GN:H,H1,1A:…".
-// It's the usual order: the railway can change a rake on the day, and at some stations the
-// train reverses, so which end the engine is at depends on the station. The app's guide only
-// needs the order itself ("B3 is 8 coaches from S4, towards S3"), so it holds either way.
+// Nothing here is assumed that a source doesn't say. Each source is read on its own, strictly:
+//  - coach order: erail.in, ConfirmTkt and etrain.info each publish one. The order most of them
+//    agree on is used; any that disagree are named, and coach details (like "LHB") are taken only
+//    from sources that agree on the order.
+//  - stops: RailYatri's and ConfirmTkt's timetables, station by station. A time or platform is
+//    kept where they agree (or only one has it); where they differ, both are passed on, so the
+//    app can show the difference instead of picking one.
+//  - which end the engine is at: each source says whether its order starts at the engine (at the
+//    train's start). Whether the train reverses on the way is only reported if a source flags it.
+
+const COACH_ID = /^[A-Z]{1,5}\d{0,2}$/;
+const NUMBERED = /^[A-Z]{1,2}\d{1,2}$/; // passenger coaches carry a number: H1, A2, B3, S7, M1, C2
+const CLASS_CODE = /^(1A|2A|3A|3E|SL|CC|EC|EA|EV|2S|FC)$/;
+const GENERAL = /^(GN|GS|GEN|UR|D)$/;
+const coachKind = (id) => (/^[A-Z]+/.exec(id) || [id])[0];
+const minsToHm = (m) => (Number.isFinite(m) && m > 0 ? `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}` : null);
+const hm = (t) => (/^\d{1,2}:\d{2}$/.test(String(t || "").trim()) ? String(t).trim().padStart(5, "0") : null);
 
 async function coachesRoute(url, ctx) {
   const no = (url.searchParams.get("no") || "").trim();
   if (!/^\d{5}$/.test(no)) throw new ApiError(400, "invalid_train", "Train numbers have 5 digits.");
   return cached(ctx, `coaches/${no}`, TTL.coaches, async () => {
-    const slow = () => new ApiError(502, "upstream_unavailable", "The coach order is slow to load right now. Try again shortly.");
-    let text;
-    try {
-      const res = await getWithRetry(`https://erail.in/rail/getTrains.aspx?TrainNo=${no}&DataSource=0&Language=0&Cache=true`, {
-        headers: { "User-Agent": UA, Referer: "https://erail.in/" },
-      }, { timeout: 10000, retries: 1 });
-      if (!res.ok) throw slow();
-      text = await res.text();
-    } catch (err) {
-      log("warn", "coaches failed", no, String(err && err.message));
-      throw err instanceof ApiError ? err : slow();
-    }
-    const order = parseComposition(text, no);
-    if (!order) throw new ApiError(404, "no_coach_order", "There's no published coach order for this train.");
-    return order;
+    const get = async (name, u, headers = {}) => {
+      try {
+        const res = await getWithRetry(u, { headers: { "User-Agent": UA, ...headers } }, { timeout: 10000, retries: 1 });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        return await res.text();
+      } catch (err) {
+        log("warn", "coaches source failed", name, no, String(err && err.message));
+        return null;
+      }
+    };
+    const timetable = async () => {
+      try {
+        return await railYatriTimetable(no);
+      } catch (err) {
+        log("warn", "coaches source failed", "railyatri", no, String(err && err.message));
+        return null;
+      }
+    };
+    const [erail, ctkt, etrain, ry] = await Promise.all([
+      get("erail", `https://erail.in/rail/getTrains.aspx?TrainNo=${no}&DataSource=0&Language=0&Cache=true`, { Referer: "https://erail.in/" }),
+      get("confirmtkt", `https://www.confirmtkt.com/train-schedule/${no}`),
+      get("etrain", `https://etrain.info/train/${no}/schedule`),
+      timetable(),
+    ]);
+    const ct = ctkt ? confirmTktData(ctkt, no) : null;
+    const read = [
+      erail && parseErailOrder(erail, no),
+      ct && parseConfirmTktOrder(ct),
+      etrain && parseEtrainOrder(etrain, no),
+    ].filter(Boolean);
+    const order = coachConsensus(read);
+    const stops = mergeStops(ry ? railYatriStops(ry) : null, ct ? confirmTktStops(ct) : null);
+    if (!order && !stops) throw new ApiError(404, "no_coach_order", "There's no published coach order for this train.");
+    return { kind: "coaches", no, ...(order || { coaches: null, engineFirst: null, agreement: null, sources: [] }), stops, status: {} };
   });
 }
 
-const COACH_ID = /^[A-Z]{1,5}\d{0,2}$/;
+/* ---------- coach order, one source at a time ---------- */
 
-/** The composition field of this train's record, read strictly: every coach must look like one. */
-function parseComposition(text, no) {
+/** erail: ",,En:LPR,LPR,LPR:GN,GN,GN:H,H1,1A:…" in this train's own record. */
+function parseErailOrder(text, no) {
   const record = String(text)
     .split("^")
     .slice(1)
     .map((r) => r.split("~"))
     .find((f) => f[0] === no); // this train's record, never another's
-  if (!record) return null;
-  const field = record.find((f) => /(^|:)[A-Z]{1,5},[A-Z]{1,5}\d{0,2},[A-Z0-9]{1,5}:/.test(f));
+  const field = record?.find((f) => /(^|:)[A-Z]{1,5},[A-Z]{1,5}\d{0,2},[A-Z0-9]{1,5}:/.test(f));
   if (!field) return null;
   const coaches = [];
-  let engineFirst = false;
+  let engineFirst = null;
   for (const group of field.split(":").filter(Boolean)) {
     const [kind, id, cls] = group.split(",").map((x) => (x || "").trim().toUpperCase());
     if (!kind && !id && /^EN/.test(cls)) {
-      if (coaches.length === 0) engineFirst = true; // the order starts at the engine
+      engineFirst = coaches.length === 0;
       continue;
     }
     if (!COACH_ID.test(id) || !COACH_ID.test(kind)) return null;
-    coaches.push({ id, kind, cls: /^(1A|2A|3A|3E|SL|CC|EC|EA|EV|2S|FC)$/.test(cls) ? cls : null });
+    coaches.push({ id: GENERAL.test(id) ? "GN" : id, kind: GENERAL.test(kind) ? "GN" : kind, cls: CLASS_CODE.test(cls) ? cls : null });
   }
-  if (coaches.length < 4 || coaches.length > 30) return null;
-  return { kind: "coaches", no, engineFirst, coaches, source: "erail", status: {} };
+  return orderOk(coaches) ? { source: "erail", coaches, engineFirst } : null;
+}
+
+/** ConfirmTkt's page carries its train data as JSON, for this train number only. */
+function confirmTktData(html, no) {
+  const m = /var\s+data\s*=\s*'([\s\S]*?)';\s*\n/.exec(html) || /var\s+data\s*=\s*'([\s\S]*?)';/.exec(html);
+  if (!m) return null;
+  try {
+    const d = JSON.parse(m[1].replace(/\\'/g, "'"));
+    return String(d.TrainNumberString || d.TrainNo) === no ? d : null;
+  } catch {
+    return null;
+  }
+}
+
+/** ConfirmTkt: ",En:,GS:,GS:H1,1A:A2,2A:…" as id,class pairs. */
+function parseConfirmTktOrder(d) {
+  const raw = String(d.CoachPosition || "");
+  if (!raw.includes(":")) return null;
+  const coaches = [];
+  let engineFirst = null;
+  for (const group of raw.split(":").filter(Boolean)) {
+    const [id, cls] = group.split(",").map((x) => (x || "").trim().toUpperCase());
+    if (!id && /^EN/.test(cls)) {
+      engineFirst = coaches.length === 0;
+      continue;
+    }
+    const cid = id || cls; // an unnumbered coach is named by its type, like GS
+    if (!COACH_ID.test(cid)) return null;
+    const gen = GENERAL.test(cid);
+    coaches.push({ id: gen ? "GN" : cid, kind: gen ? "GN" : coachKind(cid), cls: CLASS_CODE.test(cls) ? cls : null });
+  }
+  return orderOk(coaches) ? { source: "confirmtkt", coaches, engineFirst } : null;
+}
+
+/** etrain.info: each coach a block with its position, a type ("3A_LHB") and its name. */
+function parseEtrainOrder(html, no) {
+  if (!new RegExp(`\\b${no}\\b`).test(html)) return null;
+  const start = html.indexOf('class="inlineblock"');
+  if (start < 0) return null;
+  const row = html.slice(start, html.indexOf("</tr>", start) > 0 ? html.indexOf("</tr>", start) : undefined);
+  const coaches = [];
+  let engineFirst = null;
+  for (const block of row.split('class="inlineblock"').slice(1)) {
+    const spans = [...block.matchAll(/<span[^>]*>([^<]*)<\/span>/g)].map((m) => decodeHtml(m[1]).trim());
+    const id = (spans.at(-1) || "").toUpperCase();
+    const type = (/\brake="([A-Z0-9]+)_([A-Z]+)"/i.exec(block) || []).slice(1);
+    if (/rake-eng/.test(block) || id === "ENG") {
+      engineFirst = coaches.length === 0;
+      continue;
+    }
+    if (!COACH_ID.test(id)) return null;
+    const gen = GENERAL.test(id);
+    coaches.push({ id: gen ? "GN" : id, kind: gen ? "GN" : coachKind(id), cls: CLASS_CODE.test((type[0] || "").toUpperCase()) ? type[0].toUpperCase() : null, build: type[1] ? type[1].toUpperCase() : null });
+  }
+  return orderOk(coaches) ? { source: "etrain", coaches, engineFirst } : null;
+}
+
+const orderOk = (coaches) => coaches.length >= 4 && coaches.length <= 30 && coaches.some((c) => NUMBERED.test(c.id));
+const SOURCE_RANK = ["erail", "confirmtkt", "etrain"]; // only to break an exact tie, and the app says so
+
+/**
+ * The order most sources agree on, compared by their numbered coaches (sources differ on how they
+ * name the unnumbered ones at the ends). A list that's another read from the other end is the same
+ * rake. Returns the fullest agreeing list, what each source said, and details only agreeing
+ * sources give. The engine's end is given only when every agreeing source that marks it puts it at
+ * the same end of the returned list.
+ */
+function coachConsensus(read) {
+  if (!read.length) return null;
+  const seq = (r) => r.coaches.filter((c) => NUMBERED.test(c.id)).map((c) => c.id);
+  const canon = (r) => {
+    const f = seq(r).join(" ");
+    const b = [...seq(r)].reverse().join(" ");
+    return f < b ? f : b;
+  };
+  const groups = new Map();
+  for (const r of read) groups.set(canon(r), [...(groups.get(canon(r)) || []), r]);
+  const ranked = [...groups.values()].sort((a, b) => b.length - a.length || SOURCE_RANK.indexOf(a[0].source) - SOURCE_RANK.indexOf(b[0].source));
+  const win = ranked[0];
+  const tie = ranked.length > 1 && ranked[1].length === win.length;
+  const base = [...win].sort((a, b) => b.coaches.length - a.coaches.length || SOURCE_RANK.indexOf(a.source) - SOURCE_RANK.indexOf(b.source))[0];
+  const forward = (r) => seq(r).join(" ") === seq(base).join(" ");
+  const coaches = base.coaches.map((c) => {
+    const more = win.map((r) => r.coaches.find((x) => x.id === c.id && NUMBERED.test(x.id))).filter(Boolean);
+    const build = more.map((x) => x.build).find(Boolean) || null;
+    return { id: c.id, kind: c.kind, cls: c.cls || more.map((x) => x.cls).find(Boolean) || null, ...(build ? { build } : {}) };
+  });
+  // Where each agreeing source puts the engine, turned to the returned list's direction.
+  const ends = win.filter((r) => r.engineFirst != null).map((r) => (forward(r) ? r.engineFirst : !r.engineFirst));
+  return {
+    coaches,
+    engineFirst: ends.length && ends.every(Boolean) ? true : ends.length && ends.every((x) => !x) ? false : null,
+    engineSources: ends.length,
+    directions: win.every(forward) ? "same" : "mixed", // "mixed": sources read the rake from different ends
+    agreement: read.length === 1 ? "single" : win.length === read.length ? "all" : tie ? "tie" : "majority",
+    sources: read.map((r) => ({ name: r.source, agrees: win.includes(r), reversed: win.includes(r) && !forward(r), order: seq(r).join(" ") })),
+  };
+}
+
+/* ---------- stops, from two timetables ---------- */
+
+async function railYatriTimetable(no) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const id = await buildId(attempt > 0);
+    const res = await getWithRetry(`https://www.railyatri.in/_next/data/${id}/time-table/${no}.json`, { headers: { "User-Agent": UA, Accept: "application/json" } });
+    if (res.status === 404) continue; // build id rotated
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const d = (await res.json())?.pageProps?.trainTimeTable?.trainScheduleDetail?.[0];
+    return d && String(d.train_number) === no ? d : null;
+  }
+  return null;
+}
+
+function railYatriStops(d) {
+  const out = (d.route || [])
+    .filter((x) => x.stop && /^[A-Z]{1,5}$/.test(x.station_code || ""))
+    .map((x) => ({
+      code: x.station_code,
+      arr: minsToHm(Number(x.sta_min)),
+      dep: minsToHm(Number(x.std_min)),
+      day: Number(x.day) || null,
+      pf: Number(x.platform_number) > 0 ? String(x.platform_number) : null,
+      reversal: x.interchange_flag === true ? true : null, // only a "yes" means something
+    }));
+  // Some routes list a station more than once; keep the first.
+  return out.filter((s, i) => out.findIndex((x) => x.code === s.code) === i);
+}
+
+function confirmTktStops(d) {
+  const out = (d.Schedule || [])
+    .filter((x) => /^[A-Z]{1,5}$/.test(x.StationCode || ""))
+    .map((x) => ({ code: x.StationCode, arr: hm(x.ArrivalTime), dep: hm(x.DepartureTime), day: Number(x.Day) || null, pf: /^\d{1,2}[A-Z]?$/.test(String(x.ExpectedPlatformNo || "").trim()) ? String(x.ExpectedPlatformNo).trim() : null }));
+  return out.filter((s, i) => out.findIndex((x) => x.code === s.code) === i);
+}
+
+/**
+ * Two timetables, station by station: a value both give and agree on is kept; one only one gives
+ * is kept and marked as single-sourced; one they differ on is dropped, with both versions passed on.
+ */
+function mergeStops(a, b) {
+  if (!a?.length && !b?.length) return null;
+  const codes = [...new Set([...(a || []).map((s) => s.code), ...(b || []).map((s) => s.code)])];
+  return codes.map((code) => {
+    const x = a?.find((s) => s.code === code);
+    const y = b?.find((s) => s.code === code);
+    const stop = { code };
+    const seen = {};
+    for (const f of ["arr", "dep", "pf"]) {
+      const u = x?.[f] ?? null;
+      const v = y?.[f] ?? null;
+      if (u != null && v != null && u !== v) {
+        stop[f] = null;
+        seen[f] = { railyatri: u, confirmtkt: v };
+      } else {
+        stop[f] = u ?? v;
+        if (stop[f] != null) seen[f] = u != null && v != null ? "both" : u != null ? "railyatri" : "confirmtkt";
+      }
+    }
+    stop.day = x?.day ?? y?.day ?? null;
+    stop.reversal = x?.reversal || null;
+    stop.from = seen;
+    return stop;
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -2167,4 +2359,4 @@ function pnrPassenger(n, booking, current, seatText) {
   };
 }
 export { extractPnr };
-export { parseComposition };
+export { parseErailOrder, parseConfirmTktOrder, parseEtrainOrder, confirmTktData, coachConsensus, mergeStops };

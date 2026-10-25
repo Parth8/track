@@ -194,16 +194,56 @@ export function bookingFrom(data) {
 }
 
 /**
- * When the ticket says you leave and arrive: the day you board and the boarding time, then the
- * journey time after that. Null unless the PNR gave all three.
+ * Times at your stations from the railway timetable (the stops /api/coaches returns, already
+ * cross-checked between two timetables), anchored to the day you board, and checked against the
+ * times on the ticket. RailYatri's PNR page shows when the train *arrives* at your boarding
+ * station (5:45 PM at SBC, where it leaves at 6:00 PM), so the ticket's time is matched to the
+ * timetable's arrival or departure rather than taken as either.
  */
-export function ticketTimes(data) {
-  const day = data?.boardDate;
-  const at = data?.from?.time;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day || "") || !/^\d{2}:\d{2}$/.test(at || "") || !(data.journeyMin > 0)) return null;
-  const dep = Date.parse(`${day}T${at}:00+05:30`);
-  return { dep: new Date(dep).toISOString(), arr: new Date(dep + data.journeyMin * 60000).toISOString(), schedMin: data.journeyMin };
+export function timetableTimes(stops, fromCode, toCode, boardDate, ticket = {}) {
+  const a = stops?.find((s) => s.code === fromCode);
+  const b = stops?.find((s) => s.code === toCode);
+  if (!a?.dep || !b?.arr || !/^\d{4}-\d{2}-\d{2}$/.test(boardDate || "")) return null;
+  const at = (day, t) => Date.parse(`${day}T${t}:00+05:30`);
+  const DAY = 86400000;
+  const fromMatch = ticket.from && ticket.from === a.arr ? "arrival" : ticket.from && ticket.from === a.dep ? "departure" : ticket.from ? "neither" : null;
+  let dep;
+  let here = null;
+  if (fromMatch === "departure") {
+    dep = at(boardDate, a.dep);
+    if (a.arr) here = at(boardDate, a.arr) - (a.arr > a.dep ? DAY : 0);
+  } else {
+    // The day of boarding is the day the train reaches your station.
+    here = a.arr ? at(boardDate, a.arr) : null;
+    dep = at(boardDate, a.dep) + (a.arr && a.dep < a.arr ? DAY : 0);
+  }
+  let arr = at(addDays(boardDate, Math.max(0, (b.day ?? 0) - (a.day ?? 0))), b.arr);
+  while (arr <= dep) arr += DAY;
+  return {
+    dep: new Date(dep).toISOString(),
+    fromArr: here != null ? new Date(here).toISOString() : null,
+    arr: new Date(arr).toISOString(),
+    schedMin: Math.round((arr - dep) / 60000),
+    check: {
+      ticketFrom: ticket.from || null,
+      ticketTo: ticket.to || null,
+      fromMatch,
+      toMatch: ticket.to ? ticket.to === b.arr : null,
+      sources: { fromArr: a.from?.arr || null, fromDep: a.from?.dep || null, toArr: b.from?.arr || null },
+    },
+  };
 }
+
+/** What a journey keeps of /api/coaches: the agreed order, who agreed, and the stops. */
+export const coachInfo = (d) => ({
+  coaches: d.coaches,
+  engineFirst: d.engineFirst,
+  agreement: d.agreement,
+  directions: d.directions,
+  sources: d.sources,
+  stops: d.stops,
+  at: new Date().toISOString(),
+});
 
 /** The first passenger's coach and berth, once there is one, for the journey's own seat fields. */
 export function seatFrom(booking) {

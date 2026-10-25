@@ -52,8 +52,13 @@ const upstream = async (url) => {
   const u = new URL(url);
   if (u.hostname.includes("aerodatabox")) return fidsAnswer(url) || flightAnswer(url) || new Response(null, { status: 204 });
   if (u.hostname === "sa.railyatri.in") return new Response(JSON.stringify(seatAnswer(u)), { headers: { "Content-Type": "application/json" } });
+  // Recorded answers for 12786 from every source the coach guide reads
+  if (u.hostname === "www.railyatri.in" && u.pathname.startsWith("/live-train-status/")) return new Response('<script id="__NEXT_DATA__">{"buildId":"TEST"}</script>');
+  if (u.hostname === "www.railyatri.in" && u.pathname.startsWith("/_next/data/")) return new Response(rec("railyatri-tt-12786.json"));
   if (u.hostname === "www.railyatri.in") return pnrAnswer(u);
-  if (u.hostname === "erail.in") return new Response(ERAIL); // recorded coach order for 12786
+  if (u.hostname === "erail.in") return new Response(rec("erail-12786.txt"));
+  if (u.hostname === "www.confirmtkt.com") return new Response(rec("confirmtkt-12786.html"));
+  if (u.hostname === "etrain.info") return new Response(rec("etrain-12786.html"));
   const key = `${u.searchParams.get("from")}-${u.searchParams.get("to")}`;
   if (key.startsWith("PURI")) return new Response("down", { status: 503 });
   const body = FIXTURES[key] ? fixture(FIXTURES[key]) : { success: true, train_between_stations: [], alternate_trains: [] };
@@ -63,7 +68,7 @@ const upstream = async (url) => {
 // PNR 1234567890 is a recorded booking (12786 SBC → KCG, 3A, one passenger in B3/59), moved to
 // 3 days from now; PNR 1234567891 is the same booking with two passengers, one still waitlisted.
 const PNR_PAGE = readFileSync(new URL("./fixtures/pnr-sbc-kcg.html", import.meta.url), "utf8");
-const ERAIL = readFileSync(new URL("./fixtures/erail-12786.txt", import.meta.url), "utf8");
+const rec = (n) => readFileSync(new URL(`./fixtures/${n}`, import.meta.url), "utf8");
 const PNR_PENDING = readFileSync(new URL("./fixtures/pnr-pending.html", import.meta.url), "utf8");
 function pnrAnswer(u) {
   const pnr = u.pathname.split("/").pop();
@@ -814,7 +819,9 @@ await test("journeys: a PNR fills in the whole trip, and every passenger on it",
   const dayName = (iso) => new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(`${iso}T12:00:00Z`));
   const ends = await sheet.locator(".jn-summary .jn-end-day").allTextContents();
   assert.deepEqual(ends.map((t) => t.replace(",", "")), [dayName(addDays(istToday(), 3)), dayName(addDays(istToday(), 4))].map((t) => t.replace(",", "")));
-  assert.equal(await sheet.locator(".jn-summary .jn-dur").textContent(), "11h 55m");
+  // It leaves SBC at 6:00 PM (both timetables); the ticket's 5:45 PM is when it gets there
+  assert.equal(await sheet.locator(".jn-summary .jn-dur").textContent(), "11h 40m");
+  assert.ok(!/\bnull\b/.test(await sheet.textContent()), "no empty slot printed as null");
   assert.equal(await sheet.locator('.jn-classes button[aria-pressed="true"]').textContent(), "3A");
   assert.equal(await sheet.locator("#jn-coach").inputValue(), "B3");
   assert.equal(await sheet.locator("#jn-seat").inputValue(), "59 UB", "the berth type comes with it");
@@ -827,7 +834,9 @@ await test("journeys: a PNR fills in the whole trip, and every passenger on it",
   await settle(p, 500);
   const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("journeys")));
   assert.deepEqual([saved[0].no, saved[0].from.code, saved[0].to.code, saved[0].pnrLinked, saved[0].booking.passengers.length], ["12786", "SBC", "KCG", true, 2]);
-  assert.match(saved[0].dep, /T12:15:00\.000Z$/, "05:45 PM in India");
+  assert.match(saved[0].dep, /T12:30:00\.000Z$/, "leaves at 6:00 PM in India");
+  assert.match(saved[0].fromArr, /T12:15:00\.000Z$/, "gets in at 5:45 PM, as the ticket shows");
+  assert.equal(saved[0].timeCheck.fromMatch, "arrival");
   // The card says it's still waitlisted, and how many are travelling
   const card = p.locator(".jcard");
   assert.match(await card.locator(".jc-meta").textContent(), /WL 4.*B3 · 59 UB · 2 travellers/);
@@ -836,7 +845,11 @@ await test("journeys: a PNR fills in the whole trip, and every passenger on it",
   await det.waitFor();
   assert.equal(await det.locator(".jn-pax-row").count(), 2);
   assert.match(await det.textContent(), /PF 5 \(tentative\)/);
-  assert.equal(await det.locator(".jn-leg-dur").textContent(), "11h 55m journey");
+  assert.equal(await det.locator(".jn-leg-dur").textContent(), "11h 40m journey");
+  await det.locator(".jn-coach").first().waitFor();
+  assert.ok(!/\bnull\b/.test(await det.textContent()), "no empty slot printed as null");
+  assert.match(await det.textContent(), /Arrives 5:45 PM, 15 min halt/);
+  assert.match(await det.locator(".jn-times-note").textContent(), /Your ticket shows 5:45 PM, when the train gets to KSR Bengaluru\. It leaves at 6:00 PM, as both timetables say\./);
   assert.equal(await det.locator(".jn-leg-day").count(), 2, "a date by each station");
   assert.equal(await det.locator(".cta", { hasText: "Share trip" }).count(), 1);
   assert.deepEqual(p.errors, []);
@@ -858,18 +871,24 @@ await test("journeys: on the platform, find your coach and your berth, and name 
   await det.locator(".jn-coach.mine").waitFor();
   // The coach order, with B3 marked; tap the coach you're standing at
   assert.equal(await det.locator(".jn-coach").count(), 22);
-  assert.equal(await det.locator(".jn-coach.mine").textContent(), "B3");
-  assert.match(await det.locator(".jn-coach-say").textContent(), /B3 is coach 10 of 22 from the engine end, 13 from the other end/);
-  await det.locator(".jn-coach", { hasText: /^S4$/ }).click();
+  assert.equal(await det.locator(".jn-coach.mine b").textContent(), "B3");
+  assert.match(await det.locator(".jn-coach-say").textContent(), /B3 is coach 10 of 22 from the LPR end, and 13 from the SLRD end/);
+  // Which end leads is only "probably", with its reasons
+  assert.match(await det.locator(".jn-coach-front").textContent(), /Probably the LPR end comes in first, behind the engine\. The sources that show the engine put it at the LPR end, and RailYatri's timetable lists no reversal before KSR Bengaluru\./);
+  assert.match(await det.locator(".jn-coachbox").textContent(), /erail\.in and ConfirmTkt list this order\. etrain\.info lists a different one\./);
+  assert.equal(await det.locator(".jn-loco").count(), 1, "the engine is drawn at its end");
+  await det.locator(".jn-coach b", { hasText: /^S4$/ }).click();
   assert.equal(await det.locator(".jn-coach-say").textContent(), "From S4, walk 6 coaches towards S5, about 140 m.");
-  await det.locator(".jn-coach", { hasText: /^B2$/ }).click();
+  await det.locator(".jn-coach b", { hasText: /^B2$/ }).click();
   assert.equal(await det.locator(".jn-coach-say").textContent(), "From B2, walk 1 coach towards B3, about 20 m.");
   // The berth inside the coach: bay 8 of 9, upper, on the main side
-  assert.match(await det.locator(".jn-berth-head").textContent(), /Berth 59 · Upper.*Bay 8 of 9/);
+  // Bay 8 is certain; how many bays the coach has isn't (the source that gives the build disagrees)
+  assert.equal(await det.locator(".jn-berth-head").textContent(), "Berth 59 · UpperBay 8");
+  assert.equal(await det.locator(".jn-bays").count(), 0);
   assert.equal(await det.locator(".jn-b.mine").textContent(), "59UB");
   assert.match(await det.locator(".jn-bay").getAttribute("aria-label"), /berths 57 to 64.*upper berth in the main bay/);
   // The platform: only the ticket's for now (no live data in this test)
-  assert.match(await det.locator(".jn-pf-line").textContent(), /Platform 5 on your ticket/);
+  assert.equal(await det.locator(".jn-pf-line").textContent(), "Platform 5. Your ticket and both timetables (RailYatri, ConfirmTkt) all say so.");
   // Add who's travelling; it stays through a re-check
   await det.locator(".jn-pax-edit").click();
   await det.locator(".jn-pax-form input").first().fill("Asha Rao");
@@ -883,6 +902,34 @@ await test("journeys: on the platform, find your coach and your berth, and name 
   assert.match(await det.locator(".jn-pax-who small").textContent(), /^Asha Rao · 31 · Female/, "kept after checking again");
   const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("journeys"))[0]);
   assert.deepEqual(saved.travellers, { 1: { name: "Asha Rao", age: 31, gender: "F" } });
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: ticket times are matched to the timetable, never assumed to be departures", async () => {
+  const p = await page();
+  await p.goto(`${SITE}?m=train`);
+  const r = await p.evaluate(async () => {
+    const { timetableTimes } = await import("./js/journeys.js");
+    const t = (stops, from, to, day, ticket) => {
+      const x = timetableTimes(stops, from, to, day, ticket);
+      return x && { ...x, check: { fromMatch: x.check.fromMatch, toMatch: x.check.toMatch } };
+    };
+    const sbc = { code: "SBC", arr: "17:45", dep: "18:00", day: 1 };
+    const kcg = { code: "KCG", arr: "05:40", dep: null, day: 2 };
+    return {
+      arrival: t([sbc, kcg], "SBC", "KCG", "2026-11-14", { from: "17:45", to: "05:40" }),
+      departure: t([sbc, kcg], "SBC", "KCG", "2026-11-14", { from: "18:00", to: "05:40" }),
+      neither: t([sbc, kcg], "SBC", "KCG", "2026-11-14", { from: "17:30", to: "05:50" }),
+      // gets in before midnight, leaves after it
+      midnight: t([{ code: "A", arr: "23:50", dep: "00:05", day: 1 }, { code: "B", arr: "06:00", day: 2 }], "A", "B", "2026-11-14", { from: "23:50" }),
+      missing: t([sbc], "SBC", "KCG", "2026-11-14", {}),
+    };
+  });
+  assert.deepEqual([r.arrival.dep, r.arrival.fromArr, r.arrival.arr, r.arrival.schedMin, r.arrival.check.fromMatch, r.arrival.check.toMatch], ["2026-11-14T12:30:00.000Z", "2026-11-14T12:15:00.000Z", "2026-11-15T00:10:00.000Z", 700, "arrival", true]);
+  assert.deepEqual([r.departure.dep, r.departure.check.fromMatch], ["2026-11-14T12:30:00.000Z", "departure"]);
+  assert.deepEqual([r.neither.check.fromMatch, r.neither.check.toMatch], ["neither", false]);
+  assert.deepEqual([r.midnight.fromArr, r.midnight.dep, r.midnight.arr], ["2026-11-14T18:20:00.000Z", "2026-11-14T18:35:00.000Z", "2026-11-15T00:30:00.000Z"]);
+  assert.equal(r.missing, null, "no destination in the timetable: no guess");
   assert.deepEqual(p.errors, []);
 });
 
