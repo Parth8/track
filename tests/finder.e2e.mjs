@@ -869,26 +869,32 @@ await test("journeys: on the platform, find your coach and your berth, and name 
   await p.locator(".jcard").click();
   const det = p.locator("#journey-detail");
   await det.locator(".jn-coach.mine").waitFor();
-  // The coach order, with B3 marked; tap the coach you're standing at
+  // The answers first: platform, coach, berth
+  const tiles = await det.locator(".jn-pass-tile").allInnerTexts();
+  assert.deepEqual(tiles.map((t) => t.replace(/\s+/g, " ").trim()), ["PLATFORM 5 Likely", "COACH B3 AC 3 Tier", "BERTH 59 Upper"]);
+  // The coach order, with B3 marked; one instruction at a time
   assert.equal(await det.locator(".jn-coach").count(), 22);
   assert.equal(await det.locator(".jn-coach.mine b").textContent(), "B3");
-  assert.match(await det.locator(".jn-coach-say").textContent(), /B3 is coach 10 of 22 from the LPR end, and 13 from the SLRD end/);
-  // Which end leads is only "probably", with its reasons
-  assert.match(await det.locator(".jn-coach-front").textContent(), /Probably the LPR end comes in first, behind the engine\. The sources that show the engine put it at the LPR end, and RailYatri's timetable lists no reversal before KSR Bengaluru\./);
-  assert.match(await det.locator(".jn-coachbox").textContent(), /erail\.in and ConfirmTkt list this order\. etrain\.info lists a different one\./);
-  assert.equal(await det.locator(".jn-loco").count(), 1, "the engine is drawn at its end");
+  const coachSay = det.locator(".jn-coachbox .jn-coach-say");
+  assert.equal(await coachSay.textContent(), "Tap the coach you're standing at");
   await det.locator(".jn-coach b", { hasText: /^S4$/ }).click();
-  assert.equal(await det.locator(".jn-coach-say").textContent(), "From S4, walk 6 coaches towards S5, about 140 m.");
+  assert.equal(await coachSay.textContent(), "Walk 6 coaches towards S5about 140 m");
   await det.locator(".jn-coach b", { hasText: /^B2$/ }).click();
-  assert.equal(await det.locator(".jn-coach-say").textContent(), "From B2, walk 1 coach towards B3, about 20 m.");
-  // The berth inside the coach: bay 8 of 9, upper, on the main side
-  // Bay 8 is certain; how many bays the coach has isn't (the source that gives the build disagrees)
-  assert.equal(await det.locator(".jn-berth-head").textContent(), "Berth 59 · UpperBay 8");
-  assert.equal(await det.locator(".jn-bays").count(), 0);
+  assert.equal(await coachSay.textContent(), "Walk 1 coach towards B3about 20 m");
+  assert.equal(await det.locator(".jn-coachbox .jn-card-head .chip").textContent(), "2 of 3 sources agree");
+  assert.equal(await det.locator(".jn-loco").count(), 1, "the engine is drawn at its end");
+  // The evidence is folded away until asked for
+  const coachSure = det.locator(".jn-coachbox .jn-sure");
+  assert.equal(await coachSure.getAttribute("open"), null);
+  await coachSure.locator("summary").click();
+  assert.match(await coachSure.textContent(), /erail\.in and ConfirmTkt list this order; etrain\.info lists another\./);
+  assert.match(await coachSure.textContent(), /The LPR end probably comes in first, behind the engine, as no reversal is listed before here\./);
+  // The berth: what to look for, whichever door you came in by
+  const berthSay = det.locator(".jn-berthbox .jn-coach-say");
+  assert.equal(await berthSay.textContent(), "Look for 57–64above the bay, near the door at the end with the highest numbers");
   assert.equal(await det.locator(".jn-b.mine").textContent(), "59UB");
-  assert.match(await det.locator(".jn-bay").getAttribute("aria-label"), /berths 57 to 64.*upper berth in the main bay/);
-  // The platform: only the ticket's for now (no live data in this test)
-  assert.equal(await det.locator(".jn-pf-line").textContent(), "Platform 5. Your ticket and both timetables (RailYatri, ConfirmTkt) all say so.");
+  assert.equal(await det.locator(".jn-berth-is").textContent(), "59 · Upper · in the main bay");
+  assert.match(await det.locator(".jn-bay").getAttribute("aria-label"), /Bay 57 to 64\. Berth 59 is the upper berth in the main bay\./);
   // Add who's travelling; it stays through a re-check
   await det.locator(".jn-pax-edit").click();
   await det.locator(".jn-pax-form input").first().fill("Asha Rao");
@@ -968,30 +974,60 @@ await test("journeys: hours before boarding, today's run is checked, and every s
     );
     await p.goto(`${SITE}?m=train&v=journeys`);
     await settle(p, 500);
-    await p.locator(".jcard").click(); // on the day, a trip opens its live status…
-    await p.locator(".trip-guide").waitFor();
-    assert.match(await p.locator(".trip-guide").textContent(), /Your coach, berth and platform.*B3 · 59 UB · boarding at KSR Bengaluru/);
-    await p.locator(".trip-guide").click(); // …and its guide is one tap from there
+    await p.locator(".jcard").click(); // a booking opens its details, even on the day
     const det = p.locator("#journey-detail");
-    await det.locator(".jn-today-line").first().waitFor({ timeout: 15000 });
+    await det.locator(".jn-today .jn-live-dot").waitFor({ timeout: 15000 });
+    await det.locator(".jn-today .jn-sure summary").click();
     const text = await det.locator(".jn-today").textContent();
+    const tiles = (await det.locator(".jn-pass-tile").allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
     if (ntes) {
-      assert.match(text, /Platform 6 today, from the railway's enquiry system \(marked provisional there\)\./);
-      assert.match(text, /RailYatri's live status and ConfirmTkt list platform 5\./);
-      assert.match(text, /At KSR Bengaluru: NTES says 13 min late, RailYatri says on time, ConfirmTkt says 10 min late\./);
-      await det.locator(".jn-verified").waitFor();
-      assert.match(await det.locator(".jn-coachbox").textContent(), /Today's order at KSR Bengaluru, from the railway's enquiry system \(NTES\), checked just now\. It matches the published order\./);
+      assert.match(text, /Today's run · up to 13 min late at KSR Bengaluru/);
+      assert.match(text, /Delay at KSR Bengaluru: NTES 13 min, RailYatri 0 min, ConfirmTkt 10 min\./);
+      assert.equal(tiles[0], "PLATFORM 6 Provisional");
+      await det.locator(".jn-coachbox .chip", { hasText: "Today's run" }).waitFor();
+      await det.locator(".jn-coachbox .jn-sure summary").click();
+      assert.match(await det.locator(".jn-coachbox .jn-sure").textContent(), /Today's order at KSR Bengaluru, from the railway's enquiry system \(NTES\)\.It matches the published order\./);
       assert.equal(await det.locator(".jn-loco").count(), 0, "no engine is drawn on today's order: NTES doesn't mark it");
     } else {
-      assert.match(text, /RailYatri's live status and ConfirmTkt list platform 5\. The railway's own system hasn't confirmed it yet\./);
-      assert.match(text, /NTES: timed out/);
-      assert.match(text, /Not confirmed by the railway yet/);
-      assert.equal(await det.locator(".jn-verified").count(), 0);
+      assert.match(text, /No answer: NTES \(timed out\)\./);
+      assert.match(text, /hasn't confirmed the platform or coach order yet/);
+      assert.equal(tiles[0], "PLATFORM 5 Planned");
     }
-    assert.match(await det.locator(".jn-pf-line").textContent(), /^Planned: platform 5\./);
+    // Live status expands right here, no trip to another screen
+    const live = det.locator(".jn-live-btn");
+    assert.equal(await live.getAttribute("aria-expanded"), "false");
+    await live.click();
+    await det.locator(".jn-live-panel .status-body").waitFor();
+    assert.equal(await live.getAttribute("aria-expanded"), "true");
+    assert.equal(await det.locator(".jn-live-full").count(), 1);
+    await live.click();
+    assert.equal(await det.locator(".jn-live-panel").isHidden(), true, "folds away again");
     assert.ok(!/\bnull\b/.test(await det.textContent()));
     assert.deepEqual(p.errors, []);
   }
+});
+
+await test("journeys: the way in shows your next trip, and adds one from a PNR", async () => {
+  const p = await page();
+  await p.goto(`${SITE}?m=train`);
+  await settle(p, 400);
+  const entry = p.locator("#jn-entry-wrap");
+  assert.equal(await entry.isVisible(), true);
+  assert.match(await entry.textContent(), /Live status, coach and berth for your trips, in one place/);
+  assert.equal(await p.locator("#jn-entry-count").isHidden(), true);
+  await p.locator("#jn-entry-add").click();
+  await p.locator("#jn-pnr-find").waitFor();
+  await p.locator("#jn-pnr-find").fill("1234567890");
+  await p.locator("#journey-add .cta", { hasText: "Fill in from PNR" }).click();
+  await p.locator("#journey-add .jn-summary").waitFor();
+  await p.locator("#journey-add .cta", { hasText: "Save journey" }).click();
+  await settle(p, 400);
+  assert.equal(await p.locator("#jn-entry-count").textContent(), "1");
+  assert.match(await p.locator("#jn-entry-sub").textContent(), /^Next: \w{3}, \d+ \w{3} · SBC → KCG · B3 59 UB$/);
+  await p.goto(`${SITE}?m=flight`);
+  await settle(p, 300);
+  assert.equal(await entry.isHidden(), true, "trains only");
+  assert.deepEqual(p.errors, []);
 });
 
 await test("journeys: a PNR with no booking says so kindly", async () => {

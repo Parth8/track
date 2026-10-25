@@ -131,6 +131,7 @@ for (const card of document.querySelectorAll(".mode-card")) {
   });
 }
 
+$("#jn-entry-add").addEventListener("click", () => journeySheets.openAdd());
 $("#jn-entry").addEventListener("click", (e) => {
   if (e.metaKey || e.ctrlKey || e.shiftKey) return;
   e.preventDefault();
@@ -160,6 +161,7 @@ for (const btn of byToggle.querySelectorAll("button")) {
 const journeySheets = createJourneySheets({
   navigate,
   toast: (m, a) => toast(m, a),
+  mountLive: (el, j) => mountLive(el, j),
   onSaved: () => {
     if (!views.journeys.hidden) journeysView.paint();
     if (!views.results.hidden) resultsBy.train.redraw();
@@ -182,7 +184,15 @@ onJourneysChange(() => {
 /** On the train search screen: a way in, saying what's coming up. */
 function syncJourneyEntry() {
   const up = sortedJourneys("upcoming");
-  $("#jn-entry-sub").textContent = up.length ? `${up.length} upcoming · next on ${new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: IST }).format(new Date(up[0].dep))}` : "Keep your trains, seats and PNRs in one place";
+  const next = up[0];
+  const day = (iso) => new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: IST }).format(new Date(iso));
+  $("#jn-entry-sub").textContent = next
+    ? `${isLiveNow(next) ? "On its way now" : `Next: ${day(next.dep)}`} · ${next.from.code} → ${next.to.code}${next.coach ? ` · ${next.coach}${next.seat ? ` ${next.seat}` : ""}` : ""}`
+    : "Live status, coach and berth for your trips, in one place";
+  const count = $("#jn-entry-count");
+  count.hidden = !up.length;
+  count.textContent = String(up.length);
+  $("#jn-entry-wrap").classList.toggle("has-trips", !!up.length);
 }
 
 /** On the home screen: your next train this week, one tap from live status. */
@@ -726,7 +736,7 @@ function setupSearch(r) {
 
   document.title = byRoute ? (r.mode === "flight" ? "Find flights between airports" : "Find trains between stations") : r.mode === "flight" ? "Track a flight" : "Track a train";
   byToggle.hidden = !MODES[r.mode]?.route;
-  $("#jn-entry").hidden = r.mode !== "train";
+  $("#jn-entry-wrap").hidden = r.mode !== "train";
   syncJourneyEntry();
   const [numberLabel, groupLabel] = BY_LABEL[r.mode] || BY_LABEL.train;
   $("#by-number-label").textContent = numberLabel;
@@ -1031,11 +1041,67 @@ function freshNote(s) {
   return h("div", { class: "fresh" }, h("p", { class: "fresh-note" }, svg(icons.clock), h("span", {}, `${line}. `, why)), more);
 }
 
+/**
+ * Live status inside a booking: the same tracker, drawn into `el` for this trip's run and stop,
+ * refreshing at the same calm pace as its own screen, until stopped (the section is collapsed or
+ * the sheet closes). Returns { stop, refresh }.
+ */
+function mountLive(el, j) {
+  const s = { mode: "train", no: j.no, date: j.startDate, stop: j.to.code, inSheet: true, stopped: false, timer: null, data: null, foldOpen: false, mapEl: null, mapCtl: null };
+  const draw = () => {
+    const view = renderTrain(s.data, {
+      stop: s.stop,
+      foldOpen: s.foldOpen,
+      onPickStop: () => toast("Your stop comes from your booking. Edit the journey to change it."),
+      onChangeStop: null, // in a booking, the stop is the booking's
+      onToggleFold: () => ((s.foldOpen = true), draw()),
+    });
+    if (view.map) {
+      if (s.mapEl) {
+        view.map.el.replaceWith(s.mapEl);
+        s.mapCtl?.update(view.map.opts);
+      } else {
+        s.mapEl = view.map.el;
+        mountWhenVisible(s, view.map);
+      }
+    }
+    const full = h("a", { class: "jn-live-full", href: `?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}`, on: { click: (e) => (e.preventDefault(), navigate({ m: "train", no: j.no, d: j.startDate, s: j.to.code })) } }, "Open full screen", svg(icons.next));
+    el.replaceChildren(view.node, h("div", { class: "jn-live-foot" }, freshNote(s), full));
+    for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
+  };
+  async function load(force = false) {
+    clearTimeout(s.timer);
+    if (s.stopped) return;
+    try {
+      const data = await api("/api/train", { no: j.no, date: j.startDate, fresh: force ? 1 : null }, { timeout: 25000, retries: 1 });
+      if (s.stopped) return;
+      s.data = data;
+      draw();
+      recordRun(j.no, j.startDate, data);
+      const every = trainCadence(data, s.stop).ms;
+      if (every) s.timer = setTimeout(load, every);
+    } catch (e) {
+      if (s.stopped) return;
+      if (!s.data) el.replaceChildren(h("p", { class: "jn-fine", text: e instanceof ApiError && e.code === "not_found" ? "This run hasn't started reporting yet. It shows here once it does." : "Couldn't load live status just now. Trying again in a minute." }));
+      s.timer = setTimeout(load, 60000);
+    }
+  }
+  el.replaceChildren(h("div", { class: "jn-live-skel", "aria-hidden": "true" }, h("span", { class: "skel", vars: { width: "55%", height: "26px" } }), h("span", { class: "skel", vars: { width: "100%", height: "90px" } }), h("span", { class: "skel", vars: { width: "80%", height: "18px" } })));
+  load();
+  return {
+    stop() {
+      s.stopped = true;
+      clearTimeout(s.timer);
+    },
+    refresh: () => load(true),
+  };
+}
+
 function mountWhenVisible(s, spec) {
   const start = async () => {
     try {
       const { mountMap } = await import("./map.js");
-      if (session !== s) return;
+      if (s.inSheet ? s.stopped : session !== s) return;
       s.mapCtl = await mountMap(s.mapEl, spec.opts);
     } catch (e) {
       console.warn("map failed", e);

@@ -51,7 +51,7 @@ export function renderTrain(j, ctx) {
       "div",
       { class: "hero-row" },
       h("span", { class: "eyebrow-pin" }, svg(icons.pin), mineIsOrigin ? "Your start" : "Your stop"),
-      h("button", { class: "pill-btn", type: "button", text: "Change", "aria-label": "Change your stop", on: { click: () => ctx.onChangeStop?.() } })
+      ctx.onChangeStop ? h("button", { class: "pill-btn", type: "button", text: "Change", "aria-label": "Change your stop", on: { click: () => ctx.onChangeStop() } }) : null
     ),
     h("h2", { class: "hero-place display", id: "hero-place", text: mine.name }),
     h(

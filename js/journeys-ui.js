@@ -293,8 +293,7 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
     face.addEventListener("click", (e) => {
       if (li.dataset.swiped) return void (delete li.dataset.swiped, e.preventDefault());
       if (li.classList.contains("open")) return close(li);
-      if (!past && isTrackable(j)) navigate(trackLink(j), { state: { from: "journeys" } });
-      else sheets.openDetail(j.id);
+      sheets.openDetail(j.id); // live status opens inside, so the booking stays one place
     });
     swipeToDelete(li, face, () => remove(j, li));
     return li;
@@ -484,7 +483,7 @@ function swipeToDelete(li, face, onDelete) {
 /* Sheets: details, and add or edit                                    */
 /* ================================================================== */
 
-export function createJourneySheets({ navigate, toast, onSaved }) {
+export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
   const detail = sheet("journey-detail");
   const add = sheet("journey-add");
 
@@ -667,9 +666,8 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       )
     );
 
+    if (!past && isTrackable(j) && mountLive) nodes.push(liveSection(j));
     const actions = [];
-    if (!past && isTrackable(j))
-      actions.push(h("button", { type: "button", class: "cta", on: { click: () => (detail.d.close(), navigate(trackLink(j), { state: { from: "journeys" } })) } }, "Track live", svg(icons.next)));
     if (!past) actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => shareTrip(j, toast) } }, svg(icons.share), "Share trip"));
     if (!past) actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => downloadIcs(j) } }, svg(icons.calendar), "Add to calendar"));
     actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => (detail.d.close(), openEdit(j.id)) } }, "Edit details"));
@@ -713,6 +711,50 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
   }
   const checking = new Set();
 
+  /* ---------------- live status, inside the booking ---------------- */
+
+  let liveCtl = null; // the tracker drawn in the open sheet, if any
+  const liveOpen = new Set(); // journeys whose live status you've opened, kept open across redraws
+  detail.d.addEventListener("close", () => (liveCtl?.stop(), (liveCtl = null)));
+
+  /**
+   * "Live status ⌄": the tracker for this trip's run and stop, expanding in place. It refreshes at
+   * its own calm pace while open, and stops when folded away or the sheet closes.
+   */
+  function liveSection(j) {
+    liveCtl?.stop();
+    liveCtl = null;
+    const panel = h("div", { class: "jn-live-panel", id: `jn-live-${j.id}`, hidden: true });
+    const sub = isLiveNow(j) ? "On its way now" : `Your stop: ${j.to.name}`;
+    const btn = h(
+      "button",
+      { type: "button", class: "jn-live-btn", "aria-expanded": "false", "aria-controls": panel.id },
+      h("span", { class: "jn-live-ico", "aria-hidden": "true" }, svg(icons.trainFront), isLiveNow(j) ? h("i", { class: "live-dot" }) : null),
+      h("span", { class: "jn-live-text" }, h("b", { text: "Live status" }), h("small", { text: sub })),
+      h("span", { class: "jn-live-chev", "aria-hidden": "true" })
+    );
+    const set = (open) => {
+      btn.setAttribute("aria-expanded", String(open));
+      panel.hidden = !open;
+      if (open) {
+        liveOpen.add(j.id);
+        liveCtl?.stop();
+        liveCtl = mountLive(panel, j);
+        if (motion()) panel.animate([{ opacity: 0, transform: "translateY(-6px)" }, { opacity: 1, transform: "none" }], { duration: 320, easing: "cubic-bezier(0.32, 0.72, 0, 1)" });
+        requestAnimationFrame(() => btn.scrollIntoView({ block: "start", behavior: motion() ? "smooth" : "instant" }));
+      } else {
+        liveOpen.delete(j.id);
+        liveCtl?.stop();
+        liveCtl = null;
+        panel.replaceChildren();
+      }
+    };
+    btn.addEventListener("click", () => set(btn.getAttribute("aria-expanded") !== "true"));
+    const wrap = h("section", { class: "jn-live", "aria-label": "Live status" }, btn, panel);
+    if (liveOpen.has(j.id)) requestAnimationFrame(() => set(true));
+    return wrap;
+  }
+
   /* ---------------- on the platform: your coach, your berth, your platform ---------------- */
 
   /** Each seat on the booking (or the one you typed in), with whose it is. */
@@ -731,6 +773,9 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
   const listOf = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
   // Bays in a coach, only for builds whose numbering is known. LHB and ICF coaches differ.
   const BAYS = { "3A:LHB": 9, "SL:LHB": 10, "3A:ICF": 8, "SL:ICF": 9 };
+  // Every size a class's coaches come in (ICF and LHB), when the build isn't published.
+  const BAY_SIZES = { "3A": [8, 9], SL: [9, 10] };
+  const today_ = today;
   const motion = () => !prefersReducedMotion();
 
   function platformGuide(j) {
@@ -741,76 +786,151 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     let pick = 0;
     let here = null;
     let today = null; // what today's run says at your station, from /api/dayof
+    let seen = null; // the tracker's platform for the last run
     const dayOf = !isPast(j) && inDayOf(j);
+    const pass = h("div", { class: "jn-pass", role: "group", "aria-label": "Your platform, coach and berth" });
     const todayBox = h("div", { class: "jn-today", "aria-live": "polite" });
     const coachBox = h("div", { class: "jn-coachbox" });
     const berthBox = h("div", { class: "jn-berthbox" });
-    const pfBox = h("div", { class: "jn-pf" });
     const picker = seats.length > 1 ? h("div", { class: "jn-seatpick", role: "radiogroup", "aria-label": "Whose seat" }) : null;
     const stopAt = (code) => info?.stops?.find((s) => s.code === code) || null;
+    /** "How sure?": the evidence, folded away until asked for. */
+    const sure = (...lines) => {
+      const body = lines.flat().filter(Boolean);
+      return body.length ? h("details", { class: "jn-sure" }, h("summary", {}, "How sure?"), body.map((t) => (typeof t === "string" ? h("p", { text: t }) : t))) : null;
+    };
 
     function paintPicker() {
       if (!picker) return;
-      fill(picker, 
-        ...seats.map((s, i) =>
-          h("button", { type: "button", role: "radio", class: "pill-btn", "aria-checked": String(i === pick), text: `${s.who.split(" ")[0]} · ${s.coach} ${s.berth}`, on: { click: () => ((pick = i), (here = null), paintPicker(), paintCoach(), paintBerth()) } })
+      fill(
+        picker,
+        seats.map((s, i) =>
+          h("button", { type: "button", role: "radio", class: "pill-btn", "aria-checked": String(i === pick), text: `${s.who.split(" ")[0]} · ${s.coach} ${s.berth}`, on: { click: () => ((pick = i), (here = null), paintAll()) } })
         )
       );
     }
 
-    /** Who lists this order, and who doesn't. */
-    function sourcesLine() {
+    /* ---------- the answers: platform, coach, berth ---------- */
+
+    /** The platform, and how far to trust it. Only the railway's system on the day confirms one. */
+    function platformAnswer() {
+      const n = today?.platform?.ntes;
+      if (n?.pf) return { pf: n.pf, label: n.mark ? "Provisional" : "Confirmed", tone: "ok", says: [["The railway's enquiry system (NTES), today", n.pf]] };
+      const says = [];
+      if (j.booking?.platform) says.push(["Your ticket", j.booking.platform]);
+      const st = stopAt(j.from.code);
+      if (st?.pf && st.from?.pf === "both") says.push(["RailYatri's timetable", st.pf], ["ConfirmTkt's timetable", st.pf]);
+      else if (st?.pf) says.push([`${NAMES[st.from?.pf] || "The"}'s timetable`.replace("The's", "The"), st.pf]);
+      else if (st?.from?.pf && typeof st.from.pf === "object") for (const [k, v] of Object.entries(st.from.pf)) says.push([`${NAMES[k]}'s timetable`, v]);
+      if (today?.platform?.railyatri) says.push(["RailYatri's live status", today.platform.railyatri]);
+      if (today?.platform?.confirmtkt) says.push(["ConfirmTkt's running status", today.platform.confirmtkt]);
+      if (!dayOf && seen?.pf) says.push(["The tracker, last run", seen.pf]);
+      if (!says.length) return null;
+      const count = new Map();
+      for (const [, v] of says) count.set(v, (count.get(v) || 0) + 1);
+      const ranked = [...count.entries()].sort((a, b) => b[1] - a[1]);
+      if (ranked.length === 1) return { pf: ranked[0][0], label: dayOf ? "Planned" : "Likely", tone: dayOf ? "warn" : "quiet", says };
+      return { pf: ranked.slice(0, 2).map(([v]) => v).join(" or "), label: "Unsure", tone: "warn", says };
+    }
+
+    function paintPass() {
+      const seat = seats[pick];
+      const pf = platformAnswer();
+      const g = seat?.berth ? berthGuide(j.cls, seat.berth) : null;
+      const type = g ? BERTH_NAMES[g.type] : seat?.type;
+      const tile = (label, value, sub, tone) => h("div", { class: `jn-pass-tile${tone ? ` ${tone}` : ""}` }, h("small", { text: label }), h("b", { text: value }), sub ? h("span", { text: sub }) : null);
+      fill(pass, [
+        pf ? tile("Platform", pf.pf, pf.label, pf.tone) : tile("Platform", "–", "Not published yet", "quiet"),
+        seat ? tile("Coach", seat.coach, today?.coaches ? "Today's order" : j.cls ? CLASS_NAMES[j.cls] : null) : null,
+        seat?.berth ? tile("Berth", String(seat.berth), type || null) : null,
+      ]);
+    }
+
+    /** On the day: one slim line of what today's run says, the detail folded away. */
+    function paintToday() {
+      if (!dayOf) return fill(todayBox, !isPast(j) && isTrackable(j) ? h("p", { class: "jn-fine small", text: `From ${DAYOF_HOURS} hours before you board, this checks today's run with the railway's own system.` }) : null);
+      if (!today) return fill(todayBox, h("p", { class: "jn-today-t" }, h("span", { class: "spinner", "aria-hidden": "true" }), "Checking today's run…"));
+      const d = today.delay || {};
+      const ds = [["NTES", d.ntes], ["RailYatri", d.railyatri], ["ConfirmTkt", d.confirmtkt]].filter(([, v]) => Number.isFinite(v));
+      const lo = Math.min(...ds.map(([, v]) => v));
+      const hi = Math.max(...ds.map(([, v]) => v));
+      const late = !ds.length ? null : hi <= 0 && lo >= -2 ? "on time" : lo === hi ? (lo > 0 ? `${lo} min late` : `${-lo} min early`) : lo <= 0 ? `up to ${hi} min late` : `${lo}–${hi} min late`;
+      const ok = (today.sources || []).filter((x) => x.ok).map((x) => NAMES[x.name]);
+      const no = (today.sources || []).filter((x) => !x.ok).map((x) => `${NAMES[x.name]} (${x.why})`);
+      fill(
+        todayBox,
+        h("p", { class: "jn-today-t" }, h("span", { class: "jn-live-dot", "aria-hidden": "true" }), h("span", { text: `Today's run${late ? ` · ${late} at ${j.from.name}` : ""}` }), h("small", { text: ago(today.status.checkedAt) })),
+        sure(
+          ds.length > 1 && lo !== hi ? `Delay at ${j.from.name}: ${ds.map(([w, v]) => `${w} ${v} min`).join(", ")}.` : null,
+          ok.length ? `Answered: ${listOf(ok)}.` : null,
+          no.length ? `No answer: ${listOf(no)}.` : null,
+          today.platform?.ntes?.pf || today.coaches ? null : "The railway's enquiry system hasn't confirmed the platform or coach order yet. This checks again every few minutes while it's open."
+        )
+      );
+    }
+
+    /* ---------- find your coach ---------- */
+
+    function orderSure(list, live, sameAsPlan) {
+      if (live) return [`Today's order at ${j.from.name}, from the railway's enquiry system (NTES).`, sameAsPlan === false ? "It differs from the published order, so go by this one." : sameAsPlan ? "It matches the published order." : null];
       const src = info.sources || [];
-      const yes = src.filter((s) => s.agrees).map((s) => NAMES[s.name] || s.name);
-      const no = src.filter((s) => !s.agrees).map((s) => NAMES[s.name] || s.name);
-      const turned = src.some((s) => s.reversed) ? " (one lists it from the other end)" : "";
-      if (info.agreement === "all") return `${listOf(yes)} list the same order${turned}.`;
-      if (info.agreement === "majority") return `${listOf(yes)} list this order${turned}. ${listOf(no)} ${no.length > 1 ? "list" : "lists"} a different one.`;
-      if (info.agreement === "tie") return `The sources list different orders. This one is ${yes[0]}'s, the most recently dated. Go by the platform's coach display.`;
-      return `Only ${yes[0]} lists an order for this train right now.`;
+      const yes = src.filter((s) => s.agrees).map((s) => NAMES[s.name]);
+      const no = src.filter((s) => !s.agrees).map((s) => NAMES[s.name]);
+      const lines = [];
+      if (info.agreement === "all") lines.push(`${listOf(yes)} list this order.`);
+      else if (info.agreement === "majority") lines.push(`${listOf(yes)} list this order; ${listOf(no)} ${no.length > 1 ? "list" : "lists"} another.`);
+      else if (info.agreement === "tie") lines.push(`The sources list different orders. This is ${yes[0]}'s, the most recently dated.`);
+      else lines.push(`Only ${yes[0]} lists an order for this train.`);
+      const front = frontLine(list);
+      if (front) lines.push(front);
+      lines.push("Orders change now and then; the coach display on the platform shows today's.");
+      return lines;
     }
 
     /**
-     * Which end leads as the train pulls in: said only when every source that shows the engine
-     * puts it at the same end, and counting only the reversals a timetable actually lists.
+     * Which end comes in first: said only when every source that shows the engine puts it at the
+     * same end, counting only reversals a timetable actually lists.
      */
     function frontLine(list) {
-      if (info.engineFirst == null || !info.stops?.length) return null;
+      if (info?.engineFirst == null || !info.stops?.length) return null;
       const i = info.stops.findIndex((s) => s.code === j.from.code);
       if (i < 0) return null;
       const before = info.stops.slice(0, i).filter((s) => s.reversal);
       const engineLeads = before.length % 2 === 0 ? info.engineFirst : !info.engineFirst;
       const lead = engineLeads ? list[0] : list.at(-1);
-      const why = before.length
-        ? `RailYatri's timetable lists the engine changing ends at ${listOf(before.map((s) => s.code))}.`
-        : `The sources that show the engine put it at the ${engineLeads ? list[0].id : list.at(-1).id} end, and RailYatri's timetable lists no reversal before ${j.from.name}.`;
-      const atHere = info.stops[i].reversal ? ` It's listed as reversing at ${j.from.name}, so the engine may move to the other end while it's here.` : "";
-      return `Probably the ${lead.id} end comes in first, behind the engine. ${why}${atHere}`;
+      return `The ${lead.id} end probably comes in first, behind the engine${before.length ? ` (it changes ends at ${listOf(before.map((s) => s.code))})` : ", as no reversal is listed before here"}.`;
+    }
+
+    function agreeChip(live) {
+      if (live) return h("span", { class: "chip small ok" }, svg(icons.check), "Today's run");
+      const src = info?.sources || [];
+      if (!src.length) return null;
+      const yes = src.filter((s) => s.agrees).length;
+      return h("span", { class: `chip small ${yes === src.length ? "ok" : yes > src.length / 2 ? "quiet" : "warn"}`, text: yes === src.length ? `${yes} sources agree` : `${yes} of ${src.length} sources agree` });
     }
 
     // The coach order, drawn as the train. Tap the coach in front of you to see which way to walk.
     function paintCoach() {
       const seat = seats[pick];
       if (!seat) return fill(coachBox);
-      if (!info && !failed) return fill(coachBox, h("div", { class: "jn-coaches-skel", "aria-hidden": "true" }, Array.from({ length: 9 }, () => h("i", { class: "skel" }))), h("p", { class: "jn-fine", text: "Checking the coach order with three sources…" }));
+      if (!info && !failed && !today?.coaches) return fill(coachBox, h("div", { class: "jn-coaches-skel", "aria-hidden": "true" }, Array.from({ length: 9 }, () => h("i", { class: "skel" }))));
       const live = today?.coaches?.list?.length ? today.coaches.list.map((c) => ({ id: c.id, kind: /^[A-Z]+/.exec(c.id)?.[0] || c.id, cls: c.cls })) : null;
-      if (!live && !info?.coaches) return fill(coachBox, h("p", { class: "jn-fine", text: failed || "None of the sources lists a coach order for this train. The coach display on the platform shows it on the day." }));
+      if (!live && !info?.coaches) return fill(coachBox, h("p", { class: "jn-fine", text: failed || "No coach order is published for this train. The coach display on the platform shows it on the day." }));
       const list = live || info.coaches;
       const seqOf = (l) => l.filter((c) => NUMBERED_COACH.test(c.id)).map((c) => c.id).join(" ");
       const sameAsPlan = live && info?.coaches ? seqOf(live) === seqOf(info.coaches) : null;
       const mine = list.findIndex((c) => c.id === seat.coach);
       const say = h("p", { class: "jn-coach-say", role: "status", "aria-live": "polite" });
-      let walk = null;
-      if (mine < 0) say.textContent = `${seat.coach} isn't in the order the sources list for this train. The coach display on the platform shows today's order.`;
-      else if (here == null) say.textContent = `${seat.coach} is coach ${mine + 1} of ${list.length} from the ${list[0].id} end, and ${list.length - mine} from the ${list.at(-1).id} end. Tap the coach you're standing at.`;
+      if (mine < 0) say.textContent = `${seat.coach} isn't in the listed order. Check the coach display on the platform.`;
+      else if (here == null) say.append(h("span", { class: "jn-tap", "aria-hidden": "true" }, svg(icons.tap)), "Tap the coach you're standing at");
       else {
-        walk = coachWalk(list, here, seat.coach);
-        say.textContent = !walk ? "" : walk.steps === 0 ? `That's your coach, ${seat.coach}.` : `From ${list[here].id}, walk ${walk.steps} coach${walk.steps > 1 ? "es" : ""} towards ${walk.toward}, about ${walk.meters} m.`;
+        const walk = coachWalk(list, here, seat.coach);
+        if (walk?.steps === 0) say.append(h("b", { text: "You're at your coach" }));
+        else if (walk) say.append(h("b", { text: `Walk ${walk.steps} coach${walk.steps > 1 ? "es" : ""} towards ${walk.toward}` }), h("span", { class: "jn-say-sub", text: `about ${walk.meters} m` }));
       }
       const lo = here == null || mine < 0 ? -1 : Math.min(here, mine);
       const hi = here == null || mine < 0 ? -1 : Math.max(here, mine);
-      // The engine is drawn only from the published order's own marks, and only on that order.
-      const engineFirst = live ? null : info.engineFirst;
+      const engineFirst = live ? null : info.engineFirst; // drawn only from the published order's marks
       const engine = (end) => (engineFirst === (end === "start") ? h("li", { class: "jn-loco", "aria-hidden": "true" }, h("span", { text: "Engine" })) : null);
       const strip = h(
         "ol",
@@ -820,31 +940,29 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
           h(
             "li",
             {},
-            h("button", {
-              type: "button",
-              class: `jn-coach${i === mine ? " mine" : ""}${i === here ? " here" : ""}${i > lo && i < hi ? " path" : ""}${NUMBERED_COACH.test(c.id) ? "" : " utility"}`,
-              vars: { "--d": String(Math.abs(i - (here ?? 0))) },
-              "aria-label": `${c.id}${i === mine ? ", your coach" : ""}${i === here ? ", you're here" : ""}`,
-              "aria-pressed": String(i === here),
-              on: { click: () => ((here = i === here ? null : i), paintCoach()) },
-            }, h("b", { text: c.id }), c.cls ? h("small", { text: c.cls }) : null)
+            h(
+              "button",
+              {
+                type: "button",
+                class: `jn-coach${i === mine ? " mine" : ""}${i === here ? " here" : ""}${i > lo && i < hi ? " path" : ""}${NUMBERED_COACH.test(c.id) ? "" : " utility"}`,
+                vars: { "--d": String(Math.abs(i - (here ?? 0))) },
+                "aria-label": `${c.id}${i === mine ? ", your coach" : ""}${i === here ? ", you're here" : ""}`,
+                "aria-pressed": String(i === here),
+                on: { click: () => ((here = i === here ? null : i), paintCoach()) },
+              },
+              h("b", { text: c.id }),
+              c.cls ? h("small", { text: c.cls }) : null
+            )
           )
         ),
         engine("end")
       );
-      const front = live ? null : frontLine(list);
-      const said = live
-        ? `Today's order at ${j.from.name}, from the railway's enquiry system (NTES), checked ${ago(today.status.checkedAt)}.${sameAsPlan === true ? " It matches the published order." : sameAsPlan === false ? " It differs from the published order, so go by this one." : ""}`
-        : `${sourcesLine()} Coach orders change now and then; the coach display on the platform shows today's.`;
       fill(coachBox, [
-          h("p", { class: "jn-coach-ends", "aria-hidden": "true" }, h("span", { text: `${list[0].id} end` }), h("span", { text: `${list.at(-1).id} end` })),
-          strip,
-          say,
-          front ? h("p", { class: "jn-coach-front" }, svg(icons.trainFront), front) : null,
-          live ? h("p", { class: "jn-verified" }, svg(icons.check), "Today's run") : null,
-          h("p", { class: "jn-fine small", text: said }),
-        ]
-      );
+        h("div", { class: "jn-card-head" }, h("p", { class: "jn-card-t", text: "Find your coach" }), agreeChip(!!live)),
+        strip,
+        say,
+        sure(orderSure(list, live, sameAsPlan)),
+      ]);
       // Keep both you and your coach in view, gliding there rather than jumping.
       requestAnimationFrame(() => {
         const a = (strip.querySelector(".here") || strip.querySelector(".mine"))?.closest("li");
@@ -855,118 +973,73 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       });
     }
 
-    // Inside the coach: the berth's bay, and where it sits in that bay.
+    /* ---------- find your berth ---------- */
+
+    /**
+     * Where the bay sits in the coach, without knowing which door you came in by: said only when
+     * every coach size this class comes in puts it in the same place, and in terms you can see
+     * (the numbers above the bays).
+     */
+    function bayPlace(g, build) {
+      const sizes = build && BAYS[`${g.cls}:${build}`] ? [BAYS[`${g.cls}:${build}`]] : BAY_SIZES[g.cls] || [];
+      if (!sizes.length) return null;
+      const place = (n) => (g.bay <= 2 ? "low" : g.bay >= n - 1 ? "high" : g.bay > n / 3 && g.bay <= n - n / 3 ? "middle" : null);
+      const all = sizes.map(place);
+      if (!all[0] || !all.every((x) => x === all[0])) return null;
+      return { low: "near the door at the end with berth 1", high: "near the door at the end with the highest numbers", middle: "in the middle of the coach" }[all[0]];
+    }
+
     function paintBerth() {
       const seat = seats[pick];
       if (!seat?.berth) return fill(berthBox);
       const g = berthGuide(j.cls, seat.berth);
-      const from = seat.typeFrom === "railway" ? "as on your booking" : seat.typeFrom === "layout" ? `by the standard numbering of ${CLASS_NAMES[j.cls] || j.cls} coaches` : null;
-      if (!g) return fill(berthBox, h("p", { class: "jn-fine", text: seat.type ? `Berth ${seat.berth} is a ${seat.type.toLowerCase()} berth${from ? `, ${from}` : ""}.` : `Berth ${seat.berth}. ${CLASS_NAMES[j.cls] || "This class"} coaches don't all number their berths the same way, so we can't place it for sure.` }));
+      const from = seat.typeFrom === "railway" ? "on your booking" : seat.typeFrom === "layout" ? `from the standard numbering of ${CLASS_NAMES[j.cls] || j.cls} coaches` : null;
+      if (!g)
+        return fill(berthBox, [
+          h("p", { class: "jn-card-t", text: "Find your berth" }),
+          h("p", { class: "jn-coach-say" }, h("b", { text: `Berth ${seat.berth}${seat.type ? ` · ${seat.type}` : ""}` })),
+          sure(seat.type && from ? `${seat.type}, ${from}.` : null, `${CLASS_NAMES[j.cls] || "This class"} coaches don't all number berths the same way, so it isn't drawn here.`),
+        ]);
       const build = info?.coaches?.find((c) => c.id === seat.coach)?.build || null;
-      const bays = build ? BAYS[`${g.cls}:${build}`] || null : null;
+      const where = bayPlace(g, build);
       const main = g.places.slice(0, -2);
       const half = main.length / 2;
       const cell = (p, k) => h("span", { class: `jn-b${p.n === g.berth ? " mine" : ""}`, vars: { "--k": String(k) }, "aria-hidden": "true" }, h("b", { text: String(p.n) }), h("small", { text: p.type }));
       fill(berthBox, [
-        h("p", { class: "jn-berth-head" }, h("b", { text: `Berth ${g.berth} · ${BERTH_NAMES[g.type]}` }), h("span", { text: bays ? `Bay ${g.bay} of ${bays}` : `Bay ${g.bay}` })),
-        bays ? h("div", { class: "jn-bays", "aria-hidden": "true" }, Array.from({ length: bays }, (_, i) => h("i", { class: i + 1 === g.bay ? "mine" : "", vars: { "--k": String(i) } }))) : null,
+        h("p", { class: "jn-card-t", text: "Find your berth" }),
+        h("p", { class: "jn-coach-say" }, h("b", { text: `Look for ${g.first}–${g.last}` }), h("span", { class: "jn-say-sub", text: `above the bay${where ? `, ${where}` : ""}` })),
         h(
           "div",
-          { class: "jn-bay", role: "img", "aria-label": `Bay ${g.bay}, berths ${g.first} to ${g.last}. Berth ${g.berth} is the ${BERTH_NAMES[g.type].toLowerCase()} berth${g.side ? " on the side, along the aisle" : " in the main bay"}.` },
+          { class: "jn-bay", role: "img", "aria-label": `Bay ${g.first} to ${g.last}. Berth ${g.berth} is the ${BERTH_NAMES[g.type].toLowerCase()} berth${g.side ? " on the side, along the aisle" : " in the main bay"}.` },
           h("span", { class: "jn-bay-face" }, main.slice(0, half).map((p, k) => cell(p, k))),
           h("span", { class: "jn-bay-face" }, main.slice(half).map((p, k) => cell(p, k + half))),
-          h("span", { class: "jn-bay-aisle" }),
+          h("span", { class: "jn-bay-aisle" }, h("small", { text: "aisle" })),
           h("span", { class: "jn-bay-face side" }, g.places.slice(-2).map((p, k) => cell(p, k + main.length)))
         ),
-        h(
-          "p",
-          {
-            class: "jn-fine small",
-            text: `Berths ${g.first}–${g.last}: the ${ordinal(g.bay)} bay from the end with berth 1${bays ? `, so nearer the berth ${bays * g.places.length} end` : ""}. ${g.side ? "Along the aisle, on the side." : "In the main bay."} ${BERTH_NAMES[g.type]}${from ? `, ${from}` : ""}. Numbers are marked above every bay.`,
-          }
+        h("p", { class: "jn-berth-is" }, h("b", { text: `${g.berth} · ${BERTH_NAMES[g.type]}` }), g.side ? " · along the aisle" : " · in the main bay"),
+        sure(
+          `${BERTH_NAMES[g.type]}${from ? `, ${from}` : ""}.`,
+          "Each bay's berth numbers are marked above it, and they rise from one end of the coach to the other, so you can find it from either door.",
+          !where ? "Where the bay sits in the coach depends on the coach's build, which isn't published for this train." : null
         ),
-                ]
-      );
+      ]);
     }
 
-    // Platform: every source side by side. They're all planned platforms; the day decides.
-    async function paintPf() {
-      const live = isTrackable(j);
-      // On the day, live values are in today's panel; this line keeps to what was planned.
-      const planned = dayOf;
-      let seen = j.platformSeen && Date.now() - Date.parse(j.platformSeen.at) < (live ? 10 * 60000 : 12 * 3600000) && j.platformSeen.live === live ? j.platformSeen : null;
-      const show = () => {
-        const says = [];
-        if (j.booking?.platform) says.push(["your ticket", j.booking.platform]);
-        const st = stopAt(j.from.code);
-        if (st?.pf && st.from?.pf === "both") says.push(["both timetables (RailYatri, ConfirmTkt)", st.pf]);
-        else if (st?.pf) says.push([`${NAMES[st.from?.pf] ? `${NAMES[st.from.pf]}'s` : "the"} timetable`, st.pf]);
-        else if (st?.from?.pf && typeof st.from.pf === "object") for (const [k, v] of Object.entries(st.from.pf)) says.push([`${NAMES[k]}'s timetable`, v]);
-        if (seen?.pf && !planned) says.push([live ? "live status" : "the last run", seen.pf]);
-        if (!says.length) return fill(pfBox);
-        const values = [...new Set(says.map(([, v]) => v))];
-        const liveSays = live && seen?.pf;
-        const line = liveSays
-          ? `Live status says platform ${seen.pf}.${values.length > 1 ? ` Before today: ${says.filter(([w]) => w !== "live status").map(([w, v]) => `${w} ${v}`).join(", ")}.` : ""}`
-          : values.length === 1
-            ? `Platform ${values[0]}. ${cap(listOf(says.map(([w]) => w)))} ${says.length > 1 ? "all say so" : "says so"}.`
-            : `The sources differ: ${says.map(([w, v]) => `${w} ${v}`).join(", ")}.`;
-        fill(pfBox,
-          h("p", { class: "jn-pf-line" }, svg(icons.gate), h("span", { text: dayOf ? `Planned: ${line.charAt(0).toLowerCase()}${line.slice(1)}` : line })),
-          h("p", { class: "jn-fine small", text: "All of these are planned platforms, often from the same railway plan, so agreeing makes it likely, not certain. It's confirmed on the day; the station's displays and announcements have the final word." })
-        );
-      };
-      show();
-      if (seen || planned) return;
+    /* ---------- loading ---------- */
+
+    async function loadSeen() {
+      if (dayOf) return; // on the day, today's run speaks instead
+      const fresh = j.platformSeen && Date.now() - Date.parse(j.platformSeen.at) < 12 * 3600000 && !j.platformSeen.live ? j.platformSeen : null;
+      if (fresh) return void (seen = fresh);
       try {
-        const data = await api("/api/train", { no: j.no, date: live ? j.startDate : addDays(today(), -1) }, { timeout: 20000, retries: 0 });
+        const data = await api("/api/train", { no: j.no, date: addDays(today_(), -1) }, { timeout: 20000, retries: 0 });
         const stop = (data.stops || []).find((x) => x.code === j.from.code);
-        seen = { pf: stop?.platform || null, live, at: new Date().toISOString() };
+        seen = { pf: stop?.platform || null, live: false, at: new Date().toISOString() };
         updateJourney(j.id, { platformSeen: seen });
-        show();
+        paintPass();
       } catch {
         /* the other sources stand on their own */
       }
-    }
-
-    /**
-     * Today, side by side: the platform and the delay at your station from each source that
-     * answered, and which ones didn't. Only NTES publishes the actual run; the others are shown
-     * for what they are.
-     */
-    function paintToday() {
-      if (!dayOf) return fill(todayBox, isPast(j) || !isTrackable(j) || Date.parse(j.dep) - Date.now() > 2 * 86400000 ? null : h("p", { class: "jn-fine small", text: `From ${DAYOF_HOURS} hours before you board, Track checks today's run with the railway's enquiry system for the actual coach order and platform.` }));
-      if (!today) return fill(todayBox, h("p", { class: "jn-today-t" }, h("span", { class: "spinner", "aria-hidden": "true" }), "Checking today's run…"));
-      const pf = today.platform || {};
-      const lines = [];
-      if (pf.ntes?.pf) lines.push(`Platform ${pf.ntes.pf} today, from the railway's enquiry system${pf.ntes.mark ? " (marked provisional there)" : ""}.`);
-      const others = [["RailYatri's live status", pf.railyatri], ["ConfirmTkt", pf.confirmtkt]].filter(([, v]) => v);
-      if (others.length) {
-        const vals = [...new Set(others.map(([, v]) => v))];
-        lines.push(
-          vals.length === 1
-            ? `${listOf(others.map(([w]) => w))} ${others.length > 1 ? "list" : "lists"} platform ${vals[0]}${pf.ntes?.pf ? (vals[0] === pf.ntes.pf ? ", the same" : "") : ". The railway's own system hasn't confirmed it yet"}.`
-            : `${others.map(([w, v]) => `${w} lists ${v}`).join("; ")}.`
-        );
-      }
-      const d = today.delay || {};
-      const late = (m) => (m === 0 ? "on time" : m > 0 ? `${m} min late` : `${-m} min early`);
-      const ds = [["NTES", d.ntes], ["RailYatri", d.railyatri], ["ConfirmTkt", d.confirmtkt]].filter(([, v]) => Number.isFinite(v));
-      if (ds.length) {
-        const vals = [...new Set(ds.map(([, v]) => v))];
-        lines.push(vals.length === 1 ? `Running ${late(vals[0])} at ${j.from.name}, by ${listOf(ds.map(([w]) => w))}.` : `At ${j.from.name}: ${ds.map(([w, v]) => `${w} says ${late(v)}`).join(", ")}.`);
-      }
-      fill(
-        todayBox,
-        h("p", { class: "jn-today-t" }, h("span", { class: "jn-live-dot", "aria-hidden": "true" }), `Today's run · checked ${ago(today.status.checkedAt)}`),
-        lines.map((t) => h("p", { class: "jn-today-line", text: t })),
-        h(
-          "ul",
-          { class: "jn-src-chips", "aria-label": "Sources" },
-          (today.sources || []).map((x) => h("li", { class: x.ok ? "ok" : "no", title: x.ok ? "Answered" : x.why }, h("span", { "aria-hidden": "true", text: x.ok ? "✓" : "–" }), ` ${NAMES[x.name] || x.name}${x.ok ? "" : `: ${x.why}`}`))
-        ),
-        !pf.ntes?.pf && !today.coaches ? h("p", { class: "jn-fine small", text: "Not confirmed by the railway yet: its enquiry system didn't answer. Track asks again every few minutes while this is open; the station's displays have the final word." }) : null
-      );
     }
 
     async function loadToday(force = false) {
@@ -978,14 +1051,14 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
         /* keep what we had; the next round tries again */
       }
       if (detail.d.open && detail.d.dataset.id === j.id) {
-        paintToday();
-        paintCoach();
+        paintAll();
         dayOfTimer = setTimeout(loadToday, DAYOF_EVERY);
       }
     }
 
-    const paintAll = () => (paintToday(), paintPicker(), paintCoach(), paintBerth(), paintPf());
+    const paintAll = () => (paintPass(), paintToday(), paintPicker(), paintCoach(), paintBerth());
     paintAll();
+    loadSeen();
     if (dayOf) requestAnimationFrame(() => loadToday());
     if (!info) {
       api("/api/coaches", { no: j.no }, { timeout: 20000, retries: 1 })
@@ -1001,11 +1074,11 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       "section",
       { class: "jn-plat", "aria-label": "On the platform" },
       h("p", { class: "sheet-label", text: "On the platform" }),
+      pass,
       todayBox,
-      pfBox,
       picker,
-      seats.length ? h("div", { class: "jn-card" }, h("p", { class: "jn-card-t", text: "Find your coach" }), coachBox) : null,
-      seats.some((x) => x.berth) ? h("div", { class: "jn-card" }, h("p", { class: "jn-card-t", text: "Find your berth" }), berthBox) : null
+      seats.length ? h("div", { class: "jn-card" }, coachBox) : null,
+      seats.some((x) => x.berth) ? h("div", { class: "jn-card" }, berthBox) : null
     );
   }
 

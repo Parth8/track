@@ -96,11 +96,17 @@
       <form id="search-form" class="search-form" novalidate>
         <h1 class="display" id="search-title" tabindex="-1" data-focus>Which train?</h1>
 
-        <a class="jn-entry" id="jn-entry" href="?m=train&v=journeys" hidden>
-          <span class="jn-entry-icon" data-icon="calendar"></span>
-          <span><strong>My journeys</strong><small id="jn-entry-sub">Your trains, seats and PNRs</small></span>
-          <span class="jn-entry-go" data-icon="next"></span>
-        </a>
+        <div class="jn-entry-wrap" id="jn-entry-wrap" hidden>
+          <a class="jn-entry" id="jn-entry" href="?m=train&v=journeys">
+            <span class="jn-entry-icon" data-icon="ticket"></span>
+            <span class="jn-entry-text">
+              <strong>My journeys <span class="jn-entry-count" id="jn-entry-count" hidden></span></strong>
+              <small id="jn-entry-sub">Your trains, seats and PNRs</small>
+            </span>
+            <span class="jn-entry-go" data-icon="next"></span>
+          </a>
+          <button type="button" class="jn-entry-add" id="jn-entry-add"><span data-icon="plus"></span>Add a trip with your PNR</button>
+        </div>
 
         <div class="by-toggle" id="by-toggle" role="radiogroup" aria-label="Find your train by" data-by="number" hidden>
           <button type="button" role="radio" data-by="number" aria-checked="true"><span data-icon="hash"></span><span id="by-number-label">Train number</span></button>

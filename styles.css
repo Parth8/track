@@ -4391,56 +4391,123 @@ p,
 /* ============================================================
    My journeys (trains)
    ============================================================ */
-/* the way in, on the train search screen */
+/* the way in, on the train search screen: a ticket you can't miss */
+.jn-entry-wrap {
+  position: relative;
+  display: grid;
+  border-radius: var(--radius-lg, 22px);
+  background: linear-gradient(135deg, var(--deep), color-mix(in srgb, var(--deep) 78%, var(--accent)));
+  color: var(--card);
+  box-shadow: 0 10px 28px -12px color-mix(in srgb, var(--deep) 70%, transparent), var(--shadow);
+  overflow: hidden;
+}
+.jn-entry-wrap[hidden] {
+  display: none;
+}
+/* the ticket's perforation, between the trip and the add button */
+.jn-entry-wrap::before,
+.jn-entry-wrap::after {
+  content: "";
+  position: absolute;
+  top: calc(100% - 52px);
+  width: 18px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 50%;
+  background: var(--world);
+}
+.jn-entry-wrap::before {
+  left: -9px;
+}
+.jn-entry-wrap::after {
+  right: -9px;
+}
 .jn-entry {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 14px;
-  border-radius: var(--radius-md);
-  background: var(--card);
-  box-shadow: var(--shadow);
+  gap: 14px;
+  padding: 16px 16px 14px;
   color: inherit;
   text-decoration: none;
-  transition: transform 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
-}
-.jn-entry[hidden] {
-  display: none;
+  transition: transform 0.3s var(--ease-out);
 }
 .jn-entry:active {
   transform: scale(0.985);
 }
-.jn-entry > span:nth-child(2) {
+.jn-entry-text {
   flex: 1;
   min-width: 0;
   display: grid;
+  gap: 2px;
 }
 .jn-entry strong {
-  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
   font-weight: 800;
-  color: var(--ink);
+  color: inherit;
 }
 .jn-entry small {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--muted);
+  color: inherit;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jn-entry-count {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: var(--card);
+  color: var(--deep);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+.jn-entry-count[hidden] {
+  display: none;
 }
 .jn-entry-icon {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  background: var(--tint);
-  color: var(--deep);
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--card) 16%, transparent);
 }
-.jn-entry-icon svg,
+.jn-entry-icon svg {
+  width: 24px;
+  height: 24px;
+}
 .jn-entry-go svg {
-  width: 19px;
-  height: 19px;
+  width: 20px;
+  height: 20px;
 }
-.jn-entry-go {
-  color: var(--muted);
+.jn-entry-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 52px;
+  border: 0;
+  border-top: 1.5px dashed color-mix(in srgb, var(--card) 30%, transparent);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.jn-entry-add svg {
+  width: 17px;
+  height: 17px;
+}
+.jn-entry-add:active {
+  background: color-mix(in srgb, var(--card) 10%, transparent);
 }
 
 /* tabs and totals */
@@ -5927,4 +5994,269 @@ textarea.jn-input {
 .trip-guide small {
   font-size: 12.5px;
   color: var(--muted);
+}
+
+/* ---------- the answers first: platform, coach, berth, like a boarding pass ---------- */
+.jn-pass {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  grid-auto-flow: column;
+  border-radius: var(--radius-md);
+  background: var(--deep);
+  color: var(--card);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.jn-pass-tile {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 12px 14px 13px;
+  min-width: 0;
+}
+.jn-pass-tile + .jn-pass-tile {
+  border-left: 1.5px dashed color-mix(in srgb, var(--card) 28%, transparent);
+}
+.jn-pass-tile small {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+.jn-pass-tile b {
+  font-family: var(--display, inherit);
+  font-size: 30px;
+  line-height: 1.05;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jn-pass-tile span {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 800;
+  background: color-mix(in srgb, var(--card) 16%, transparent);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jn-pass-tile.ok span {
+  background: var(--mint-tint);
+  color: var(--mint-deep);
+}
+.jn-pass-tile.warn span {
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+}
+/* "How sure?": the evidence, out of the way */
+.jn-sure {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.jn-sure summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--ink-soft);
+  cursor: pointer;
+  list-style: none;
+  padding: 4px 0;
+}
+.jn-sure summary::-webkit-details-marker {
+  display: none;
+}
+.jn-sure summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-left: 2px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 0.25s var(--ease, ease);
+}
+.jn-sure[open] summary::after {
+  transform: rotate(-135deg) translateY(-1px);
+}
+.jn-sure p {
+  margin: 4px 0 0 !important;
+  font-size: 12.5px !important;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.jn-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.jn-card-head .chip svg {
+  width: 12px;
+  height: 12px;
+}
+.jn-coach-say {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+.jn-coach-say b {
+  font-size: 16px;
+}
+.jn-say-sub {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.jn-tap svg {
+  width: 18px;
+  height: 18px;
+  vertical-align: -3px;
+  color: var(--accent);
+}
+.jn-berth-is {
+  margin: 0;
+  font-size: 13px !important;
+  color: var(--ink-soft);
+}
+.jn-bay-aisle {
+  position: relative;
+}
+.jn-bay-aisle small {
+  position: absolute;
+  top: 50%;
+  left: -9px;
+  transform: translateY(-50%) rotate(-90deg);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.jn-today-t small {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--muted);
+}
+.jn-today .jn-sure {
+  margin-top: -2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .jn-pass-tile b {
+    animation: jn-cell 0.45s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  .jn-pass-tile:nth-child(2) b { animation-delay: 60ms; }
+  .jn-pass-tile:nth-child(3) b { animation-delay: 120ms; }
+}
+
+/* ---------- live status, inside the booking ---------- */
+.jn-live {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 6px;
+}
+.jn-live-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--deep);
+  color: var(--card);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  scroll-margin-top: 12px;
+}
+.jn-live-ico {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--card) 14%, transparent);
+}
+.jn-live-ico svg {
+  width: 22px;
+  height: 22px;
+}
+.jn-live-ico .live-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+}
+.jn-live-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.jn-live-text b {
+  font-size: 16px;
+}
+.jn-live-text small {
+  font-size: 12.5px;
+  opacity: 0.78;
+}
+.jn-live-chev {
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border-right: 2.5px solid currentColor;
+  border-bottom: 2.5px solid currentColor;
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.jn-live-btn[aria-expanded="true"] .jn-live-chev {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+.jn-live-panel {
+  min-width: 0;
+}
+.jn-live-panel .status-body {
+  padding: 0;
+}
+.jn-live-skel {
+  display: grid;
+  gap: 10px;
+}
+.jn-live-foot {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.jn-live-full {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--deep);
+  text-decoration: none;
+}
+.jn-live-full svg {
+  width: 15px;
+  height: 15px;
+}
+.jn-today-t small {
+  white-space: nowrap;
+  font-size: 11.5px;
+}
+.jn-today-t > span:nth-child(2) {
+  min-width: 0;
 }
