@@ -4387,3 +4387,829 @@ p,
   font-size: 12.5px;
   color: var(--muted);
 }
+
+/* ============================================================
+   My journeys (trains)
+   ============================================================ */
+/* the way in, on the train search screen */
+.jn-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+}
+.jn-entry[hidden] {
+  display: none;
+}
+.jn-entry:active {
+  transform: scale(0.985);
+}
+.jn-entry > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+.jn-entry strong {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.jn-entry small {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.jn-entry-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--tint);
+  color: var(--deep);
+}
+.jn-entry-icon svg,
+.jn-entry-go svg {
+  width: 19px;
+  height: 19px;
+}
+.jn-entry-go {
+  color: var(--muted);
+}
+
+/* tabs and totals */
+.segmented.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+.jn-count {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  font-size: 11px;
+  font-weight: 800;
+}
+.jn-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 -4px;
+}
+.jn-stats span {
+  padding: 5px 11px;
+  border-radius: 99px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.jn-month {
+  margin: 10px 4px -4px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.jn-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+/* a row: the card sits over a red Delete layer that a left swipe reveals */
+.jcard-wrap {
+  position: relative;
+  border-radius: var(--radius-lg);
+  animation: rowIn 0.45s var(--ease-out) both;
+  animation-delay: calc(min(var(--i, 0), 8) * 40ms);
+  transition: height 0.3s var(--ease-out), opacity 0.25s, margin 0.3s;
+}
+.jcard-wrap.going {
+  opacity: 0;
+  overflow: hidden;
+}
+/* while swiped, the whole row behind the card is red; the button is the strip it uncovers */
+.jcard-wrap.dragging,
+.jcard-wrap.open,
+.jcard-wrap.going {
+  background: #d64545;
+}
+.jcard-del {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  padding-right: 22px;
+  border: 0;
+  border-radius: inherit;
+  background: #d64545;
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.jcard-del svg {
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+}
+.jcard {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  width: 100%;
+  padding: 14px 16px 14px 14px;
+  border: 0;
+  border-radius: inherit;
+  background: var(--card);
+  box-shadow: var(--shadow);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: pan-y;
+  transition: transform 0.35s var(--ease-out);
+}
+.jcard-wrap.dragging .jcard {
+  transition: none;
+}
+.jcard:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+.jc-date {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  width: 52px;
+  padding: 8px 0;
+  border-radius: 14px;
+  background: var(--tint);
+  color: var(--deep);
+  line-height: 1.1;
+}
+.jcard.past .jc-date {
+  background: var(--hair);
+  color: var(--ink-soft);
+}
+.jc-date small {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.jc-date b {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 500;
+}
+.jc-body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.jc-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.jc-times {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.jc-times i {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--muted);
+}
+.jc-route {
+  font-size: 14px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jc-route b {
+  font-weight: 700;
+  color: var(--ink);
+}
+.jc-arrow {
+  color: var(--muted);
+}
+.jc-train {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jc-train .tn {
+  font-weight: 800;
+}
+.jc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.jc-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.jc-meta svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
+}
+.jc-note {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block !important;
+}
+.chip.live::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: livePulse 1.8s ease-in-out infinite;
+}
+@keyframes livePulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.jn-hint,
+.jn-device {
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+}
+.jn-device {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.jn-device svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.jn-empty .err-icon svg {
+  width: 30px;
+  height: 30px;
+}
+.jn-empty .cta {
+  margin-top: 6px;
+}
+
+/* sheets */
+.jn-sheet-body {
+  display: grid;
+  gap: 8px;
+}
+.jn-sheet .sheet-head h2 {
+  font-size: 24px;
+}
+.jn-sub {
+  display: grid;
+  margin-top: -4px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.jn-sub b {
+  color: var(--ink);
+  font-weight: 700;
+}
+.jn-legs {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tint) 40%, var(--card));
+}
+.jn-legs::before {
+  content: "";
+  position: absolute;
+  left: 22px;
+  top: 30px;
+  bottom: 30px;
+  border-left: 2px dashed var(--line);
+}
+.jn-leg {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+.jn-leg-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 3px solid var(--accent);
+  background: var(--card);
+}
+.jn-leg-place {
+  font-size: 15px;
+}
+.jn-leg-place b {
+  font-weight: 800;
+  margin-right: 6px;
+}
+.jn-leg-sub {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.jn-leg-time {
+  display: grid;
+  justify-items: end;
+  font-size: 18px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.jn-leg-time small {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.jn-when {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.jn-when svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--accent);
+}
+.jn-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.jn-tile {
+  display: grid;
+  gap: 2px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.jn-tile span {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.jn-tile strong {
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.jn-tile.late strong {
+  color: var(--late);
+}
+.jn-tile.ok strong,
+.jn-tile.early strong {
+  color: var(--early);
+}
+.jn-tile small {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.jn-rows {
+  display: grid;
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  padding: 2px 14px;
+}
+.jn-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 11px 0;
+  font-size: 14px;
+}
+.jn-row + .jn-row {
+  border-top: 1px solid var(--hair);
+}
+.jn-row > span:first-child {
+  color: var(--muted);
+  font-weight: 600;
+}
+.jn-row > span:last-child {
+  display: grid;
+  justify-items: end;
+  text-align: right;
+  font-weight: 700;
+  color: var(--ink);
+}
+.jn-row small {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.jn-none {
+  color: var(--muted) !important;
+  font-weight: 600 !important;
+}
+.jn-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 99px;
+  background: var(--tint);
+  color: var(--deep);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+.jn-copy svg {
+  width: 15px;
+  height: 15px;
+}
+.jn-fine {
+  font-size: 13px !important;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.jn-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.jn-actions .cta {
+  min-height: 52px;
+  font-size: 16px;
+}
+.jn-actions .cta svg {
+  width: 18px;
+  height: 18px;
+}
+.jn-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  border: 0;
+  border-radius: 16px;
+  background: none;
+  color: #c13d3d;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.jn-delete svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* add and edit */
+.jn-journey {
+  margin-top: 4px;
+}
+.jn-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1.5px solid var(--hair);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+  box-sizing: border-box;
+}
+textarea.jn-input {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.45;
+}
+.jn-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.jn-two {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.jn-classes {
+  gap: 6px;
+}
+.jn-trains {
+  display: grid;
+  gap: 6px;
+}
+.jn-pick {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.jn-pick button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1.5px solid var(--hair);
+  border-radius: 16px;
+  background: var(--card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s, transform 0.25s var(--ease-out);
+}
+.jn-pick button:hover {
+  border-color: var(--line);
+}
+.jn-pick button:active {
+  transform: scale(0.985);
+}
+.jn-pick-t {
+  display: flex;
+  gap: 7px;
+  font-size: 16px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.jn-pick-t i,
+.jn-summary-t i {
+  font-style: normal;
+  color: var(--muted);
+}
+.jn-pick-n {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+.jn-pick-near {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--apricot-ink);
+}
+.jn-summary {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--tint) 45%, var(--card));
+}
+.jn-summary .pill-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+.jn-summary-t {
+  display: flex;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.jn-summary-r {
+  font-size: 14.5px;
+  font-weight: 700;
+}
+.jn-summary-n {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* the home screen: your next train this week */
+#home-journey:empty {
+  display: none;
+}
+#home-journey {
+  display: grid;
+  gap: 6px;
+}
+.home-jn {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 0.3s var(--ease-out), box-shadow 0.3s var(--ease-out);
+}
+.home-jn:active {
+  transform: scale(0.985);
+}
+.home-jn > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.home-jn-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--mint-tint);
+  color: var(--mint-deep);
+}
+.home-jn-icon svg {
+  width: 22px;
+  height: 22px;
+}
+.home-jn-icon .live-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+}
+.home-jn-text {
+  display: grid;
+  min-width: 0;
+}
+.home-jn-text small {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--mint-deep);
+}
+.home-jn-text strong {
+  font-size: 15.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-jn-text > span {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-jn-all {
+  justify-self: end;
+  margin-right: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--deep);
+}
+
+/* route results: Save a train to My journeys */
+.tc-foot {
+  justify-content: space-between;
+}
+.tc-save {
+  position: relative;
+  z-index: 2; /* above the card's stretched link */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 99px;
+  background: var(--hair);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, transform 0.25s var(--ease-out);
+}
+.tc-save:active {
+  transform: scale(0.94);
+}
+.tc-save svg {
+  width: 15px;
+  height: 15px;
+}
+.tc-save.on {
+  background: var(--tint);
+  color: var(--deep);
+}
+
+/* toasts with an action (Undo) */
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.toast.show {
+  pointer-events: auto;
+}
+.toast-act {
+  border: 0;
+  padding: 4px 12px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .jcard-wrap,
+  .jcard {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Inside a sheet, its own text sizes win over the sheet's small grey paragraphs */
+.jn-sheet .jn-summary-t {
+  font-size: 20px;
+  color: var(--ink);
+  margin: 0;
+}
+.jn-sheet .jn-summary-r {
+  font-size: 14.5px;
+  color: var(--ink);
+  margin: 0;
+}
+.jn-sheet .jn-summary-n,
+.jn-sheet .jn-sub {
+  font-size: 13px;
+  margin: 0;
+}
+.jn-sheet .jn-sub {
+  margin-top: -6px;
+}
+.jn-sheet .jn-leg-place {
+  font-size: 15px;
+  color: var(--ink);
+  margin: 0;
+}
+.jn-sheet .jn-leg-sub {
+  font-size: 12px;
+  margin: 0;
+}
+.jn-sheet .jn-when {
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  margin: 2px 0;
+}
+.jn-sheet .jn-fine {
+  margin: 0;
+}
+.jn-sheet .jn-device {
+  font-size: 12px;
+  margin-top: 6px;
+}
+.jn-tabs button {
+  color: var(--ink-soft);
+}
+.jcard .chip.quiet {
+  color: var(--ink-soft);
+}

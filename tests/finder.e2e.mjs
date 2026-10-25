@@ -300,7 +300,7 @@ await test("tapping a train opens its live status for the right run, and Back re
   assert.match(await card.locator(".tc-link").getAttribute("href"), new RegExp(`no=12976&d=${addDays(istToday(), -2)}&s=MYS`));
   const box = await card.locator(".tc-foot").boundingBox();
   assert.ok(box.y > 0 && box.y < 800, "card's foot is on screen");
-  await p.mouse.click(box.x + 20, box.y + box.height / 2); // anywhere on the card opens it
+  await p.mouse.click(box.x + box.width - 40, box.y + box.height / 2); // anywhere on the card (but Save) opens it
   await settle(p, 600);
   const q = params(p);
   assert.deepEqual([q.no, q.d, q.s], ["12976", addDays(istToday(), -2), "MYS"]);
@@ -624,6 +624,154 @@ await test("pinning keeps the island on every screen, after a reload, and it ope
   await settle(p, 400);
   assert.equal(await island.getAttribute("aria-hidden"), "true");
   assert.equal(await p.evaluate(() => localStorage.getItem("pinned")), null);
+  assert.deepEqual(p.errors, []);
+});
+
+/* ---------- My journeys ---------- */
+
+await test("journeys: save a train from route results with its seat and PNR", async () => {
+  const p = await page();
+  const d = addDays(istToday(), 5);
+  await p.goto(`${SITE}?m=train&from=NDLS&to=HWH&d=${d}`);
+  await settle(p, 900);
+  await p.locator('li[data-no="12314"] .tc-save').click();
+  const sheet = p.locator("#journey-add");
+  await sheet.waitFor();
+  assert.match(await sheet.locator(".jn-summary").textContent(), /12314/);
+  await sheet.locator('.jn-classes button', { hasText: "3A" }).click();
+  await sheet.locator("#jn-coach").fill("b2");
+  await sheet.locator("#jn-seat").fill("34 lb");
+  await sheet.locator("#jn-pnr").fill("123");
+  await sheet.locator(".cta", { hasText: "Save journey" }).click();
+  assert.match(await sheet.locator(".field-error").textContent(), /10 digits/, "a short PNR is caught");
+  await sheet.locator("#jn-pnr").fill("4521879345");
+  await sheet.locator("#jn-notes").fill("Mum picks up at Howrah");
+  await sheet.locator(".cta", { hasText: "Save journey" }).click();
+  await settle(p, 300);
+  assert.match(await p.locator("#toast").textContent(), /Saved to My journeys/);
+  assert.match(await p.locator('li[data-no="12314"] .tc-save').textContent(), /Saved/);
+  const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("journeys")));
+  assert.equal(saved.length, 1);
+  assert.deepEqual([saved[0].no, saved[0].cls, saved[0].coach, saved[0].seat, saved[0].pnr, saved[0].from.code, saved[0].to.code], ["12314", "3A", "B2", "34 LB", "4521879345", "NDLS", "SDAH"]);
+  // It's in the list, upcoming, and opens its details (live status isn't open yet that far ahead)
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 600);
+  const card = p.locator(".jcard");
+  assert.equal(await card.count(), 1);
+  assert.match(await card.textContent(), /3A · B2 · 34 LB/);
+  assert.match(await card.locator(".chip").textContent(), /In \d+ days/);
+  await card.click();
+  const det = p.locator("#journey-detail");
+  await det.waitFor();
+  assert.match(await det.locator(".jn-copy").textContent(), /452 187 9345/);
+  assert.match(await det.textContent(), /Mum picks up at Howrah/);
+  const [dl] = await Promise.all([p.waitForEvent("download"), det.locator(".cta", { hasText: "Add to calendar" }).click()]);
+  assert.match(dl.suggestedFilename(), /^train-12314-\d{4}-\d{2}-\d{2}\.ics$/);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: swipe left to delete, with Undo", async () => {
+  const p = await page();
+  const d = addDays(istToday(), 4);
+  await p.goto(`${SITE}?m=train&from=NDLS&to=HWH&d=${d}`);
+  await settle(p, 900);
+  await p.locator('li[data-no="12302"] .tc-save').click();
+  await p.locator("#journey-add .cta", { hasText: "Save journey" }).click();
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 600);
+  const card = p.locator(".jcard");
+  const box = await card.boundingBox();
+  await p.mouse.move(box.x + box.width - 30, box.y + box.height / 2);
+  await p.mouse.down();
+  for (let i = 1; i <= 10; i++) await p.mouse.move(box.x + box.width - 30 - i * 30, box.y + box.height / 2 + 2);
+  await p.mouse.up();
+  await settle(p, 500);
+  assert.equal(await p.locator(".jcard").count(), 0, "gone after a long swipe");
+  assert.equal(await p.evaluate(() => JSON.parse(localStorage.getItem("journeys")).length), 0);
+  assert.match(await p.locator("#toast").textContent(), /Deleted 12302/);
+  await p.locator("#toast .toast-act").click();
+  await settle(p, 400);
+  assert.equal(await p.locator(".jcard").count(), 1, "Undo brings it back");
+  // A short swipe opens the Delete button instead
+  const b2 = await p.locator(".jcard").boundingBox();
+  await p.mouse.move(b2.x + b2.width - 30, b2.y + b2.height / 2);
+  await p.mouse.down();
+  for (let i = 1; i <= 4; i++) await p.mouse.move(b2.x + b2.width - 30 - i * 22, b2.y + b2.height / 2);
+  await p.mouse.up();
+  await settle(p, 400);
+  assert.equal(await p.locator(".jcard-wrap.open").count(), 1);
+  await p.locator(".jcard-del").click();
+  await settle(p, 500);
+  assert.equal(await p.locator(".jcard").count(), 0);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: add one from scratch by stations and day", async () => {
+  const p = await page();
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 500);
+  assert.match(await p.locator(".jn-empty h2").textContent(), /No upcoming journeys/);
+  await p.locator("#journeys-add").click();
+  const sheet = p.locator("#journey-add");
+  await sheet.locator("#jn-from").focus();
+  await sheet.locator("#jn-from-list .st-opt").first().waitFor();
+  await sheet.locator("#jn-from").fill("mys");
+  await settle(p);
+  await p.keyboard.press("Enter");
+  await sheet.locator("#jn-to").fill("kacheguda");
+  await settle(p);
+  await p.keyboard.press("Enter");
+  await sheet.locator("#jn-date").fill(addDays(istToday(), 2));
+  await sheet.locator(".cta", { hasText: "Find my train" }).click();
+  await sheet.locator(".jn-pick button").first().waitFor();
+  await sheet.locator(".jn-pick button").first().click();
+  assert.match(await sheet.locator(".jn-summary").textContent(), /12786/);
+  await sheet.locator(".cta", { hasText: "Save journey" }).click();
+  await settle(p, 500);
+  assert.equal(await p.locator(".jcard").count(), 1, "the list updates straight away");
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: a past trip keeps how it actually ran; the home screen shows the next one", async () => {
+  const p = await page();
+  const start = addDays(istToday(), -2);
+  const t = (h, m) => new Date(Date.parse(`${start}T00:00:00+05:30`) + (h * 60 + m) * 60000).toISOString();
+  const past = { id: "jpast", no: "12627", name: "Karnataka SF Express", startDate: start, from: { code: "SBC", name: "KSR Bengaluru" }, to: { code: "BPL", name: "Bhopal Jn" }, dep: t(6, 0), arr: t(30, 0), schedMin: 1440, km: 1400, cls: "3A", coach: "B4", seat: "12 LB", pnr: "", notes: "" };
+  const soonStart = addDays(istToday(), 2);
+  const soon = { ...past, id: "jsoon", startDate: soonStart, dep: new Date(Date.parse(`${soonStart}T19:20:00+05:30`)).toISOString(), arr: new Date(Date.parse(`${soonStart}T19:20:00+05:30`) + 86400000).toISOString() };
+  await p.addInitScript((list) => localStorage.setItem("journeys", JSON.stringify(list)), [past, soon]);
+  // The tracker's answer for that run: left 6 minutes late, arrived 42 minutes late.
+  await p.context().route(`${API}/api/train**`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Access-Control-Allow-Origin": new URL(SITE).origin },
+      body: JSON.stringify({
+        kind: "train", number: "12627", name: "Karnataka SF Express", date: start, status: { phase: "arrived" }, position: {},
+        stops: [
+          { code: "SBC", name: "KSR Bengaluru", km: 0, halts: true, platform: "2", sched: { arr: null, dep: t(6, 0) }, actual: { arr: null, dep: t(6, 6) }, expected: { arr: null, dep: null }, delay: { arr: null, dep: 6 }, passed: true },
+          { code: "BPL", name: "Bhopal Jn", km: 1390, halts: true, platform: "4", sched: { arr: t(30, 0), dep: t(30, 10) }, actual: { arr: t(30, 42), dep: null }, expected: { arr: null, dep: null }, delay: { arr: 42, dep: null }, passed: true },
+        ],
+      }),
+    })
+  );
+  await p.goto(`${SITE}`);
+  await settle(p, 800);
+  assert.match(await p.locator(".home-jn").textContent(), /Your next train/);
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 1500);
+  await p.locator(".jn-tabs button", { hasText: "Past" }).click();
+  await settle(p, 300);
+  const card = p.locator(".jcard.past");
+  assert.equal(await card.count(), 1);
+  assert.match(await card.locator(".chip").textContent(), /42m late/);
+  assert.match(await p.locator(".jn-stats").textContent(), /1 trip/);
+  await card.click();
+  const det = p.locator("#journey-detail");
+  await det.waitFor();
+  assert.match(await det.locator(".jn-tiles").textContent(), /Arrived42m late/);
+  assert.match(await det.locator(".jn-tiles").textContent(), /36m longer than the timetable/);
+  assert.match(await det.textContent(), /PF 2/);
   assert.deepEqual(p.errors, []);
 });
 

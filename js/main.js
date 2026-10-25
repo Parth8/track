@@ -1,4 +1,4 @@
-import { h, svg, $, todayIn, addDays, longDate, dayLabel, relativeDay, prefersReducedMotion, isDarkTheme, ago, IST } from "./util.js";
+import { h, svg, $, todayIn, addDays, longDate, dayLabel, relativeDay, prefersReducedMotion, isDarkTheme, ago, IST, timeNode } from "./util.js";
 import { icons, art } from "./icons.js";
 import { api, weatherAt, ApiError } from "./api.js";
 import { createFlipDate } from "./flip.js";
@@ -11,6 +11,8 @@ import { guideArt } from "./guide.js";
 import { createRoutePanel, createResults, routeRange } from "./finder.js";
 import { createFlightResults, flightRouteRange } from "./flight-finder.js";
 import { createIsland } from "./island.js";
+import { createJourneysView, createJourneySheets } from "./journeys-ui.js";
+import { sortedJourneys, nextJourney, isTrackable, isLiveNow, recordRun, needsRecord, onJourneysChange } from "./journeys.js";
 
 const today = () => todayIn(IST);
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
@@ -88,7 +90,7 @@ const BY_LABEL = { train: ["Train number", "Find your train by"], flight: ["Flig
 /* Elements                                                            */
 /* ------------------------------------------------------------------ */
 
-const views = { home: $("#view-home"), search: $("#view-search"), status: $("#view-status"), results: $("#view-results") };
+const views = { home: $("#view-home"), search: $("#view-search"), status: $("#view-status"), results: $("#view-results"), journeys: $("#view-journeys") };
 const form = $("#search-form");
 const qInput = $("#q");
 const qError = $("#q-error");
@@ -129,6 +131,12 @@ for (const card of document.querySelectorAll(".mode-card")) {
   });
 }
 
+$("#jn-entry").addEventListener("click", (e) => {
+  if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  navigate({ m: "train", v: "journeys" });
+});
+
 $("#search-back").addEventListener("click", (e) => {
   e.preventDefault();
   navigate({}, { back: true });
@@ -143,6 +151,98 @@ for (const btn of byToggle.querySelectorAll("button")) {
     prefill = { mode: r.mode, no: qInput.value.replace(/\s/g, ""), date: flip?.value, ...(routePanel ? routePanel.values() : {}) };
     navigate({ m: r.mode, by: by === "route" ? "route" : null }, { replace: true, instant: true, keepFocus: true });
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* My journeys (trains): saved on this device                          */
+/* ------------------------------------------------------------------ */
+
+const journeySheets = createJourneySheets({
+  navigate,
+  toast: (m, a) => toast(m, a),
+  onSaved: () => {
+    if (!views.journeys.hidden) journeysView.paint();
+    if (!views.results.hidden) resultsBy.train.redraw();
+    paintHomeJourney();
+    syncJourneyEntry();
+  },
+});
+const journeysView = createJourneysView({ root: $("#journeys-root"), navigate, toast: (m, a) => toast(m, a), sheets: journeySheets });
+$("#journeys-add").addEventListener("click", () => journeySheets.openAdd());
+$("#journeys-back").addEventListener("click", (e) => {
+  e.preventDefault();
+  navigate({ m: "train" });
+});
+onJourneysChange(() => {
+  paintHomeJourney();
+  syncJourneyEntry();
+});
+
+/** On the train search screen: a way in, saying what's coming up. */
+function syncJourneyEntry() {
+  const up = sortedJourneys("upcoming");
+  $("#jn-entry-sub").textContent = up.length ? `${up.length} upcoming · next on ${new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: IST }).format(new Date(up[0].dep))}` : "Keep your trains, seats and PNRs in one place";
+}
+
+/** On the home screen: your next train this week, one tap from live status. */
+function paintHomeJourney() {
+  const slot = $("#home-journey");
+  const j = nextJourney(7);
+  if (!j) return slot.replaceChildren();
+  const live = isLiveNow(j);
+  const when = live ? "On its way" : relativeDay(new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(new Date(j.dep)), today());
+  const seat = [j.cls, j.coach, j.seat].filter(Boolean).join(" · ");
+  slot.replaceChildren(
+    h(
+      "a",
+      {
+        class: `home-jn${live ? " live" : ""}`,
+        href: isTrackable(j) ? `?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}` : "?m=train&v=journeys",
+        on: {
+          click: (e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+            e.preventDefault();
+            if (isTrackable(j)) navigate({ m: "train", no: j.no, d: j.startDate, s: j.to.code });
+            else navigate({ m: "train", v: "journeys" });
+          },
+        },
+      },
+      h("span", { class: "home-jn-icon" }, svg(icons.trainFront), live ? h("i", { class: "live-dot", "aria-hidden": "true" }) : null),
+      h(
+        "span",
+        { class: "home-jn-text" },
+        h("small", { text: `Your next train · ${when}` }),
+        h("strong", {}, timeNode(j.dep), ` ${j.from.name} to ${j.to.name}`),
+        h("span", { text: [`${j.no} ${j.name}`, seat].filter(Boolean).join(" · ") })
+      ),
+      svg(icons.next)
+    ),
+    h("a", { class: "home-jn-all", href: "?m=train&v=journeys", on: { click: (e) => (e.preventDefault(), navigate({ m: "train", v: "journeys" })) } }, "All my journeys")
+  );
+}
+
+/**
+ * A saved trip's record (when you really left and arrived) comes from the live tracker, which only
+ * sees runs from the last 4 days. So when the app opens, quietly read any trip that has ended or is
+ * under way and isn't recorded yet. Train data is free; this is a handful of requests at most.
+ */
+let recording = false;
+async function recordFinished() {
+  if (recording) return;
+  recording = true;
+  try {
+    const seen = new Set();
+    for (const j of needsRecord().slice(0, 4)) {
+      const k = `${j.no}/${j.startDate}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const data = await api("/api/train", { no: j.no, date: j.startDate }, { timeout: 25000, retries: 0 }).catch(() => null);
+      if (data) recordRun(j.no, j.startDate, data);
+    }
+  } finally {
+    recording = false;
+  }
+  if (!views.journeys.hidden) journeysView.paint();
 }
 
 /* ------------------------------------------------------------------ */
@@ -263,7 +363,7 @@ const resultsOpts = {
   footer: () => h("div", { class: "foot-stack" }, h("button", { type: "button", class: "link-quiet", "data-open": "sources", text: "Sources and credits" }), credit()),
 };
 // Trains and flights share the results screen; each mode has its own list behind it.
-const resultsBy = { train: createResults(resultsOpts), flight: createFlightResults(resultsOpts) };
+const resultsBy = { train: createResults({ ...resultsOpts, onSave: (t) => journeySheets.openAdd(t), onOpenSaved: (id) => journeySheets.openDetail(id) }), flight: createFlightResults(resultsOpts) };
 const results = { redraw: () => Object.values(resultsBy).forEach((x) => x.redraw()) };
 $("#results-back").addEventListener("click", (e) => {
   e.preventDefault();
@@ -391,6 +491,8 @@ if (window.matchMedia("(min-width: 720px)").matches) {
 setupTheme();
 setupClock();
 route();
+// Quietly record how any saved trip went, once the page has settled.
+(window.requestIdleCallback || ((fn) => setTimeout(fn, 1500)))(() => recordFinished());
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */
@@ -474,6 +576,7 @@ function current() {
     from: code("from"),
     to: code("to"),
     time: /^\d{2}:\d{2}$/.test(p.get("t") || "") ? p.get("t") : "",
+    view: m === "train" && p.get("v") === "journeys" ? "journeys" : null,
   };
 }
 
@@ -494,7 +597,7 @@ function backToSearch() {
 function route(opts = {}) {
   const r = current();
   const isResults = !!(r.mode && r.from && r.to && r.by !== "route");
-  const target = !r.mode ? "home" : r.no ? "status" : isResults ? "results" : "search";
+  const target = !r.mode ? "home" : r.no ? "status" : r.view === "journeys" ? "journeys" : isResults ? "results" : "search";
   const apply = () => {
     for (const [name, el] of Object.entries(views)) el.hidden = name !== target;
     document.body.dataset.mode = r.mode || "home";
@@ -507,7 +610,15 @@ function route(opts = {}) {
       resultsBy[other].pause();
       scrollTo = resultsBy[r.mode].open({ ...r, date: validRouteDate(r.date, r.mode) }, { pop: opts.pop });
     }
-    if (target === "home") document.title = "Track a train or flight";
+    if (target === "home") {
+      document.title = "Track a train or flight";
+      paintHomeJourney();
+    }
+    if (target === "journeys") {
+      document.title = "My journeys";
+      journeysView.open();
+      recordFinished();
+    }
     if (!opts.keepFocus) views[target].querySelector("[data-focus]")?.focus({ preventScroll: true });
     window.scrollTo({ top: scrollTo, behavior: "instant" });
     syncIsland();
@@ -560,6 +671,8 @@ function setupSearch(r) {
 
   document.title = byRoute ? (r.mode === "flight" ? "Find flights between airports" : "Find trains between stations") : r.mode === "flight" ? "Track a flight" : "Track a train";
   byToggle.hidden = !MODES[r.mode]?.route;
+  $("#jn-entry").hidden = r.mode !== "train";
+  syncJourneyEntry();
   const [numberLabel, groupLabel] = BY_LABEL[r.mode] || BY_LABEL.train;
   $("#by-number-label").textContent = numberLabel;
   byToggle.setAttribute("aria-label", groupLabel);
@@ -639,7 +752,7 @@ function openStatus(r) {
 $("#status-back").addEventListener("click", (e) => {
   e.preventDefault();
   // Opened from a route search: go back to that list, where you were.
-  if (history.state?.from === "results") history.back();
+  if (history.state?.from === "results" || history.state?.from === "journeys") history.back();
   else backToSearch();
 });
 $("#status-refresh").addEventListener("click", () => (session?.data ? load({ manual: true }) : retryNow()));
@@ -792,6 +905,7 @@ function paint() {
 
   s.island = view.island;
   s.anchor = view.anchor;
+  if (s.mode === "train") recordRun(s.no, s.date || today(), s.data);
   view.anchor?.after(freshNote(s));
   if (samePin(s)) savePin({ ...pinned, stop: s.stop || null, island: view.island });
   syncIsland();
@@ -1288,9 +1402,28 @@ shareSheet.addEventListener("click", (e) => {
 });
 
 let toastTimer;
-function toast(message) {
-  toastEl.textContent = message;
+/** A short message at the top. With an action (like Undo), it stays a little longer and can be tapped. */
+function toast(message, action = null) {
+  toastEl.replaceChildren(
+    h("span", { text: message }),
+    ...(action
+      ? [
+          h("button", {
+            type: "button",
+            class: "toast-act",
+            text: action.label,
+            on: {
+              click: () => {
+                action.run();
+                toastEl.classList.remove("show");
+              },
+            },
+          }),
+        ]
+      : [])
+  );
+  toastEl.classList.toggle("has-act", !!action);
   toastEl.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2400);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), action ? 5500 : 2400);
 }

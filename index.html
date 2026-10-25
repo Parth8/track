@@ -79,6 +79,8 @@
         </a>
       </nav>
 
+      <div id="home-journey"></div>
+
       <footer class="home-foot">
         <button type="button" class="link-quiet" data-open="sources">Sources and credits</button>
         <div id="home-credit"></div>
@@ -93,6 +95,12 @@
       </div>
       <form id="search-form" class="search-form" novalidate>
         <h1 class="display" id="search-title" tabindex="-1" data-focus>Which train?</h1>
+
+        <a class="jn-entry" id="jn-entry" href="?m=train&v=journeys" hidden>
+          <span class="jn-entry-icon" data-icon="calendar"></span>
+          <span><strong>My journeys</strong><small id="jn-entry-sub">Your trains, seats and PNRs</small></span>
+          <span class="jn-entry-go" data-icon="next"></span>
+        </a>
 
         <div class="by-toggle" id="by-toggle" role="radiogroup" aria-label="Find your train by" data-by="number" hidden>
           <button type="button" role="radio" data-by="number" aria-checked="true"><span data-icon="hash"></span><span id="by-number-label">Train number</span></button>
@@ -169,6 +177,16 @@
         <button type="button" class="icon-btn" id="results-swap" aria-label="Show the return journey" data-icon="swap"></button>
       </div>
       <div id="results-root" aria-live="polite" aria-busy="true"></div>
+    </section>
+
+    <!-- ============ My journeys ============ -->
+    <section id="view-journeys" class="view" hidden aria-labelledby="journeys-title">
+      <div class="topbar">
+        <a class="icon-btn" id="journeys-back" href="?m=train" aria-label="Back" data-icon="back"></a>
+        <div class="topbar-title"><strong id="journeys-title" tabindex="-1" data-focus>My journeys</strong><span>Trains</span></div>
+        <button type="button" class="icon-btn" id="journeys-add" aria-label="Add a journey" data-icon="plus"></button>
+      </div>
+      <div id="journeys-root"></div>
     </section>
 
     <!-- ============ Status ============ -->
@@ -252,7 +270,7 @@
       <p class="sheet-label">How fresh is it?</p>
       <p>Live data costs us a little every time we check, so Track checks at a calm pace and speeds up when it matters: as a train nears your stop, and in the hours before a flight leaves. A plane in the air is followed live for free. Keeping it gentle is how Track stays free, with no ads, for everyone.</p>
       <p>Not affiliated with Indian Railways, any airline, or the providers above. Times can be wrong, so confirm at the station or with your airline.</p>
-      <p>The only things this site keeps on your device are your appearance and clock choices, and a journey you pin. No accounts, no cookies, no history.</p>
+      <p>The only things this site keeps on your device are your appearance and clock choices, a journey you pin, and trips you save in My journeys. Your PNR never leaves your device. No accounts, no cookies, no history.</p>
       <p>Track is free and has no ads. If you'd like to help with running costs, you can <a href="https://buymeacoffee.com/parth8" rel="noopener noreferrer" target="_blank">chip in for a chai</a>.</p>
     </div>
   </dialog>

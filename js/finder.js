@@ -6,6 +6,7 @@ import { icons, art } from "./icons.js";
 import { api, ApiError } from "./api.js";
 import { loadStations, stationName, stationSource } from "./stations.js";
 import { airportSource } from "./airports.js";
+import { journeysForRun } from "./journeys.js";
 
 const today = () => todayIn(IST);
 const noonOf = (d) => `${d}T12:00:00+05:30`;
@@ -60,7 +61,7 @@ export const routeRange = () => [addDays(today(), -3), addDays(today(), 30)];
 
 let uid = 0;
 
-function stationField({ input, list, codeEl, status, onPick, source }) {
+export function stationField({ input, list, codeEl, status, onPick, source }) {
   const src = () => source(); // stations or airports, whichever the form is searching
   const field = input.closest(".jf");
   let picked = null; // { code, name }
@@ -433,7 +434,7 @@ const PREMIUM = /(Vande Bharat|Rajdhani|Shatabdi|Duronto|Tejas|Humsafar|Garib Ra
 /** True when the live tracker can show this run (it covers runs from the last four days). */
 const trackable = (startDate) => startDate >= addDays(today(), -3) && startDate <= today();
 
-export function createResults({ root, title, sub, navigate, toast, footer }) {
+export function createResults({ root, title, sub, navigate, toast, footer, onSave, onOpenSaved }) {
   const memo = new Map(); // search key => data, for instant back navigation
   let current = null; // { key, r, data, expanded, scrollY, seat }
   const seatMemo = new Map(); // "no/from/to/date/cls/quota" => { data } | { err } | { pending: Promise }
@@ -607,11 +608,32 @@ export function createResults({ root, title, sub, navigate, toast, footer }) {
         h("span", { class: "tc-tags" }, tags)
       ),
       seatsOk ? seatSection(t, r) : null,
-      h("span", { class: "tc-foot", "aria-hidden": canTrack ? "true" : null }, foot)
+      h("span", { class: "tc-foot" }, !past && onSave ? saveButton(t) : null, h("span", { "aria-hidden": canTrack ? "true" : null }, foot))
     );
     const li = h("li", { "data-no": t.number }, card);
     cards.set(t.number, () => trainCard(t, r, i, flags, true));
     return li;
+  }
+
+  /** Keep this train in My journeys (or open it, if it's already there). */
+  function saveButton(t) {
+    const saved = journeysForRun(t.number, t.startDate).find((j) => j.from.code === t.from.code && j.to.code === t.to.code);
+    return h(
+      "button",
+      {
+        type: "button",
+        class: `tc-save${saved ? " on" : ""}`,
+        "aria-label": saved ? `${t.number} is in My journeys. Open it` : `Save ${t.number} to My journeys`,
+        on: {
+          click: () =>
+            saved
+              ? onOpenSaved?.(saved.id)
+              : onSave({ no: t.number, name: t.name, startDate: t.startDate, from: t.from, to: t.to, dep: t.dep, arr: t.arr, schedMin: t.durationMin, km: t.distanceKm ?? null, classes: t.classes || [] }),
+        },
+      },
+      svg(icons.bookmark),
+      saved ? "Saved" : "Save"
+    );
   }
 
   /* ---------------- seats ---------------- */

@@ -28,6 +28,7 @@ Track is built on one idea: **show what matters to the traveller right now, and 
 - Station search runs on your device across 8,677 stations, by name, code, older name or nickname ("Mysore", "Bombay", "Trichy"), with each city's main station first
 - Route results show departure and arrival, journey time, which days it runs, on-time record, the next one to leave and the fastest, nearby stations the train uses instead, and trains on the route that don't run that day
 - **Seat availability** on every route result: tap a class (SL, 3A, 2A…) to see live IRCTC availability (available, RAC, waitlist or regret), the fare, the chance a waitlist confirms, and the next few runs. Tatkal is offered for tomorrow's trains.
+- **My journeys**: keep your train trips (train, day, your stations, class, coach, seat, PNR, notes) on your device. Upcoming, Past and All, grouped by month; swipe left to delete, with Undo. Save a train straight from route search, or add one by stations and day. Upcoming trips open live status when it's ready, can be added to your calendar (with a reminder 3 hours before), and the next one this week sits on the home screen. Past trips keep how they actually ran: when you really left and arrived, the delay, time on board against the timetable, distance and average speed, plus totals ("1,813 km on rails · 1 of 2 on time")
 - Live running status for the last 4 run dates, via a split-flap date picker
 - "Your stop" countdown with delay, ETA and journey progress. Tap any station to make it your stop.
 - Timeline with scheduled and actual or expected times, platforms, halts and day dividers for overnight runs
@@ -103,6 +104,8 @@ js/
   install.js          Add to home screen: which way this browser does it, if at all
   guide.js            Picture guides for adding Track on iPhone, iPad and Mac (static SVG)
   island.js           The live island at the top of status screens
+  journeys.js         My journeys: saved trips on this device, how past ones ran, calendar files
+  journeys-ui.js      My journeys screens: the list, swipe to delete, details, add and edit
   finder.js           Route finder: From/To fields (stations or airports), time picks, train results, seats
   flight-finder.js    Flight results for a route search
   stations.js         Station list loading and on-device search
@@ -320,7 +323,7 @@ The Worker address appears twice at the top of `index.html`: in `<meta name="api
 - **No untrusted HTML.** All API data is written with `textContent`. The only markup inserted is static SVG from `icons.js`.
 - **Secrets stay server-side.** The AeroDataBox key lives in the Worker as a secret and never reaches the browser or this repository.
 - **The Worker validates everything.** It checks each request's origin against an allowlist, rate-limits per visitor, and validates every input before calling a source.
-- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only things kept on a device are the appearance and clock choices and a pinned journey (if you pin one), in `localStorage`. The Worker's KV store holds the month's count of paid flight lookups, airport details, and, for 2 days, a count of paid lookups per visitor keyed by a one-way hash of the address and day (never the address itself).
+- **Nothing about visitors is stored.** No accounts, cookies, analytics or history. The only things kept on a device are the appearance and clock choices, a pinned journey, and any trips saved in My journeys (with PNRs, which never leave the device), in `localStorage`. The Worker's KV store holds the month's count of paid flight lookups, airport details, and, for 2 days, a count of paid lookups per visitor keyed by a one-way hash of the address and day (never the address itself).
 - **No referrers are sent.** Referrers are suppressed and credentials are omitted from API calls.
 
 ---
