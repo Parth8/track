@@ -11,8 +11,8 @@ import { guideArt } from "./guide.js";
 import { createRoutePanel, createResults, routeRange } from "./finder.js";
 import { createFlightResults, flightRouteRange } from "./flight-finder.js";
 import { createIsland } from "./island.js";
-import { createJourneysView, createJourneySheets } from "./journeys-ui.js";
-import { sortedJourneys, nextJourney, isTrackable, isLiveNow, recordRun, needsRecord, onJourneysChange } from "./journeys.js";
+import { createJourneysView, createJourneySheets, checkDueBookings } from "./journeys-ui.js";
+import { sortedJourneys, nextJourney, isTrackable, isLiveNow, isTravelDay, bookingChip, recordRun, needsRecord, onJourneysChange } from "./journeys.js";
 
 const today = () => todayIn(IST);
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
@@ -176,6 +176,7 @@ $("#journeys-back").addEventListener("click", (e) => {
 onJourneysChange(() => {
   paintHomeJourney();
   syncJourneyEntry();
+  setTimeout(autoPinToday, 0); // a trip saved for today pins itself
 });
 
 /** On the train search screen: a way in, saying what's coming up. */
@@ -191,7 +192,8 @@ function paintHomeJourney() {
   if (!j) return slot.replaceChildren();
   const live = isLiveNow(j);
   const when = live ? "On its way" : relativeDay(new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(new Date(j.dep)), today());
-  const seat = [j.cls, j.coach, j.seat].filter(Boolean).join(" · ");
+  const bk = bookingChip(j.booking);
+  const seat = [j.cls, j.coach, j.seat, bk && bk.cls !== "ok" ? bk.text : null].filter(Boolean).join(" · ");
   slot.replaceChildren(
     h(
       "a",
@@ -285,6 +287,7 @@ function togglePin(source) {
   const here = onOwnStatus() ? session : null;
   if (source === "pinned" || !here || samePin(here)) {
     if (!pinned) return;
+    if (pinned.auto) dismissAutoPin(pinned.auto); // you took it down: it stays down for that trip
     savePin(null);
     toast("Unpinned");
   } else {
@@ -344,8 +347,55 @@ async function refreshPinned(force = false) {
   if (pinned === p && !done && every) pinTimer = setTimeout(() => refreshPinned(true), every);
 }
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") refreshPinned();
+  if (document.visibilityState !== "visible") return;
+  refreshPinned();
+  autoPinToday();
 });
+
+/**
+ * Travel day: a saved trip pins itself to the top, so the island is there when you open the app
+ * on the platform. Never over a pin you chose, and once you unpin it, not again for that trip.
+ */
+const AUTO_OFF_KEY = "autopin-off";
+function autoPinOff() {
+  try {
+    return JSON.parse(localStorage.getItem(AUTO_OFF_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+function dismissAutoPin(id) {
+  try {
+    localStorage.setItem(AUTO_OFF_KEY, JSON.stringify([...autoPinOff().filter((x) => x !== id), id].slice(-30)));
+  } catch {
+    /* private mode: it may pin again next visit */
+  }
+}
+let autoPinning = false;
+let autoPinTried = 0;
+async function autoPinToday() {
+  if (pinned || autoPinning || document.hidden || Date.now() - autoPinTried < 120000) return;
+  const off = autoPinOff();
+  const j = sortedJourneys("upcoming").find((x) => isTravelDay(x) && !off.includes(x.id));
+  if (!j) return;
+  autoPinning = true;
+  autoPinTried = Date.now();
+  try {
+    const data = await api("/api/train", { no: j.no, date: j.startDate }, { timeout: 25000, retries: 0 });
+    const view = renderTrain(data, { stop: j.to.code, foldOpen: false, onPickStop() {}, onToggleFold() {}, onChangeStop() {} });
+    if (pinned || !view.island) return;
+    lastPinData = data;
+    pinFetchedAt = Date.now();
+    savePin({ mode: "train", no: j.no, date: j.startDate, stop: j.to.code, island: view.island, auto: j.id });
+    syncIsland();
+    refreshPinned();
+    toast(`Your ${j.no} is pinned to the top for today's trip`, { label: "Unpin", run: () => togglePin("pinned") });
+  } catch {
+    /* no live data yet: try again next time the app comes up */
+  } finally {
+    autoPinning = false;
+  }
+}
 byToggle.addEventListener("keydown", (e) => {
   if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
   e.preventDefault();
@@ -491,8 +541,13 @@ if (window.matchMedia("(min-width: 720px)").matches) {
 setupTheme();
 setupClock();
 route();
-// Quietly record how any saved trip went, once the page has settled.
-(window.requestIdleCallback || ((fn) => setTimeout(fn, 1500)))(() => recordFinished());
+// Once the page has settled: record how any saved trip went, pin today's trip, and look at any
+// booking that's due (a waitlist moving, a chart coming out).
+(window.requestIdleCallback || ((fn) => setTimeout(fn, 1500)))(() => {
+  recordFinished();
+  autoPinToday();
+  checkDueBookings((m) => toast(m)).then((n) => n && (paintHomeJourney(), !views.journeys.hidden && journeysView.paint()));
+});
 
 /* ------------------------------------------------------------------ */
 /* Appearance                                                          */

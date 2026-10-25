@@ -19,13 +19,139 @@ import {
   isLiveNow,
   pastStats,
   journeyIcs,
+  boardDay,
+  bookingFrom,
+  seatFrom,
+  bookingDue,
+  bookingChip,
 } from "./journeys.js";
 
 const today = () => todayIn(IST);
 const CLASS_NAMES = { "1A": "AC First Class", "2A": "AC 2 Tier", "3A": "AC 3 Tier", "3E": "AC 3 Economy", EA: "Anubhuti", EC: "Executive Chair", EV: "Vistadome", CC: "AC Chair Car", FC: "First Class", SL: "Sleeper", "2S": "Second Sitting" };
 const daysUntil = (iso) => Math.round((Date.parse(`${iso.slice(0, 10)}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / 86400000);
-const boardDate = (j) => new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(new Date(j.dep));
+const boardDate = boardDay;
 const trackLink = (j) => ({ m: "train", no: j.no, d: j.startDate, s: j.to.code });
+const PNR_PRIVACY = "Your PNR goes through Track's server to RailYatri's public PNR status, only to read your booking. It isn't logged or stored there, and the booking is kept on this device.";
+
+/**
+ * Check a saved journey's booking against its PNR and keep what changed. Returns a line worth
+ * telling you ("now confirmed: B3 59"), or null when nothing that matters moved.
+ */
+export async function checkBooking(j, { fresh = false } = {}) {
+  const data = await api("/api/pnr", { pnr: j.pnr, fresh: fresh ? 1 : null }, { timeout: 25000, retries: 0 });
+  if (data.no !== j.no) throw new ApiError("pnr_other_train", `This PNR is for train ${data.no}, not ${j.no}.`, 409);
+  const before = j.booking;
+  const booking = bookingFrom(data);
+  updateJourney(j.id, { booking, pnrLinked: true, cls: j.cls || data.cls || null, ...(seatFrom(booking) || {}) });
+  return bookingNews(j, before, booking);
+}
+
+function bookingNews(j, before, after) {
+  if (!before) return null;
+  const seat = seatFrom(after);
+  const where = seat ? `: ${seat.coach} ${seat.seat}` : "";
+  if (before.overall !== "confirmed" && after.overall === "confirmed") return `${j.no} on ${shortDay(boardDate(j))} is confirmed${where}`;
+  if (before.chart !== "prepared" && after.chart === "prepared") return `Chart prepared for ${j.no}${where}`;
+  const a = bookingChip(before)?.text;
+  const b = bookingChip(after)?.text;
+  return a && b && a !== b ? `${j.no} on ${shortDay(boardDate(j))} moved from ${a} to ${b}` : null;
+}
+
+/** "B3 · 59 Lower", "RAC 7", "Waitlist 12", from one passenger. */
+function passengerLine(p) {
+  if (p.coach && p.berth) return [p.coach, [p.berth, p.berthType].filter(Boolean).join(" ")].join(" · ");
+  if (p.kind === "waitlist") return p.position ? `Waitlist ${p.position}` : "Waitlisted";
+  if (p.kind === "rac") return p.position ? `RAC ${p.position}` : "RAC";
+  if (p.kind === "cancelled") return "Cancelled";
+  return p.current || "Status not shown";
+}
+const KIND_WORD = { confirmed: "Confirmed", rac: "RAC", waitlist: "Waitlist", cancelled: "Cancelled", unknown: "" };
+
+/**
+ * Who's travelling on the booking: one row each, so a solo trip is one line and a family of six
+ * is six. Public PNR status shows seats, not names, so they're Passenger 1, 2 and so on.
+ */
+function passengersBlock(b) {
+  const ps = b.passengers || [];
+  return h(
+    "ol",
+    { class: `jn-pax${ps.length === 1 ? " solo" : ""}`, "aria-label": `${ps.length} passenger${ps.length > 1 ? "s" : ""}` },
+    ps.map((p) =>
+      h(
+        "li",
+        { class: `jn-pax-row ${p.kind}` },
+        h("span", { class: "jn-pax-n", "aria-hidden": "true", text: String(p.n) }),
+        h("span", { class: "jn-pax-who" }, h("b", { text: passengerLine(p) }), h("small", { text: `Passenger ${p.n}${p.booking && p.booking !== p.current ? ` · booked ${p.booking}` : ""}` })),
+        KIND_WORD[p.kind] ? h("span", { class: `jn-pax-kind ${p.kind}`, text: KIND_WORD[p.kind] }) : null
+      )
+    )
+  );
+}
+
+function pnrError(e) {
+  if (!(e instanceof ApiError)) return "Couldn't check the booking just now.";
+  if (e.code === "pnr_not_found" || e.code === "invalid_pnr" || e.code === "pnr_other_train") return e.message;
+  if (e.code === "network" || e.code === "timeout") return "Couldn't reach the booking status. Check your connection and try again.";
+  return "PNR status is slow right now. Try again in a minute.";
+}
+
+/**
+ * Upcoming journeys whose booking is due a look, checked one at a time (a few at most) when the
+ * app opens or you open My journeys. Tells you only when something changed.
+ */
+let sweeping = false;
+export async function checkDueBookings(toast, { max = 3 } = {}) {
+  if (sweeping || !navigator.onLine) return 0;
+  sweeping = true;
+  let n = 0;
+  try {
+    const due = sortedJourneys("upcoming").filter((j) => bookingDue(j) && Date.parse(j.dep) - Date.now() < 30 * 86400000);
+    for (const j of due.slice(0, max)) {
+      try {
+        const news = await checkBooking(j);
+        n++;
+        if (news) toast(news);
+      } catch {
+        /* try again next time */
+      }
+    }
+  } finally {
+    sweeping = false;
+  }
+  return n;
+}
+
+/**
+ * Share a trip: a message with a link that opens this train's live status at your stop, so
+ * whoever's picking you up sees when you'll actually arrive.
+ */
+export async function shareTrip(j, toast) {
+  const url = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}`, location.href.split("?")[0]).href;
+  const bd = boardDate(j);
+  const text = `I'm taking train ${j.no} ${j.name || ""} from ${j.from.name} on ${longDate(bd)}, due at ${j.to.name} at ${clock(j.arr)}${dayShift(j.arr, bd) > 0 ? " the next day" : ""}. Follow it live:`.replace(/\s+/g, " ");
+  try {
+    if (navigator.share) return void (await navigator.share({ title: `Train ${j.no} to ${j.to.name}`, text, url }));
+  } catch (e) {
+    if (e.name === "AbortError") return;
+  }
+  try {
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    toast("Trip link copied. It opens live status at your stop.");
+  } catch {
+    toast("Couldn't share the trip");
+  }
+}
+
+/** Chart and overall state, with when it was checked. */
+function bookingHead(b) {
+  const chip = bookingChip(b);
+  const chart = b.chart === "prepared" ? "Chart prepared" : b.chart === "not_prepared" ? "Chart not prepared yet" : null;
+  return h(
+    "p",
+    { class: "jn-bk-head" },
+    ...[chip ? h("span", { class: `chip ${chip.cls}`, text: chip.text }) : null, chart ? h("span", { class: "jn-bk-chart", text: chart }) : null, b.checkedAt ? h("small", { text: `Checked ${ago(b.checkedAt)}` }) : null].filter(Boolean)
+  );
+}
 
 /** How it went, as a chip: "42 min late", "On time", "5 min early". */
 function resultChip(r) {
@@ -64,7 +190,12 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
       .formatToParts(new Date(j.dep))
       .filter((p) => p.type !== "literal")
       .map((p) => p.value);
-    const spoken = `${j.no} ${j.name}, ${longDate(bd)}. ${j.from.name} at ${clock(dep)} to ${j.to.name} at ${clock(arr)}.${chip ? ` ${chip.text}.` : ""}${seatText(j) ? ` Seat ${seatText(j)}.` : ""} ${isTrackable(j) && !past ? "Opens live status." : "Opens details."}`;
+    // A booking still on the waitlist or RAC says so on the card; a confirmed one just shows its seat.
+    const bk = !past ? bookingChip(j.booking) : null;
+    const bkChip = bk && bk.cls !== "ok" ? bk : null;
+    const pax = j.booking?.passengers?.length || 0;
+    const seatLine = [seatText(j), pax > 1 ? `${pax} travellers` : null].filter(Boolean).join(" · ");
+    const spoken = `${j.no} ${j.name}, ${longDate(bd)}. ${j.from.name} at ${clock(dep)} to ${j.to.name} at ${clock(arr)}.${chip ? ` ${chip.text}.` : ""}${bkChip ? ` Booking ${bkChip.text}.` : ""}${seatLine ? ` ${seatLine}.` : ""} ${isTrackable(j) && !past ? "Opens live status." : "Opens details."}`;
 
     const face = h(
       "button",
@@ -81,11 +212,12 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
         ),
         h("span", { class: "jc-route" }, h("b", { text: j.from.name }), h("span", { class: "jc-arrow", text: " to " }), h("b", { text: j.to.name })),
         h("span", { class: "jc-train" }, h("span", { class: "tn", text: j.no }), ` ${j.name}`),
-        seatText(j) || j.notes
+        seatLine || bkChip || j.notes
           ? h(
               "span",
               { class: "jc-meta" },
-              seatText(j) ? h("span", {}, svg(icons.seat), seatText(j)) : null,
+              bkChip ? h("span", { class: `chip small ${bkChip.cls}`, text: bkChip.text }) : null,
+              seatLine ? h("span", {}, svg(icons.seat), seatLine) : null,
               j.notes ? h("span", { class: "jc-note" }, svg(icons.note), j.notes) : null
             )
           : null
@@ -188,7 +320,14 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
       nodes.push(h("p", { class: "jn-hint", text: "Swipe a journey left to delete it, or open it for more." }));
     }
     const kb = Math.max(1, Math.round(journeysSize() / 1024));
-    nodes.push(h("p", { class: "jn-device" }, svg(icons.info), `Kept only on this device (${all.length ? `${kb} KB` : "nothing yet"}). Nothing is sent anywhere.`));
+    nodes.push(
+      h(
+        "p",
+        { class: "jn-device" },
+        svg(icons.info),
+        `Kept only on this device (${all.length ? `${kb} KB` : "nothing yet"}). A PNR leaves it only when you ask for its status, to look up the booking.`
+      )
+    );
     root.replaceChildren(...nodes);
   }
 
@@ -201,6 +340,7 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
     open(f) {
       if (f) filter = f;
       paint();
+      checkDueBookings(toast).then((n) => n && !root.closest("[hidden]") && paint());
     },
     paint,
   };
@@ -315,7 +455,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       const sched = side === "from" ? j.dep : j.arr;
       const actual = past && r ? (side === "from" ? r.depActual : r.arrActual) : null;
       const delay = r ? (side === "from" ? r.depDelay : r.arrDelay) : null;
-      const pf = r ? (side === "from" ? r.fromPf : r.toPf) : null;
+      const pf = r ? (side === "from" ? r.fromPf : r.toPf) : side === "from" && j.booking?.platform ? `${j.booking.platform} (tentative)` : null;
       const shift = Math.max(0, dayShift(actual || sched, bd));
       return h(
         "div",
@@ -368,6 +508,41 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     }
 
     nodes.push(h("p", { class: "sheet-label", text: "Your booking" }));
+    const checkNow = async (btn) => {
+      btn.disabled = true;
+      btn.classList.add("spinning");
+      try {
+        const news = await checkBooking(journeyById(j.id) || j, { fresh: true });
+        toast(news || "Booking status is up to date");
+      } catch (e) {
+        toast(pnrError(e));
+      }
+      if (detail.d.open && detail.d.dataset.id === j.id) openDetail(j.id);
+      onSaved?.();
+    };
+    if (j.booking) {
+      nodes.push(
+        h(
+          "div",
+          { class: "jn-bk" },
+          bookingHead(j.booking),
+          passengersBlock(j.booking),
+          !past && j.pnr
+            ? h("button", { type: "button", class: "pill-btn jn-bk-refresh", on: { click: (e) => checkNow(e.currentTarget) } }, svg(icons.refresh), "Check again")
+            : null
+        )
+      );
+    } else if (j.pnr && !past) {
+      nodes.push(
+        h(
+          "div",
+          { class: "jn-bk empty" },
+          h("p", { class: "jn-fine", text: "See whether it's confirmed, your coach and berth, and the chart, from your PNR." }),
+          h("button", { type: "button", class: "pill-btn jn-bk-refresh", on: { click: (e) => checkNow(e.currentTarget) } }, svg(icons.ticket), "Get booking status"),
+          h("p", { class: "jn-fine small", text: PNR_PRIVACY })
+        )
+      );
+    }
     const pnr = j.pnr
       ? h(
           "button",
@@ -404,6 +579,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     const actions = [];
     if (!past && isTrackable(j))
       actions.push(h("button", { type: "button", class: "cta", on: { click: () => (detail.d.close(), navigate(trackLink(j), { state: { from: "journeys" } })) } }, "Track live", svg(icons.next)));
+    if (!past) actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => shareTrip(j, toast) } }, svg(icons.share), "Share trip"));
     if (!past) actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => downloadIcs(j) } }, svg(icons.calendar), "Add to calendar"));
     actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => (detail.d.close(), openEdit(j.id)) } }, "Edit details"));
     actions.push(
@@ -427,8 +603,23 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     );
     nodes.push(h("div", { class: "jn-actions" }, actions));
     detail.body.replaceChildren(...nodes.filter(Boolean)); // an empty slot would print "null"
-    detail.d.showModal();
+    detail.d.dataset.id = j.id;
+    if (!detail.d.open) detail.d.showModal();
+
+    // A linked booking that's due a look is checked quietly while you read.
+    if (bookingDue(j) && !checking.has(j.id)) {
+      checking.add(j.id);
+      checkBooking(j)
+        .then((news) => {
+          if (news) toast(news);
+          if (detail.d.open && detail.d.dataset.id === j.id) openDetail(j.id);
+          onSaved?.();
+        })
+        .catch(() => {})
+        .finally(() => checking.delete(j.id));
+    }
   }
+  const checking = new Set();
 
   function downloadIcs(j) {
     const link = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}`, location.href).href;
@@ -515,8 +706,40 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       }
     }
 
+    // The quickest way in: a PNR fills in the train, the day, your stations, class, seats and
+    // everyone on the booking. Looking it up is your choice, made by tapping the button.
+    const pnrIn = h("input", { class: "jn-input jn-pnr-in", id: "jn-pnr-find", inputMode: "numeric", autocomplete: "off", maxLength: 12, placeholder: "10-digit PNR", "aria-describedby": "jn-pnr-why" });
+    const pnrErr = h("p", { class: "field-error", role: "alert", hidden: true });
+    const pnrBtn = h("button", { type: "button", class: "cta", on: { click: () => byPnr() } }, svg(icons.ticket), "Fill in from PNR");
+    pnrIn.addEventListener("input", () => (pnrIn.value = pnrIn.value.replace(/\D/g, "").slice(0, 10)));
+    pnrIn.addEventListener("keydown", (e) => e.key === "Enter" && byPnr());
+
+    async function byPnr() {
+      const p = pnrIn.value.replace(/\D/g, "");
+      pnrErr.hidden = true;
+      if (p.length !== 10) return void ((pnrErr.textContent = "A PNR has 10 digits. You'll find it at the top of your ticket or booking SMS."), (pnrErr.hidden = false), pnrIn.focus());
+      pnrBtn.disabled = true;
+      pnrBtn.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Reading your booking…");
+      try {
+        const data = await api("/api/pnr", { pnr: p }, { timeout: 25000, retries: 0 });
+        chosen = await journeyFromPnr(data, p);
+        stepDetails();
+      } catch (e) {
+        pnrErr.textContent = pnrError(e);
+        pnrErr.hidden = false;
+        pnrBtn.disabled = false;
+        pnrBtn.replaceChildren(svg(icons.ticket), "Fill in from PNR");
+      }
+    }
+
     add.body.replaceChildren(
-      h("p", { class: "jn-fine", text: "Find your train by where you board, where you get off and the day. We'll fill in the rest." }),
+      h("label", { class: "field-label", for: "jn-pnr-find", text: "Your PNR" }),
+      h("div", { class: "jn-pnr-row" }, pnrIn),
+      pnrErr,
+      pnrBtn,
+      h("p", { class: "jn-fine small", id: "jn-pnr-why", text: PNR_PRIVACY }),
+      h("p", { class: "jn-or", "aria-hidden": "true" }, h("span", { text: "or find your train" })),
+      h("p", { class: "jn-fine", text: "No PNR yet? Find your train by where you board, where you get off and the day." }),
       h("div", { class: "journey jn-journey" }, f.wrap, t.wrap),
       h("label", { class: "field-label", for: "jn-date", text: "Day you board" }),
       date,
@@ -525,6 +748,29 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       status,
       results
     );
+  }
+
+  /**
+   * Turn a PNR answer into a journey. The timetable search gives the exact times and the day the
+   * run starts (which the live tracker needs, and which can be the day before you board); if it
+   * can't be reached, the PNR's own times stand in.
+   */
+  async function journeyFromPnr(d, pnr) {
+    const booking = bookingFrom(d);
+    const base = { cls: d.cls || null, pnr, pnrLinked: true, booking, ...(seatFrom(booking) || {}) };
+    if (d.boardDate) {
+      try {
+        const between = await api("/api/between", { from: d.from.code, to: d.to.code, date: d.boardDate }, { timeout: 15000, retries: 1 });
+        const tr = (between.trains || []).find((x) => x.number === d.no);
+        if (tr) return { no: tr.number, name: tr.name, startDate: tr.startDate, from: tr.from, to: tr.to, dep: tr.dep, arr: tr.arr, schedMin: tr.durationMin, km: tr.distanceKm ?? null, classes: tr.classes || [], ...base };
+      } catch {
+        /* fall back to the PNR's own times */
+      }
+    }
+    const day = d.boardDate || today();
+    const dep = new Date(`${day}T${d.from.time || "00:00"}:00+05:30`).toISOString();
+    const arr = new Date(Date.parse(dep) + (d.journeyMin || 0) * 60000).toISOString();
+    return { no: d.no, name: d.name || "", startDate: day, from: { code: d.from.code, name: d.from.name }, to: { code: d.to.code, name: d.to.name }, dep, arr, schedMin: d.journeyMin, km: null, classes: d.cls ? [d.cls] : [], ...base };
   }
 
   function stepDetails() {
@@ -572,6 +818,8 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
             const p = pnr.value.replace(/\D/g, "");
             if (p && p.length !== 10) return void ((err.textContent = "A PNR has 10 digits. Leave it empty if you don't have it yet."), (err.hidden = false), pnr.focus());
             const details = { cls, coach: coach.value.trim().toUpperCase(), seat: seat.value.trim().toUpperCase(), pnr: p, notes: notes.value.trim() };
+            // A different PNR is a different booking: the old status no longer applies.
+            if (p !== (j.pnr || "")) Object.assign(details, { booking: null, pnrLinked: false });
             const ok = editing ? updateJourney(editing, details) : addJourney({ ...chosen, ...details });
             if (!ok) return void ((err.textContent = "Couldn't save on this device. Its storage may be full or switched off."), (err.hidden = false));
             add.d.close();
@@ -591,8 +839,9 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
         h("p", { class: "jn-summary-t" }, timeNode(j.dep), h("i", { text: "→" }), timeNode(j.arr, IST, { shift: Math.max(0, dayShift(j.arr, bd)) })),
         h("p", { class: "jn-summary-r", text: `${j.from.name} to ${j.to.name}` }),
         h("p", { class: "jn-summary-n" }, h("b", { class: "tn", text: j.no }), ` ${j.name} · ${shortDay(bd)}`),
-        !editing && !fieldsMade?.fromResults ? h("button", { type: "button", class: "pill-btn", text: "Change train", on: { click: () => stepFind({ from: j.from.code, to: j.to.code, date: bd }) } }) : null
+        !editing && !fieldsMade?.fromResults && !j.booking ? h("button", { type: "button", class: "pill-btn", text: "Change train", on: { click: () => stepFind({ from: j.from.code, to: j.to.code, date: bd }) } }) : null
       ),
+      j.booking && !editing ? h("div", { class: "jn-bk found" }, bookingHead(j.booking), passengersBlock(j.booking)) : null,
       h("label", { class: "field-label", id: "jn-class-label", text: "Class" }),
       h("div", { class: "seat-classes jn-classes", role: "group", "aria-labelledby": "jn-class-label" }, clsBtns),
       h("div", { class: "jn-two" }, h("div", {}, coachL, coach), h("div", {}, seatL, seat)),
@@ -602,7 +851,14 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       notes,
       err,
       save,
-      h("p", { class: "jn-device" }, svg(icons.info), "Kept only on this device. Your PNR is never sent anywhere.")
+      h(
+        "p",
+        { class: "jn-device" },
+        svg(icons.info),
+        j.pnrLinked
+          ? "Kept only on this device. Track checks this PNR's status now and then until the chart is out, so changes reach you. Nothing is stored on our side."
+          : "Kept only on this device. Your PNR stays here unless you ask for its booking status."
+      )
     );
     (editing ? coach : coach).focus({ preventScroll: true });
   }

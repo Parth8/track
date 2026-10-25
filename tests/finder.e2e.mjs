@@ -52,11 +52,27 @@ const upstream = async (url) => {
   const u = new URL(url);
   if (u.hostname.includes("aerodatabox")) return fidsAnswer(url) || flightAnswer(url) || new Response(null, { status: 204 });
   if (u.hostname === "sa.railyatri.in") return new Response(JSON.stringify(seatAnswer(u)), { headers: { "Content-Type": "application/json" } });
+  if (u.hostname === "www.railyatri.in") return pnrAnswer(u);
   const key = `${u.searchParams.get("from")}-${u.searchParams.get("to")}`;
   if (key.startsWith("PURI")) return new Response("down", { status: 503 });
   const body = FIXTURES[key] ? fixture(FIXTURES[key]) : { success: true, train_between_stations: [], alternate_trains: [] };
   return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
 };
+
+// PNR 1234567890 is a recorded booking (12786 SBC → KCG, 3A, one passenger in B3/59), moved to
+// 3 days from now; PNR 1234567891 is the same booking with two passengers, one still waitlisted.
+const PNR_PAGE = readFileSync(new URL("./fixtures/pnr-sbc-kcg.html", import.meta.url), "utf8");
+function pnrAnswer(u) {
+  const pnr = u.pathname.split("/").pop();
+  if (u.pathname.startsWith("/get-status/")) return new Response(JSON.stringify({ status: pnr.startsWith("123456789") }), { headers: { "Content-Type": "application/json" } });
+  const [y, m, d] = addDays(istToday(), 3).split("-");
+  let html = PNR_PAGE.replace("14-11-2026", `${d}-${m}-${y}`).replaceAll("1234567890", pnr); // the page shows the PNR asked for
+  if (pnr === "1234567891") {
+    const li = (n, b, c, s) => `<li class="PNRPasList"><span class="paxListCount">${n}.</span><div><p class="statusType">${b}</p></div><div><p class="statusType">${c}</p></div><div><p class="statusType">${s}</p></div></li>`;
+    html = html.replace(/<ul class="pasListUL">[\s\S]*?<\/ul>/, `<ul class="pasListUL">${li(1, "Confirmed", "Confirmed", "B3/59")}${li(2, "GNWL 12/WL 8", "WL 4", "")}</ul>`);
+  }
+  return new Response(html, { headers: { "Content-Type": "text/html" } });
+}
 
 // Flight search is switched on (key + KV store) unless a test says otherwise.
 const QUOTA = new MemoryKV();
@@ -772,6 +788,119 @@ await test("journeys: a past trip keeps how it actually ran; the home screen sho
   assert.match(await det.locator(".jn-tiles").textContent(), /Arrived42m late/);
   assert.match(await det.locator(".jn-tiles").textContent(), /36m longer than the timetable/);
   assert.match(await det.textContent(), /PF 2/);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: a PNR fills in the whole trip, and every passenger on it", async () => {
+  const p = await page();
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 500);
+  await p.locator("#journeys-add").click();
+  const sheet = p.locator("#journey-add");
+  await sheet.locator("#jn-pnr-find").fill("12345");
+  await sheet.locator(".cta", { hasText: "Fill in from PNR" }).click();
+  assert.match(await sheet.locator(".field-error").first().textContent(), /10 digits/);
+  await sheet.locator("#jn-pnr-find").fill("1234567891");
+  await sheet.locator(".cta", { hasText: "Fill in from PNR" }).click();
+  await sheet.locator(".jn-summary").waitFor();
+  assert.match(await sheet.locator(".jn-summary").textContent(), /12786/);
+  assert.match(await sheet.locator(".jn-summary").textContent(), /KSR Bengaluru to Kacheguda/);
+  assert.equal(await sheet.locator('.jn-classes button[aria-pressed="true"]').textContent(), "3A");
+  assert.equal(await sheet.locator("#jn-coach").inputValue(), "B3");
+  assert.equal(await sheet.locator("#jn-seat").inputValue(), "59");
+  assert.equal(await sheet.locator("#jn-pnr").inputValue(), "1234567891");
+  // One row per passenger
+  assert.equal(await sheet.locator(".jn-pax-row").count(), 2);
+  assert.match(await sheet.locator(".jn-pax-row").nth(1).textContent(), /Waitlist 4/);
+  assert.match(await sheet.locator(".jn-bk-head").textContent(), /WL 4.*Chart not prepared yet/);
+  await sheet.locator(".cta", { hasText: "Save journey" }).click();
+  await settle(p, 500);
+  const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("journeys")));
+  assert.deepEqual([saved[0].no, saved[0].from.code, saved[0].to.code, saved[0].pnrLinked, saved[0].booking.passengers.length], ["12786", "SBC", "KCG", true, 2]);
+  assert.match(saved[0].dep, /T12:15:00\.000Z$/, "05:45 PM in India");
+  // The card says it's still waitlisted, and how many are travelling
+  const card = p.locator(".jcard");
+  assert.match(await card.locator(".jc-meta").textContent(), /WL 4.*B3 · 59 · 2 travellers/);
+  await card.click();
+  const det = p.locator("#journey-detail");
+  await det.waitFor();
+  assert.equal(await det.locator(".jn-pax-row").count(), 2);
+  assert.match(await det.textContent(), /PF 5 \(tentative\)/);
+  assert.equal(await det.locator(".cta", { hasText: "Share trip" }).count(), 1);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: a PNR with no booking says so kindly", async () => {
+  const p = await page();
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 500);
+  await p.locator("#journeys-add").click();
+  const sheet = p.locator("#journey-add");
+  await sheet.locator("#jn-pnr-find").fill("9999999999");
+  await sheet.locator(".cta", { hasText: "Fill in from PNR" }).click();
+  await sheet.locator(".field-error:not([hidden])").first().waitFor({ timeout: 10000 });
+  assert.match(await sheet.locator(".field-error:not([hidden])").first().textContent(), /No booking found for this PNR yet/);
+  assert.equal(await sheet.locator(".cta", { hasText: "Fill in from PNR" }).isEnabled(), true, "ready to try again");
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: share a trip as a link to live status at your stop", async () => {
+  const p = await page();
+  const start = addDays(istToday(), 2);
+  const j = { id: "jshare", no: "12786", name: "Ashokapuram - Kacheguda SF Express", startDate: start, from: { code: "SBC", name: "KSR Bengaluru" }, to: { code: "KCG", name: "Kacheguda" }, dep: `${start}T12:15:00.000Z`, arr: `${addDays(start, 1)}T00:10:00.000Z`, schedMin: 715, cls: "3A", coach: "B3", seat: "59", pnr: "", notes: "" };
+  await p.addInitScript((list) => {
+    localStorage.setItem("journeys", JSON.stringify(list));
+    // No share sheet in this browser: the link is copied instead.
+    Object.defineProperty(navigator, "share", { value: undefined });
+    window.__copied = null;
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: async (t) => (window.__copied = t) } });
+  }, [j]);
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 500);
+  await p.locator(".jcard").click();
+  await p.locator("#journey-detail .cta", { hasText: "Share trip" }).click();
+  await settle(p, 300);
+  const text = await p.evaluate(() => window.__copied);
+  assert.match(text, /train 12786 Ashokapuram - Kacheguda SF Express from KSR Bengaluru/);
+  assert.match(text, /due at Kacheguda at 5:40 AM the next day/);
+  const link = new URL(text.split(" ").pop());
+  assert.deepEqual([link.searchParams.get("m"), link.searchParams.get("no"), link.searchParams.get("d"), link.searchParams.get("s")], ["train", "12786", start, "KCG"]);
+  assert.match(await p.locator("#toast").textContent(), /Trip link copied/);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("journeys: on travel day the trip pins itself, and stays unpinned once you unpin it", async () => {
+  const p = await page();
+  const start = istToday();
+  const at = (mins) => new Date(Date.now() + mins * 60000).toISOString();
+  const j = { id: "jtoday", no: "12627", name: "Karnataka SF Express", startDate: start, from: { code: "SBC", name: "KSR Bengaluru" }, to: { code: "BPL", name: "Bhopal Jn" }, dep: at(120), arr: at(1500), schedMin: 1380, km: 1390, cls: "3A", coach: "B4", seat: "12", pnr: "", notes: "" };
+  await p.addInitScript((list) => localStorage.getItem("journeys") || localStorage.setItem("journeys", JSON.stringify(list)), [j]);
+  await p.context().route(`${API}/api/train**`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "Access-Control-Allow-Origin": new URL(SITE).origin },
+      body: JSON.stringify({
+        kind: "train", number: "12627", name: "Karnataka SF Express", date: start, status: { phase: "upcoming" }, position: {},
+        stops: [
+          { code: "SBC", name: "KSR Bengaluru", km: 0, halts: true, platform: "2", sched: { arr: null, dep: at(120) }, actual: { arr: null, dep: null }, expected: { arr: null, dep: at(120) }, delay: { arr: null, dep: 0 }, passed: false },
+          { code: "BPL", name: "Bhopal Jn", km: 1390, halts: true, platform: null, sched: { arr: at(1500), dep: at(1510) }, actual: { arr: null, dep: null }, expected: { arr: at(1500), dep: null }, delay: { arr: 0, dep: null }, passed: false },
+        ],
+      }),
+    })
+  );
+  await p.goto(`${SITE}`);
+  await settle(p, 2500);
+  const pin = await p.evaluate(() => JSON.parse(localStorage.getItem("pinned")));
+  assert.deepEqual([pin?.no, pin?.date, pin?.stop, pin?.auto], ["12627", start, "BPL", "jtoday"]);
+  const island = p.locator(".island");
+  assert.equal(await island.getAttribute("aria-hidden"), "false");
+  assert.match(await p.locator("#toast").textContent(), /pinned to the top for today's trip/);
+  await island.locator(".isl-pin").click();
+  await settle(p, 300);
+  await p.reload();
+  await settle(p, 2500);
+  assert.equal(await p.evaluate(() => localStorage.getItem("pinned")), null, "doesn't pin itself again");
   assert.deepEqual(p.errors, []);
 });
 

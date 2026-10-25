@@ -4700,6 +4700,7 @@ p,
 /* sheets */
 .jn-sheet-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* a wide field can't stretch the sheet past the screen */
   gap: 8px;
 }
 .jn-sheet .sheet-head h2 {
@@ -5212,4 +5213,168 @@ textarea.jn-input {
 }
 .jcard .chip.quiet {
   color: var(--ink-soft);
+}
+
+/* ---------- Booking status from the PNR ---------- */
+.chip.warn {
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+}
+.chip.small {
+  font-size: 11.5px;
+  padding: 2px 8px;
+}
+.jn-bk {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.jn-bk.found {
+  margin-top: 4px;
+}
+.jn-bk.empty {
+  justify-items: start;
+}
+.jn-bk-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 13.5px;
+}
+.jn-bk-chart {
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.jn-bk-head small {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+.jn-bk-refresh {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.jn-bk-refresh svg {
+  width: 15px;
+  height: 15px;
+}
+.jn-bk-refresh.spinning svg {
+  animation: spin 0.9s linear infinite;
+}
+/* One row per passenger: the list is as tall as the booking is big. */
+.jn-pax {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.jn-pax-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+}
+.jn-pax-row + .jn-pax-row {
+  border-top: 1px solid var(--hair);
+}
+.jn-pax.solo .jn-pax-row {
+  padding: 2px 0;
+}
+.jn-pax-n {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--tint);
+  color: var(--deep);
+  font-size: 12.5px;
+  font-weight: 800;
+}
+.jn-pax-who {
+  display: grid;
+  min-width: 0;
+}
+.jn-pax-who b {
+  font-size: 15px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.jn-pax-who small {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.jn-pax-kind {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background: var(--hair);
+  color: var(--ink-soft);
+}
+.jn-pax-kind.confirmed {
+  background: var(--mint-tint);
+  color: var(--mint-deep);
+}
+.jn-pax-kind.waitlist {
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+}
+.jn-pax-kind.rac {
+  background: var(--lav-tint);
+  color: var(--lav-ink);
+}
+.jn-pax-kind.cancelled {
+  background: var(--rose-tint);
+  color: var(--rose-ink);
+}
+.jn-fine.small {
+  font-size: 12px !important;
+}
+.jn-or {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.jn-or::before,
+.jn-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hair);
+}
+.jn-pnr-in {
+  font-size: 20px !important;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+}
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .jn-bk-refresh.spinning svg {
+    animation-duration: 2.4s;
+  }
 }

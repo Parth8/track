@@ -11,6 +11,9 @@ const MAX = 300; // a few hundred trips is about 150 KB, far under what a browse
  * A journey:
  * { id, no, name, startDate, from: { code, name }, to: { code, name }, dep, arr (scheduled ISO),
  *   schedMin, km, cls, coach, seat, pnr, notes, createdAt,
+ *   pnrLinked?: true (you chose to have its status fetched),
+ *   booking?: { overall, chart, platform, passengers: [{ n, kind, booking, current, coach, berth,
+ *               berthType, position }], checkedAt },
  *   result?: { depSched, depActual, arrSched, arrActual, depDelay, arrDelay, travelMin, km,
  *              fromPf, toPf, complete, recordedAt } }
  */
@@ -101,6 +104,12 @@ export function sortedJourneys(filter = "upcoming") {
   return list.sort((a, b) => Date.parse(b.dep) - Date.parse(a.dep));
 }
 
+/** The day you board, in India. */
+export const boardDay = (j) => new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(new Date(j.dep));
+
+/** Travel day: you board today, or within 6 hours (a trip just after midnight), or it's on its way. */
+export const isTravelDay = (j, now = Date.now()) => isTrackable(j) && !isPast(j, now) && (boardDay(j) === todayIn(IST) || Date.parse(j.dep) - now < 6 * 3600000);
+
 /** The next journey within a week, for the home screen. */
 export function nextJourney(days = 7) {
   const now = Date.now();
@@ -169,6 +178,56 @@ export function pastStats() {
     onTime,
     medianDelay: delays.length ? delays.sort((a, b) => a - b)[Math.floor(delays.length / 2)] : null,
   };
+}
+
+/* ---------------- booking status, from the PNR ---------------- */
+
+/** What a PNR lookup adds to a journey. */
+export function bookingFrom(data) {
+  return {
+    overall: data.overall,
+    chart: data.chart,
+    platform: data.platform || null,
+    passengers: (data.passengers || []).map(({ n, kind, booking, current, coach, berth, berthType, position }) => ({ n, kind, booking, current, coach, berth, berthType, position })),
+    checkedAt: data.status?.checkedAt || new Date().toISOString(),
+  };
+}
+
+/** The first passenger's coach and berth, once there is one, for the journey's own seat fields. */
+export function seatFrom(booking) {
+  const p = booking?.passengers?.find((x) => x.coach && x.berth);
+  return p ? { coach: p.coach, seat: [p.berth, p.berthType ? BERTH_SHORT[p.berthType] : null].filter(Boolean).join(" ") } : null;
+}
+const BERTH_SHORT = { Lower: "LB", Middle: "MB", Upper: "UB", "Side lower": "SL", "Side upper": "SU", "Side middle": "SM", Window: "WS", Aisle: "AS" };
+
+/**
+ * How often a linked booking is worth checking again. Waitlists move most in the last day and
+ * at the chart, so checks get closer as the trip nears; a prepared chart with every seat
+ * confirmed won't change, so it stops.
+ */
+export function bookingDueMs(j, now = Date.now()) {
+  if (!j.pnrLinked || !j.pnr || isPast(j, now)) return null;
+  const b = j.booking;
+  if (b?.chart === "prepared" && b.overall === "confirmed") return null;
+  const until = Date.parse(j.dep) - now;
+  if (until < -3600000) return null; // you're on board by now
+  const every = until > 3 * 86400000 ? 12 * 3600000 : until > 86400000 ? 4 * 3600000 : until > 6 * 3600000 ? 3600000 : 15 * 60000;
+  const age = b?.checkedAt ? now - Date.parse(b.checkedAt) : Infinity;
+  return Math.max(0, every - age);
+}
+export const bookingDue = (j, now) => bookingDueMs(j, now) === 0;
+
+/** A booking's state in a few words, for a chip: "Confirmed", "WL 12", "RAC 3", "2 of 3 confirmed". */
+export function bookingChip(b) {
+  if (!b?.passengers?.length) return null;
+  const ps = b.passengers;
+  const worst = ps.find((p) => p.kind === "waitlist") || ps.find((p) => p.kind === "rac");
+  if (b.overall === "confirmed") return { cls: "ok", text: "Confirmed" };
+  if (b.overall === "cancelled") return { cls: "bad", text: "Cancelled" };
+  if (b.overall === "partly") return { cls: "warn", text: `${ps.filter((p) => p.kind === "confirmed").length} of ${ps.length} confirmed` };
+  if (worst?.kind === "waitlist") return { cls: "warn", text: worst.position ? `WL ${worst.position}` : "Waitlisted" };
+  if (worst?.kind === "rac") return { cls: "info", text: worst.position ? `RAC ${worst.position}` : "RAC" };
+  return null;
 }
 
 /* ---------------- calendar ---------------- */

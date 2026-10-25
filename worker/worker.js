@@ -9,6 +9,8 @@
  *   /api/between?from=MYS&to=KCG&date=2026-10-02
  *   /api/seats?no=12306&from=NDLS&to=HWH&date=2026-10-09&cls=3A&quota=GN
  *   /api/flights?from=DEL&to=BLR&date=2026-10-02&after=17:00
+ *   /api/pnr?pnr=1234567890   (a booking's status; the PNR is never logged, and is cached
+ *                              only under a hash of it, for 5 minutes)
  *
  * Settings (Worker > Settings > Variables and Secrets):
  *   ALLOWED_ORIGINS   text    e.g. https://yourname.github.io   (comma separated)
@@ -34,7 +36,7 @@
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36";
-const TTL = { train: 15, flight: 90, weather: 900, timetable: 43200, between: 21600, seats: 600, stale: 21600 };
+const TTL = { train: 15, flight: 90, weather: 900, timetable: 43200, between: 21600, seats: 600, pnr: 300, stale: 21600 };
 const TRAIN_FRESH_FLOOR_MS = 5000; // a manual refresh re-fetches unless the copy is under 5 s old
 const ADB_HOSTS = new Set(["aerodatabox.p.rapidapi.com"]);
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -96,6 +98,8 @@ export default {
           return reply(await flightsBetweenRoute(url, env, ctx, request), 200, cors, 300, env);
         case "/api/seats":
           return reply(await seatsRoute(url, ctx), 200, cors, 300, env);
+        case "/api/pnr":
+          return reply(await pnrRoute(url, ctx), 200, cors, 0, env); // personal: never kept by the browser or a proxy
         default:
           throw new ApiError(404, "not_found", "Unknown route.");
       }
@@ -1593,3 +1597,435 @@ async function weatherRoute(url, ctx) {
     };
   });
 }
+
+/* ------------------------------------------------------------------ */
+/* /api/pnr: a booking's status, read from RailYatri's PNR page        */
+/* ------------------------------------------------------------------ */
+
+// The page names the class in words; the app uses the short codes.
+const CLASS_BY_NAME = {
+  "AC FIRST CLASS": "1A",
+  "FIRST AC": "1A",
+  "AC 2 TIER": "2A",
+  "AC 3 TIER": "3A",
+  "AC 3 ECONOMY": "3E",
+  "AC 3 TIER ECONOMY": "3E",
+  "AC EXECUTIVE ANUBHUTI": "EA",
+  "EXECUTIVE ANUBHUTI": "EA",
+  "EXECUTIVE CHAIR CAR": "EC",
+  "EXEC. CHAIR CAR": "EC",
+  "VISTADOME AC": "EV",
+  "AC CHAIR CAR": "CC",
+  "CHAIR CAR": "CC",
+  "FIRST CLASS": "FC",
+  SLEEPER: "SL",
+  "SLEEPER CLASS": "SL",
+  "SECOND SITTING": "2S",
+};
+const BERTH_TYPES = { LB: "Lower", MB: "Middle", UB: "Upper", SL: "Side lower", SU: "Side upper", SM: "Side middle", WS: "Window", MS: "Middle", AS: "Aisle" };
+const PNR_MISSING = "No booking found for this PNR yet. New bookings can take a few minutes to show up, and old ones are cleared after the trip.";
+
+async function pnrRoute(url, ctx) {
+  const pnr = (url.searchParams.get("pnr") || "").replace(/\D/g, "");
+  if (!/^\d{10}$/.test(pnr)) throw new ApiError(400, "invalid_pnr", "A PNR has 10 digits.");
+  // Keyed by a hash, so no PNR is stored in the clear, even for the 5 minutes a copy is kept.
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`pnr|${pnr}`));
+  const key = [...new Uint8Array(bytes)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const fresh = url.searchParams.get("fresh") === "1";
+  return cached(ctx, `pnr/${key}`, TTL.pnr, () => fetchPnr(pnr), { fresh, floorMs: 60000 });
+}
+
+async function fetchPnr(pnr) {
+  const headers = { "User-Agent": UA, Referer: "https://www.railyatri.in/pnr-status" };
+  const slow = () => new ApiError(502, "upstream_unavailable", "PNR status is slow right now. Try again in a minute.");
+  // Their page asks for the status first (it can take a moment to arrive), then shows it.
+  let known = false;
+  for (let i = 0; i < 2 && !known; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 2500));
+    try {
+      const res = await getWithRetry(
+        `https://www.railyatri.in/get-status/${pnr}`,
+        { headers: { ...headers, Accept: "application/json", "X-Requested-With": "XMLHttpRequest" } },
+        { timeout: 8000, retries: 0 }
+      );
+      known = res.ok && (await res.json().catch(() => null))?.status === true;
+    } catch {
+      /* once more, then give up below */
+    }
+  }
+  if (!known) throw new ApiError(404, "pnr_not_found", PNR_MISSING);
+  let html;
+  try {
+    const res = await getWithRetry(`https://www.railyatri.in/pnr-status/${pnr}`, { headers: { ...headers, Accept: "text/html" } }, { timeout: 12000, retries: 1 });
+    if (!res.ok) throw slow();
+    html = await res.text();
+  } catch (err) {
+    log("warn", "pnr page failed", String(err && err.message)); // never the PNR itself
+    throw err instanceof ApiError ? err : slow();
+  }
+  const read = extractPnr(html, pnr);
+  if (read.data) return read.data;
+  if (read.reason === "no_booking" || /FLUSHED PNR|PNR NOT YET GENERATED/i.test(html)) throw new ApiError(404, "pnr_not_found", PNR_MISSING);
+  // The page changed shape, or showed another booking. Log which fields broke (never the PNR), so
+  // a change on their side shows up straight away, and show nothing rather than something wrong.
+  log("warn", "pnr page unreadable", read.reason, `missing=${read.missing.join(",")}`, `conflicts=${read.conflicts.join(",")}`);
+  throw new ApiError(502, "pnr_unreadable", "We couldn't read this booking just now. Your PNR is fine; try again later, or check it on IRCTC.");
+}
+
+/* ------------------------------------------------------------------ */
+/* PNR extraction: deterministic, and independent of the page layout   */
+/* ------------------------------------------------------------------ */
+//
+// RailYatri's PNR page is HTML made for people, and its markup can change any day. So nothing
+// below depends on tags, classes or nesting:
+//  1. The page becomes a flat list of its visible text, plus the links it carries.
+//  2. Every field is found next to its label ("DAY OF BOARDING") and kept only if it passes a
+//     strict check (a real calendar date, a 5-digit train number, a known class, a seat status).
+//  3. Key fields also have a second, independent way in: a pattern near the booking, or the
+//     page's own links. Where both find a value, they must agree.
+//  4. A required field that's missing, or found two different ways, makes the page unreadable.
+//     We'd rather say "couldn't read it" than show a wrong seat. Optional fields are dropped.
+// The same page always reads the same way. tests/worker.test.mjs checks a real page plus
+// reshaped copies of it (classes stripped, tags swapped, labels reworded, links gone).
+
+const PNR_READER = 2; // bump when the rules change, so cached answers can be told apart
+
+const decodeHtml = (s) =>
+  String(s)
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+
+/** The page as people see it: visible text in reading order, and the links. */
+function pageText(html) {
+  const body = String(html)
+    .replace(/<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  const links = [...body.matchAll(/<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/gi)].map((m) => decodeHtml(m[1]));
+  const tokens = body
+    .split(/<[^>]*>/)
+    .map((t) => decodeHtml(t).replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  return { tokens, links };
+}
+
+/** A label as written, reduced to its words: "PF# (TENTATIVE)" → "PF TENTATIVE", "Day of boarding:" → "DAY OF BOARDING". */
+const labelOf = (t) =>
+  t
+    .toUpperCase()
+    .replace(/[^A-Z0-9/ ]+/g, " ")
+    .replace(/\s*\/\s*/g, "/")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const PNR_LABELS = {
+  pnr: ["PNR NUMBER", "PNR NO", "PNR"],
+  train: ["TRAIN NAME", "TRAIN NUMBER", "TRAIN NO", "TRAIN", "TRAIN NAME/NUMBER", "TRAIN NO/NAME"],
+  from: ["FROM", "BOARDING FROM", "BOARDING STATION", "BOARDING POINT", "SOURCE", "FROM STATION"],
+  to: ["TO", "DESTINATION", "RESERVATION UPTO", "UPTO", "TO STATION"],
+  date: ["DAY OF BOARDING", "DATE OF BOARDING", "BOARDING DATE", "DATE OF JOURNEY", "JOURNEY DATE", "DOJ"],
+  cls: ["CLASS", "TRAVEL CLASS", "JOURNEY CLASS"],
+  platform: ["PF TENTATIVE", "PF", "PLATFORM", "PLATFORM NO", "PLATFORM TENTATIVE", "EXPECTED PLATFORM"],
+  chart: ["CHART STATUS", "CHART"],
+  duration: ["JOURNEY TIME", "DURATION", "TRAVEL TIME"],
+  booking: ["BOOKING STATUS"],
+  current: ["CURRENT STATUS"],
+  seat: ["COACH/BERTH", "COACH BERTH", "COACH/SEAT", "SEAT/BERTH", "BERTH"],
+};
+const ANY_LABEL = new Set(Object.values(PNR_LABELS).flat());
+const isLabel = (t) => ANY_LABEL.has(labelOf(t));
+
+/* ---------- strict checks: each returns the value, or null ---------- */
+
+const check = {
+  pnr: (t) => (/^\d{3}\s?-?\d{3}\s?-?\d{4}$/.test(t) ? t.replace(/\D/g, "") : null),
+  trainNo: (t) => (/^(?:train\s*(?:no\.?)?\s*)?(\d{5})(?!\d)/i.exec(t) || [])[1] || null,
+  /** "KSR BENGALURU | SBC", "KSR Bengaluru (SBC)" */
+  station(t) {
+    const m = /^([A-Za-z][A-Za-z0-9 .'&-]*?)\s*(?:\|\s*([A-Z]{1,5})|\(\s*([A-Z]{1,5})\s*\))$/.exec(t);
+    return m ? { code: m[2] || m[3], name: m[1].trim() } : null;
+  },
+  /** "05:45 PM", "17:45" → "17:45" */
+  time(t) {
+    const m = /^(\d{1,2})[:.](\d{2})\s*([AP])?\.?\s*M?\.?$/i.exec(t);
+    if (!m) return null;
+    let hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (m[3]) {
+      if (hh < 1 || hh > 12) return null;
+      hh = (hh % 12) + (/p/i.test(m[3]) ? 12 : 0);
+    }
+    return hh < 24 && mm < 60 ? `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}` : null;
+  },
+  /** "14-11-2026", "14/11/2026", "14 Nov 2026", "2026-11-14" → "2026-11-14", only if that day exists */
+  date(t) {
+    const mon = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+    let y, m, d;
+    let x;
+    if ((x = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(t))) [d, m, y] = [x[1], x[2], x[3]].map(Number);
+    else if ((x = /^(\d{4})-(\d{2})-(\d{2})$/.exec(t))) [y, m, d] = [x[1], x[2], x[3]].map(Number);
+    else if ((x = /^(?:[A-Za-z]{3,9},?\s+)?(\d{1,2})[-\s]([A-Za-z]{3})[A-Za-z]*[-\s,]+(\d{4})$/.exec(t))) [d, m, y] = [Number(x[1]), mon[x[2].toUpperCase()], Number(x[3])];
+    else return null;
+    if (!m || y < 2000 || y > 2100) return null;
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    if (dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null; // 31-11 isn't a day
+    return dt.toISOString().slice(0, 10);
+  },
+  /** "AC 3 Tier", "3A", "AC 3 Tier (3A)", "Sleeper Class" → "3A" */
+  cls(t) {
+    const code = /^(?:.*\()?\s*(1A|2A|3A|3E|EA|EC|EV|CC|FC|SL|2S)\s*\)?$/.exec(t.toUpperCase());
+    if (code) return code[1];
+    return CLASS_BY_NAME[t.toUpperCase().replace(/\s+/g, " ").trim()] || null;
+  },
+  platform: (t) => (/^(?:PF\s*)?(\d{1,2}[A-Z]?)$/i.exec(t.trim()) || [])[1]?.toUpperCase() || null,
+  chart(t) {
+    const u = t.toUpperCase();
+    if (/NOT\s*(YET\s*)?PREPARED/.test(u)) return "not_prepared";
+    if (/^(CHART\s*)?PREPARED$/.test(u)) return "prepared";
+    return null;
+  },
+  /** One of a passenger's statuses: "Confirmed", "CNF/B3/59/LB", "RAC 12", "GNWL 45/WL 12", "B3/59". */
+  status: (t) =>
+    /^(CNF|CONFIRMED|CONFIRM|RAC|RLWL|GNWL|PQWL|TQWL|RSWL|RQWL|CKWL|NOSB|WL|W\/L|WAIT ?LIST(ED)?|CAN|CANCELLED|CANCELED|REGRET|RELEASED)\b/i.test(t) ||
+    /^[A-Z]{1,2}\d{1,2}\s*[/,\s]\s*\d{1,3}\b/i.test(t)
+      ? t
+      : null,
+};
+
+/** "11H 55M", or "11H" then "55M" as two pieces of text → 715 */
+function durationAt(tokens, k) {
+  const one = /^(\d{1,2})\s*H(?:RS?|OURS?)?\s*(?:(\d{1,2})\s*M(?:INS?)?)?$/i.exec(tokens[k]);
+  if (!one) return null;
+  const next = !one[2] && /^(\d{1,2})\s*M(?:INS?)?$/i.exec(tokens[k + 1] || "");
+  return Number(one[1]) * 60 + Number(one[2] || (next && next[1]) || 0);
+}
+
+/**
+ * The first value after a field's label that passes its check, looking a few pieces of text
+ * ahead and stopping at the next label. Searches from `start` (where the booking begins).
+ */
+function byLabel(tokens, start, field, test, span = 4) {
+  const names = PNR_LABELS[field];
+  for (let i = start; i < tokens.length; i++) {
+    if (!names.includes(labelOf(tokens[i]))) continue;
+    for (let k = i + 1; k <= i + span && k < tokens.length; k++) {
+      if (isLabel(tokens[k])) break;
+      const v = test(tokens[k], k);
+      if (v != null) return { v, at: k };
+    }
+  }
+  return null;
+}
+
+/** The first piece of text in the booking's stretch of the page that passes a check. */
+function byPattern(tokens, start, test, from = start, window = 160) {
+  for (let k = from; k < Math.min(tokens.length, start + window); k++) {
+    if (isLabel(tokens[k])) continue;
+    const v = test(tokens[k], k);
+    if (v != null) return { v, at: k };
+  }
+  return null;
+}
+
+/** Two ways to one value: keep it if they agree (or only one found it); flag it if they don't. */
+function settle(name, a, b, same, out) {
+  const x = a?.v ?? null;
+  const y = b?.v ?? null;
+  if (x != null && y != null && !same(x, y)) out.conflicts.push(name);
+  else if (x == null && y == null) out.missing.push(name);
+  return x ?? y;
+}
+const eq = (a, b) => a === b;
+
+const rowNo = (t) => {
+  const m = /^(?:passenger\s*)?(\d{1,2})\s*[.):]?$/i.exec(t);
+  return m ? Number(m[1]) : null;
+};
+const ROW_NOISE = 2; // unrelated bits of text (an ad, a note) a row may hold between its statuses
+const ROW_GAP = 8; // how far past one passenger the next may start before the table counts as over
+
+/**
+ * Passengers, without relying on any list markup: rows numbered 1, 2, 3… each followed by up to
+ * three statuses (booking, current, coach/berth). Starts after the table's headings when the page
+ * has them, else where the booking starts. The numbering must run 1, 2, 3 without gaps, so a stray
+ * number elsewhere ("2 minutes late") can't pass for a passenger.
+ */
+function passengersFrom(tokens, start) {
+  let i = start;
+  for (let k = start; k < Math.min(tokens.length, start + 200); k++) {
+    if (PNR_LABELS.booking.includes(labelOf(tokens[k]))) {
+      i = k + 1;
+      break;
+    }
+  }
+  const rows = [];
+  let lastAt = i;
+  for (let k = i; k < Math.min(tokens.length, i + 300); k++) {
+    if (rows.length && k - lastAt > ROW_GAP) break; // the table has ended
+    if (rowNo(tokens[k]) !== rows.length + 1) continue;
+    const statuses = [];
+    let noise = 0;
+    let j = k + 1;
+    for (; j < tokens.length && statuses.length < 3; j++) {
+      const t = tokens[j];
+      if (rowNo(t) != null || isLabel(t)) break; // the next row, or the next section
+      if (check.status(t)) {
+        statuses.push(t);
+        lastAt = j;
+        noise = 0;
+      } else if (++noise > ROW_NOISE) break;
+    }
+    if (!statuses.length) continue; // a number, but not a passenger row
+    const [booking, current, seat] = statuses.length === 1 ? [null, statuses[0], null] : statuses;
+    rows.push(pnrPassenger(rows.length + 1, booking, current, seat));
+    k = lastAt;
+  }
+  return rows;
+}
+
+/**
+ * Read a booking out of a PNR page, for the PNR that was asked for.
+ * Returns { data } when every required field reads cleanly, else { reason, missing, conflicts }.
+ */
+function extractPnr(html, askedPnr) {
+  const { tokens, links } = pageText(html);
+  const out = { missing: [], conflicts: [] };
+
+  // Where the booking starts: the PNR itself on the page. A different PNR there means a different
+  // booking, and no PNR at all means this isn't a booking page.
+  const shown = byLabel(tokens, 0, "pnr", check.pnr, 3);
+  const at = tokens.findIndex((t) => check.pnr(t) === askedPnr);
+  if (shown && shown.v !== askedPnr) return { reason: "other_pnr", missing: [], conflicts: ["pnr"] };
+  if (at < 0) {
+    const none = tokens.some((t) => /FLUSHED PNR|PNR NOT YET GENERATED|INVALID PNR|PNR NO\.? IS NOT VALID/i.test(t));
+    return { reason: none ? "no_booking" : "unreadable", missing: ["pnr"], conflicts: [] };
+  }
+  const start = Math.max(0, (shown?.at ?? at) - 2);
+
+  // Train: by its label, and from the page's own timetable or live-status link.
+  const trainL = byLabel(tokens, start, "train", check.trainNo, 3);
+  const slug = links.map((l) => /\/(?:time-table|live-train-status|train-schedule)\/(\d{5})-([a-z0-9-]+?)(?:--([a-z]{1,5})-to-([a-z]{1,5}))?(?:[?#/]|$)/i.exec(l)).find(Boolean);
+  const no = settle("train", trainL, slug ? { v: slug[1] } : null, eq, out);
+  let name = null;
+  if (trainL) {
+    const own = tokens[trainL.at].replace(/^\D*\d{5}/, "");
+    const next = tokens[trainL.at + 1];
+    const raw = own.replace(/[\s‐-―-]/g, "") ? own : next && !isLabel(next) && !check.station(next) && /[A-Za-z]{3}/.test(next) ? next : "";
+    name = raw.replace(/^[\s‐-―:-]+/, "").replace(/\s+/g, " ").trim() || null;
+  }
+
+  // Stations: by label, and as the first two "NAME | CODE" pieces of the booking. Both must agree.
+  const fromL = byLabel(tokens, start, "from", check.station, 3);
+  const toL = byLabel(tokens, start, "to", check.station, 3);
+  const first = byPattern(tokens, start, check.station);
+  const second = first && byPattern(tokens, start, (t) => {
+    const s = check.station(t);
+    return s && s.code !== first.v.code ? s : null;
+  }, first.at + 1);
+  const sameCode = (a, b) => a.code === b.code;
+  const from = settle("from", fromL, first, sameCode, out);
+  const to = settle("to", toL, second, sameCode, out);
+  if (from && to && from.code === to.code) out.conflicts.push("to");
+
+  // Times sit just after each station.
+  const timeAfter = (st) => st && byPattern(tokens, start, check.time, st.at + 1, st.at - start + 4)?.v;
+  const depTime = timeAfter(fromL || first);
+  const arrTime = timeAfter(toL || second);
+
+  // Day you board: by label, and as the only date in the booking.
+  const dateL = byLabel(tokens, start, "date", check.date, 3);
+  const dates = [...new Set(tokens.slice(start, start + 160).map((t) => check.date(t)).filter(Boolean))];
+  const boardDate = settle("date", dateL, dates.length === 1 ? { v: dates[0] } : null, eq, out);
+
+  // Optional: kept only when they read cleanly; dropped (never guessed) when two ways disagree.
+  const dropped = [];
+  const absent = [];
+  const opt = (field, a, b, same = eq) => {
+    const x = a?.v ?? null;
+    const y = b?.v ?? null;
+    if (x != null && y != null && !same(x, y)) return void dropped.push(field), null;
+    if (x == null && y == null) absent.push(field);
+    return x ?? y;
+  };
+  const clsL = byLabel(tokens, start, "cls", check.cls, 2);
+  const cls = opt("cls", clsL, byPattern(tokens, start, (t) => (CLASS_BY_NAME[t.toUpperCase().replace(/\s+/g, " ")] ? check.cls(t) : null)));
+  const className = clsL ? tokens[clsL.at] : null;
+  const chart = opt("chart", byLabel(tokens, start, "chart", check.chart, 2), byPattern(tokens, start, (t) => (/CHART/i.test(t) ? check.chart(t.replace(/CHART\s*/i, "")) : null)));
+  const platform = opt("platform", byLabel(tokens, start, "platform", check.platform, 2), null);
+  const journeyMin = opt("duration", byLabel(tokens, start, "duration", (_, k) => durationAt(tokens, k), 2), null);
+
+  const passengers = passengersFrom(tokens, start);
+  if (!passengers.length) out.missing.push("passengers");
+
+  const required = ["train", "from", "to", "date", "passengers"];
+  const bad = [...out.missing, ...out.conflicts].filter((f) => required.includes(f));
+  if (bad.length) return { reason: "unreadable", missing: out.missing, conflicts: out.conflicts };
+
+  const count = (k) => passengers.filter((p) => p.kind === k).length;
+  const overall =
+    count("confirmed") === passengers.length ? "confirmed"
+    : count("cancelled") === passengers.length ? "cancelled"
+    : count("waitlist") ? "waitlist"
+    : count("rac") ? "rac"
+    : count("confirmed") ? "partly"
+    : "unknown";
+  const tidy = (s) => ({ code: s.code, name: pnrStationName(s.name) });
+
+  return {
+    data: {
+      kind: "pnr",
+      pnr: askedPnr,
+      no,
+      name,
+      boardDate,
+      from: { ...tidy(from), time: depTime || null },
+      to: { ...tidy(to), time: arrTime || null },
+      journeyMin: journeyMin ?? null,
+      cls: cls || null,
+      className,
+      platform: platform || null,
+      chart: chart || null,
+      overall,
+      passengers,
+      source: "RailYatri",
+      read: { by: PNR_READER, dropped, missing: absent },
+      status: {},
+    },
+  };
+}
+
+/** "KSR BENGALURU" → "KSR Bengaluru" */
+function pnrStationName(name) {
+  return name
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (c) => c.toUpperCase())
+    .replace(/\b(Ksr|Mgr|Csmt|Ltt|Hs|Ii|Iii)\b/g, (w) => w.toUpperCase());
+}
+
+/** One passenger, from how the page reads: "Confirmed" + "B3/59", "CNF/B3/59/LB", "RAC 12", "GNWL 45/WL 12". */
+function pnrPassenger(n, booking, current, seatText) {
+  const cur = String(current || "").toUpperCase();
+  const seat = /\b([A-Z]{1,2}\d{1,2})\s*[/,\s]\s*(\d{1,3})(?:\s*[/,\s]\s*([A-Z]{2}))?\b/.exec(`${cur} ${String(seatText || "").toUpperCase()}`);
+  let kind = "unknown";
+  if (/CAN/.test(cur)) kind = "cancelled";
+  else if (/RAC/.test(cur)) kind = "rac";
+  else if (/WL|WAIT/.test(cur)) kind = "waitlist";
+  else if (/CNF|CONFIRM/.test(cur) || seat) kind = "confirmed";
+  const position = kind === "rac" || kind === "waitlist" ? Number((cur.match(/\d+/g) || []).pop()) || null : null;
+  return {
+    n,
+    kind,
+    booking: String(booking || "").trim() || null,
+    current: String(current || "").trim() || null,
+    coach: seat ? seat[1] : null,
+    berth: seat ? seat[2] : null,
+    berthType: (seat && BERTH_TYPES[seat[3]]) || null,
+    position,
+  };
+}
+export { extractPnr };

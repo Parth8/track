@@ -4,7 +4,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import worker from "../worker/worker.js";
+import worker, { extractPnr } from "../worker/worker.js";
 import { fidsAnswer, flightAnswer, MemoryKV } from "./fids.mjs";
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -549,4 +549,183 @@ test("one flight gets at most a few paid refreshes a day; refreshing doesn't cou
   assert.equal(last.status, 200);
   const other = await get(`/api/flight?no=6E2131&date=${d}`, { with: e });
   assert.deepEqual([other.status, other.body.error], [429, "visitor_limit"], "a second new flight is over this visitor's limit");
+});
+
+/* ---------- /api/pnr ---------- */
+
+const pnrPage = readFileSync(new URL("./fixtures/pnr-sbc-kcg.html", import.meta.url), "utf8"); // a real page, PNR replaced
+const servePnr = (html = pnrPage, known = true) => {
+  serve("/get-status/", { status: known });
+  upstream.set("/pnr-status/", () => new Response(html, { headers: { "Content-Type": "text/html" } }));
+};
+
+test("pnr: a booking reads as train, stations, day, class, chart and each passenger", async () => {
+  servePnr();
+  const { status, body, headers } = await get("/api/pnr?pnr=1234567890");
+  assert.equal(status, 200);
+  assert.equal(headers.get("Cache-Control"), "no-store", "a booking is never kept by the browser");
+  assert.equal(body.no, "12786");
+  assert.equal(body.name, "Ashokapuram - Kacheguda SF Express");
+  assert.deepEqual(body.from, { code: "SBC", name: "KSR Bengaluru", time: "17:45" });
+  assert.deepEqual(body.to, { code: "KCG", name: "Kacheguda", time: "05:40" });
+  assert.equal(body.boardDate, "2026-11-14");
+  assert.equal(body.journeyMin, 11 * 60 + 55);
+  assert.deepEqual([body.cls, body.className, body.platform, body.chart, body.overall], ["3A", "AC 3 Tier", "5", "not_prepared", "confirmed"]);
+  assert.equal(body.passengers.length, 1);
+  assert.deepEqual(body.passengers[0], { n: 1, kind: "confirmed", booking: "Confirmed", current: "Confirmed", coach: "B3", berth: "59", berthType: null, position: null });
+});
+
+test("pnr: several passengers, waitlisted and RAC, each read on its own", async () => {
+  const li = (n, b, c, s) => `<li class="PNRPasList"><span class="paxListCount">${n}.</span><div><p class="statusType">${b}</p></div><div><p class="statusType">${c}</p></div><div><p class="statusType">${s}</p></div></li>`;
+  const html = pnrPage.replace(/<ul class="pasListUL">[\s\S]*?<\/ul>/, `<ul class="pasListUL">${li(1, "GNWL 45/WL 40", "CNF/B2/33/LB", "")}${li(2, "GNWL 46/WL 41", "RAC 7", "")}${li(3, "GNWL 47/WL 42", "WL 12", "")}</ul>`);
+  servePnr(html);
+  const { body } = await get("/api/pnr?pnr=1234567890");
+  assert.deepEqual(
+    body.passengers.map((p) => [p.n, p.kind, p.coach, p.berth, p.berthType, p.position]),
+    [
+      [1, "confirmed", "B2", "33", "Lower", null],
+      [2, "rac", null, null, null, 7],
+      [3, "waitlist", null, null, null, 12],
+    ]
+  );
+  assert.equal(body.overall, "waitlist");
+});
+
+test("pnr: an unknown PNR is a clear 404, and bad input never leaves the Worker", async () => {
+  servePnr(pnrPage, false);
+  const missing = await get("/api/pnr?pnr=9876543210");
+  assert.deepEqual([missing.status, missing.body.error], [404, "pnr_not_found"]);
+  calls = [];
+  for (const bad of ["12345", "abcdefghij", "12345678901"]) {
+    const r = await get(`/api/pnr?pnr=${bad}`);
+    assert.deepEqual([r.status, r.body.error], [400, "invalid_pnr"], bad);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test("pnr: kept 5 minutes under a hash, never the PNR itself", async () => {
+  servePnr();
+  await get("/api/pnr?pnr=1234567890");
+  const n = calls.length;
+  await get("/api/pnr?pnr=1234567890");
+  assert.equal(calls.length, n, "the repeat came from the cache");
+  const keys = [...caches.default.store.keys()];
+  assert.ok(keys.some((k) => k.includes("/pnr/")));
+  assert.ok(!keys.some((k) => k.includes("1234567890")), "no cache key holds the PNR");
+});
+
+/* ---------- PNR extraction: the same booking, however the page is shaped ---------- */
+
+// What the real page says. Every reshaped copy below must read exactly the same.
+const GOLDEN = {
+  no: "12786",
+  name: "Ashokapuram - Kacheguda SF Express",
+  boardDate: "2026-11-14",
+  from: { code: "SBC", name: "KSR Bengaluru", time: "17:45" },
+  to: { code: "KCG", name: "Kacheguda", time: "05:40" },
+  journeyMin: 715,
+  cls: "3A",
+  platform: "5",
+  chart: "not_prepared",
+  overall: "confirmed",
+  passengers: [{ n: 1, kind: "confirmed", booking: "Confirmed", current: "Confirmed", coach: "B3", berth: "59", berthType: null, position: null }],
+};
+const core = (d) => d && Object.fromEntries(Object.keys(GOLDEN).map((k) => [k, d[k]]));
+const readPnr = (html, pnr = "1234567890") => extractPnr(html, pnr);
+
+// A different site design altogether: a table of label/value cells, other wording, other formats.
+const REDESIGN = `<html><body><main><h1>Your booking</h1>
+<table><tr><th>PNR No.</th><td>123-456-7890</td></tr>
+<tr><th>Train No/Name</th><td>12786 - Ashokapuram - Kacheguda SF Express</td></tr>
+<tr><th>Boarding Station</th><td>KSR Bengaluru (SBC)</td><td>5:45 pm</td></tr>
+<tr><th>Destination</th><td>Kacheguda (KCG)</td><td>5:40 am</td></tr>
+<tr><th>Duration</th><td>11h 55m</td></tr>
+<tr><th>Date of Journey</th><td>Sat, 14 Nov 2026</td></tr>
+<tr><th>Class</th><td>AC 3 Tier (3A)</td></tr><tr><th>Platform</th><td>PF 5</td></tr>
+<tr><th>Chart</th><td>Chart not yet prepared</td></tr></table>
+<section><h2>Booking status</h2><div>Current status</div><div>Coach / Berth</div>
+<div>Passenger 1</div><div>Confirmed</div><div>Confirmed</div><div>B3/59</div></section>
+<footer>Book food on train · Hotels · 50% off</footer></main></body></html>`;
+
+test("pnr extraction: reshaped pages read exactly like the real one", () => {
+  assert.deepEqual(core(readPnr(pnrPage).data), GOLDEN, "the real page");
+  const variants = {
+    "every class, id and style removed": pnrPage.replace(/\s(class|id|style)\s*=\s*("[^"]*"|'[^']*')/gi, ""),
+    "tags swapped (p→div, span→em, div→section)": pnrPage.replace(/<(\/?)p\b/gi, "<$1div").replace(/<(\/?)span\b/gi, "<$1em").replace(/<(\/?)div\b/gi, "<$1section"),
+    "no list markup for passengers": pnrPage.replace(/<\/?(ul|li)\b[^>]*>/gi, ""),
+    "labels reworded and lower-cased": pnrPage.replace(">PNR NUMBER<", ">Pnr number:<").replace(">DAY OF BOARDING<", ">Date of Boarding<").replace("PF# (TENTATIVE)", "Platform (tentative)").replace(">JOURNEY TIME<", ">Duration<"),
+    "all links gone": pnrPage.replace(/<a\b[^>]*>/gi, "<span>").replace(/<\/a>/gi, "</span>"),
+    "ads and banners between every field": pnrPage.replace(/<\/p>/gi, "</p><ins>Sponsored · Order food now</ins>"),
+    "a whole new design": REDESIGN,
+  };
+  for (const [name, html] of Object.entries(variants)) {
+    const r = readPnr(html);
+    assert.ok(r.data, `${name}: ${r.reason} missing=${r.missing} conflicts=${r.conflicts}`);
+    assert.deepEqual(core(r.data), GOLDEN, name);
+  }
+});
+
+test("pnr extraction: the same page always reads the same way", () => {
+  const a = JSON.stringify(readPnr(pnrPage));
+  for (let i = 0; i < 5; i++) assert.equal(JSON.stringify(readPnr(pnrPage)), a);
+});
+
+test("pnr extraction: refuses rather than guesses", () => {
+  // Someone else's booking on the page
+  assert.equal(readPnr(pnrPage, "9876543210").reason, "other_pnr");
+  // The passenger table is gone
+  const noTable = readPnr(pnrPage.replace(/<ul class="pasListUL">[\s\S]*?<\/ul>/, ""));
+  assert.deepEqual([noTable.data, noTable.reason, noTable.missing], [undefined, "unreadable", ["passengers"]]);
+  // Two ways to the boarding station disagree (a stray station before the labelled one)
+  const twoFroms = readPnr(pnrPage.replace('<p class="pnr-normal-font">FROM</p>', '<p>MYSURU JN | MYS</p><p class="pnr-normal-font">FROM</p>'));
+  assert.equal(twoFroms.reason, "unreadable");
+  assert.ok(twoFroms.conflicts.includes("from"));
+  // A day that doesn't exist is no date at all
+  const badDay = readPnr(pnrPage.replace("14-11-2026", "31-11-2026"));
+  assert.deepEqual([badDay.reason, badDay.missing], ["unreadable", ["date"]]);
+  // The page's link names a different train
+  const otherTrain = readPnr(pnrPage.replace("/time-table/12786-", "/time-table/12785-").replace("/live-train-status/12786-", "/live-train-status/12785-"));
+  assert.ok(otherTrain.conflicts.includes("train"));
+  // A cleared booking
+  assert.equal(readPnr("<p>FLUSHED PNR / PNR NOT YET GENERATED</p>").reason, "no_booking");
+});
+
+test("pnr extraction: an optional field that reads two ways is left out, never guessed", () => {
+  const html = pnrPage.replace('<P class="pnr-bold-txt">CNF</P>', '<P class="pnr-bold-txt">CNF</P><p>Sleeper</p>');
+  const r = readPnr(html);
+  assert.ok(r.data);
+  assert.equal(r.data.cls, null);
+  assert.deepEqual(r.data.read.dropped, ["cls"]);
+  assert.equal(r.data.no, "12786", "the rest still reads");
+});
+
+test("pnr: a page that can't be read says so, and the logs name the field, never the PNR", async () => {
+  servePnr(pnrPage.replace(/<ul class="pasListUL">[\s\S]*?<\/ul>/, ""));
+  const lines = [];
+  const warn = console.warn;
+  console.warn = (...a) => lines.push(a.join(" "));
+  try {
+    const r = await get("/api/pnr?pnr=1234567890");
+    assert.deepEqual([r.status, r.body.error], [502, "pnr_unreadable"]);
+  } finally {
+    console.warn = warn;
+  }
+  assert.match(lines.join("\n"), /missing=passengers/);
+  assert.ok(!lines.join("\n").includes("1234567890"));
+});
+
+test("pnr extraction: every passenger is kept, even with ads between the rows", () => {
+  const row = (n, b, c, s) => `<li><span>${n}.</span><p>${b}</p><p>${c}</p><p>${s}</p></li><li class="ad">Order food at the next station</li>`;
+  const html = pnrPage.replace(/<ul class="pasListUL">[\s\S]*?<\/ul>/, `<ul>${row(1, "GNWL 45/WL 40", "CNF", "B2/33/LB")}${row(2, "GNWL 46/WL 41", "RAC 7", "")}${row(3, "GNWL 47/WL 42", "WL 12", "")}</ul>`);
+  const r = readPnr(html);
+  assert.deepEqual(
+    r.data.passengers.map((p) => [p.n, p.kind, p.coach, p.berth, p.position]),
+    [
+      [1, "confirmed", "B2", "33", null],
+      [2, "rac", null, null, 7],
+      [3, "waitlist", null, null, 12],
+    ]
+  );
+  // "2 minutes late" further down the page is not a second passenger on a solo booking
+  assert.equal(readPnr(pnrPage).data.passengers.length, 1);
 });
