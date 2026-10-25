@@ -12,7 +12,7 @@ import { createRoutePanel, createResults, routeRange } from "./finder.js";
 import { createFlightResults, flightRouteRange } from "./flight-finder.js";
 import { createIsland } from "./island.js";
 import { createJourneysView, createJourneySheets, checkDueBookings } from "./journeys-ui.js";
-import { sortedJourneys, nextJourney, isTrackable, isLiveNow, isTravelDay, bookingChip, recordRun, needsRecord, onJourneysChange } from "./journeys.js";
+import { sortedJourneys, nextJourney, isTrackable, isLiveNow, isTravelDay, bookingChip, recordRun, needsRecord, onJourneysChange, journeysForRun, isPast } from "./journeys.js";
 
 const today = () => todayIn(IST);
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
@@ -962,6 +962,9 @@ function paint() {
   s.anchor = view.anchor;
   if (s.mode === "train") recordRun(s.no, s.date || today(), s.data);
   view.anchor?.after(freshNote(s));
+  // A trip you saved on this run: its coach, berth and platform guide is one tap from here.
+  const mineHere = s.mode === "train" ? journeysForRun(s.no, s.date || today()).find((x) => !isPast(x) && (x.coach || x.booking)) : null;
+  if (mineHere) view.anchor?.after(tripGuideLink(mineHere));
   if (samePin(s)) savePin({ ...pinned, stop: s.stop || null, island: view.island });
   syncIsland();
 
@@ -971,6 +974,18 @@ function paint() {
     s.io = new IntersectionObserver(([entry]) => jumpBtn.classList.toggle("show", !entry.isIntersecting && window.scrollY > 300), { threshold: 0 });
     s.io.observe(view.currentRow);
   } else jumpBtn.classList.remove("show");
+}
+
+/** "Your trip · B3 · 59 UB · from KSR Bengaluru": opens the trip's platform guide. */
+function tripGuideLink(j) {
+  const seat = [j.coach, j.seat].filter(Boolean).join(" · ");
+  return h(
+    "button",
+    { type: "button", class: "trip-guide", on: { click: () => journeySheets.openDetail(j.id, { focus: "platform" }) } },
+    svg(icons.seat),
+    h("span", {}, h("b", { text: "Your coach, berth and platform" }), h("small", { text: [seat, `boarding at ${j.from.name}`].filter(Boolean).join(" · ") })),
+    svg(icons.next)
+  );
 }
 
 /**

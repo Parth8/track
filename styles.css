@@ -5805,3 +5805,126 @@ textarea.jn-input {
     to { transform: none; opacity: 1; }
   }
 }
+
+/* ---------- today's run, in the hours before you board ---------- */
+.jn-today:empty {
+  display: none;
+}
+.jn-today {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 9%, var(--card));
+  border: 1.5px solid color-mix(in srgb, var(--accent) 28%, var(--hair));
+}
+.jn-today-t {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12.5px !important;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--deep);
+}
+.jn-today-line {
+  margin: 0;
+  font-size: 14px !important;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.jn-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.jn-src-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.jn-src-chips li {
+  padding: 3px 9px;
+  border-radius: 99px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: var(--card);
+  color: var(--ink-soft);
+  border: 1px solid var(--hair);
+}
+.jn-src-chips li.ok span {
+  color: var(--mint-deep);
+}
+.jn-src-chips li.no {
+  color: var(--muted);
+}
+.jn-verified {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  margin: 0;
+  padding: 3px 10px 3px 7px;
+  border-radius: 99px;
+  background: var(--mint-tint);
+  color: var(--mint-deep);
+  font-size: 12px !important;
+  font-weight: 800;
+}
+.jn-verified svg {
+  width: 14px;
+  height: 14px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .jn-live-dot {
+    animation: jn-live 1.8s ease-in-out infinite;
+  }
+  @keyframes jn-live {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+    50% { box-shadow: 0 0 0 5px transparent; }
+  }
+  .jn-today-line {
+    animation: jn-cell 0.4s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+}
+
+/* on a saved trip's live status: the way to its platform guide */
+.trip-guide {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin: 10px 0 4px;
+  padding: 12px 14px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 30%, var(--hair));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.trip-guide > svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+.trip-guide > span {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.trip-guide b {
+  font-size: 14.5px;
+}
+.trip-guide small {
+  font-size: 12.5px;
+  color: var(--muted);
+}

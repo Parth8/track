@@ -10,6 +10,8 @@
  *   /api/seats?no=12306&from=NDLS&to=HWH&date=2026-10-09&cls=3A&quota=GN
  *   /api/flights?from=DEL&to=BLR&date=2026-10-02&after=17:00
  *   /api/coaches?no=12786     (the train's published coach order, kept a day)
+ *   /api/dayof?no=12786&date=2026-11-14&at=SBC   (today's run at your station: coach order and
+ *                              platform from the railway's enquiry system, delays from two more)
  *   /api/pnr?pnr=1234567890   (a booking's status; the PNR is never logged, and is cached
  *                              only under a hash of it, for 5 minutes)
  *
@@ -101,6 +103,8 @@ export default {
           return reply(await flightsBetweenRoute(url, env, ctx, request), 200, cors, 300, env);
         case "/api/seats":
           return reply(await seatsRoute(url, ctx), 200, cors, 300, env);
+        case "/api/dayof":
+          return reply(await dayOfRoute(url, ctx, env), 200, cors, 60, env);
         case "/api/coaches":
           return reply(await coachesRoute(url, ctx), 200, cors, 3600, env);
         case "/api/pnr":
@@ -443,7 +447,7 @@ function normaliseRailYatri(no, date, lts, tt) {
 
 /* ---------- Source B: official enquiry system ---------- */
 
-async function fromNtes(no, date, offset, ctx) {
+async function fromNtes(no, date, offset, ctx, { coords = true } = {}) {
   const base = "https://enquiry.indianrail.gov.in/mntes/";
   const jar = {};
   const save = (res) => {
@@ -488,7 +492,7 @@ async function fromNtes(no, date, offset, ctx) {
   if (!journey) return null;
 
   // The official feed has no coordinates. Borrow them from the timetable when we can.
-  try {
+  if (coords) try {
     const coords = await cached(ctx, `timetable/${no}`, TTL.timetable, async () => {
       const data = await railYatriJson(no, 0);
       const route = data?.pageProps?.timeTableData?.[0]?.route || [];
@@ -552,6 +556,7 @@ function parseNtes(html, no, date) {
       lon: null,
       halts: true,
       platform: codePf ? codePf[2].replace("*", "").trim() : null,
+      platformMark: codePf && codePf[2].includes("*") ? "*" : null, // NTES's own marker, passed on as is
       haltMin: 0,
       day: null,
       onTimeRating: null,
@@ -1691,12 +1696,37 @@ function parseErailOrder(text, no) {
   return orderOk(coaches) ? { source: "erail", coaches, engineFirst } : null;
 }
 
-/** ConfirmTkt's page carries its train data as JSON, for this train number only. */
+/**
+ * ConfirmTkt's pages carry their train data as JSON, either quoted (`var data = '{…}';`, the
+ * schedule page) or as a plain object (`var data = {…};`, the running-status page). Read for
+ * this train number only.
+ */
 function confirmTktData(html, no) {
-  const m = /var\s+data\s*=\s*'([\s\S]*?)';\s*\n/.exec(html) || /var\s+data\s*=\s*'([\s\S]*?)';/.exec(html);
-  if (!m) return null;
+  let raw = null;
+  const quoted = /var\s+data\s*=\s*'([\s\S]*?)';\s*\n/.exec(html) || /var\s+data\s*=\s*'([\s\S]*?)';/.exec(html);
+  if (quoted) raw = quoted[1].replace(/\\'/g, "'");
+  else {
+    const at = html.search(/var\s+data\s*=\s*\{/);
+    if (at < 0) return null;
+    const start = html.indexOf("{", at);
+    let depth = 0;
+    let inStr = false;
+    for (let i = start; i < html.length; i++) {
+      const ch = html[i];
+      if (inStr) {
+        if (ch === "\\") i++;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') inStr = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) {
+        raw = html.slice(start, i + 1);
+        break;
+      }
+    }
+  }
+  if (!raw) return null;
   try {
-    const d = JSON.parse(m[1].replace(/\\'/g, "'"));
+    const d = JSON.parse(raw);
     return String(d.TrainNumberString || d.TrainNo) === no ? d : null;
   } catch {
     return null;
@@ -1852,6 +1882,97 @@ function mergeStops(a, b) {
     stop.from = seen;
     return stop;
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* /api/dayof: what today's run says at your station                   */
+/* ------------------------------------------------------------------ */
+
+// For the hours before you board, when it matters most. Every source is asked at once and
+// answers on its own:
+//  - NTES, the railway's enquiry system: today's coach order at your station and its platform.
+//    The only source here that publishes the actual run rather than the plan.
+//  - RailYatri's live status and ConfirmTkt's running status: their platform and delay at your
+//    station, to set beside it.
+// Nothing is merged: each value comes back with its source, and every source says whether it
+// answered and, if not, why, so a missing answer is never mistaken for a "no".
+
+const DAYOF_TTL = 180;
+/** A source gets this long, then counts as timed out, so the others aren't kept waiting. */
+const within = (ms, promise) => Promise.race([promise, new Promise((_, no) => setTimeout(() => no(new Error("timeout")), ms))]); // three minutes: fresh enough on the platform, gentle on the sources
+
+async function dayOfRoute(url, ctx, env = {}) {
+  const no = (url.searchParams.get("no") || "").trim();
+  const at = (url.searchParams.get("at") || "").trim().toUpperCase();
+  if (!/^\d{5}$/.test(no)) throw new ApiError(400, "invalid_train", "Train numbers have 5 digits.");
+  if (!/^[A-Z]{1,5}$/.test(at)) throw new ApiError(400, "invalid_station", "Station codes are 1 to 5 letters, like SBC.");
+  const today = istToday();
+  const date = validDate(url.searchParams.get("date") || today, addDays(today, -3), today);
+  const offset = daysBetween(today, date);
+  const fresh = url.searchParams.get("fresh") === "1";
+  return cached(ctx, `dayof/${no}/${date}/${at}`, DAYOF_TTL, async () => {
+    const sources = [];
+    const ask = async (name, fn) => {
+      const t0 = Date.now();
+      try {
+        const v = await fn();
+        sources.push({ name, ok: !!v, why: v ? null : "no data for this run", ms: Date.now() - t0 });
+        return v || null;
+      } catch (err) {
+        const why = err instanceof ApiError && err.status === 404 ? "no data for this run" : /timeout|aborted/i.test(String(err?.message)) ? "timed out" : "unreachable";
+        log("warn", "dayof source failed", name, no, date, String(err && err.message));
+        sources.push({ name, ok: false, why, ms: Date.now() - t0 });
+        return null;
+      }
+    };
+    const [ntes, crowd, ct] = await Promise.all([
+      ask("ntes", () => within(Number(env.DAYOF_NTES_MS) || 9000, fromNtes(no, date, offset, ctx, { coords: false }))),
+      ask("railyatri", () => fromRailYatri(no, date, offset)),
+      ask("confirmtkt", () => confirmTktRun(no, date)),
+    ]);
+    const n = ntes?.stops?.find((x) => x.code === at) || null;
+    const r = crowd?.stops?.find((x) => x.code === at) || null;
+    const c = ct?.find((x) => x.code === at) || null;
+    const order = ntes?.coaches?.find((x) => x.code === at) || null;
+    return {
+      kind: "dayof",
+      no,
+      date,
+      at,
+      // Today's order at this station, as the railway lists it; never borrowed from another station.
+      coaches: order ? { list: order.list.map((x) => ({ id: x.id, cls: CLASS_CODE.test(x.cls) ? x.cls : null })), source: "ntes" } : null,
+      platform: {
+        ntes: n?.platform ? { pf: n.platform, mark: n.platformMark || null } : null,
+        railyatri: r?.platform || null,
+        confirmtkt: c?.pf || null,
+      },
+      delay: {
+        ntes: n ? n.delay?.arr ?? n.delay?.dep ?? null : null,
+        railyatri: r ? r.delay?.arr ?? r.delay?.dep ?? null : null,
+        confirmtkt: c ? c.delay : null,
+      },
+      sources,
+      status: {},
+    };
+  }, { fresh, floorMs: 60000 });
+}
+
+/** ConfirmTkt's running status for one run: each station's delay, and its listed platform. */
+async function confirmTktRun(no, date) {
+  const [y, m, d] = date.split("-");
+  const res = await getWithRetry(`https://www.confirmtkt.com/train-running-status/${no}?Date=${d}-${MONTHS[+m - 1]}-${y}`, { headers: { "User-Agent": UA } }, { timeout: 10000, retries: 0 });
+  if (!res.ok) throw new Error(`status ${res.status}`);
+  const data = confirmTktData(await res.text(), no);
+  if (!data?.Schedule?.length) return null;
+  const mins = (t) => {
+    const m2 = /^(-)?\s*(\d+)\s*Min/i.exec(String(t || "").trim());
+    return m2 ? (m2[1] ? -1 : 1) * Number(m2[2]) : /on\s*time/i.test(String(t || "")) ? 0 : null;
+  };
+  return data.Schedule.filter((x) => /^[A-Z]{1,5}$/.test(x.StationCode || "")).map((x) => ({
+    code: x.StationCode,
+    pf: /^\d{1,2}[A-Z]?$/.test(String(x.ExpectedPlatformNo || "").trim()) ? String(x.ExpectedPlatformNo).trim() : null,
+    delay: mins(x.arrivalDelay) ?? mins(x.departureDelay),
+  }));
 }
 
 /* ------------------------------------------------------------------ */

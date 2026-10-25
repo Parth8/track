@@ -22,6 +22,8 @@ import {
   boardDay,
   timetableTimes,
   coachInfo,
+  inDayOf,
+  DAYOF_HOURS,
   bookingFrom,
   seatFrom,
   bookingDue,
@@ -504,7 +506,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
 
   /* ---------------- details ---------------- */
 
-  function openDetail(jid) {
+  function openDetail(jid, { focus = null } = {}) {
     const j = journeyById(jid);
     if (!j) return;
     const past = isPast(j);
@@ -694,6 +696,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     fill(detail.body, nodes);
     detail.d.dataset.id = j.id;
     if (!detail.d.open) detail.d.showModal();
+    if (focus === "platform") requestAnimationFrame(() => detail.body.querySelector(".jn-plat")?.scrollIntoView({ block: "start", behavior: prefersReducedMotion() ? "instant" : "smooth" }));
 
     // A linked booking that's due a look is checked quietly while you read.
     if (bookingDue(j) && !checking.has(j.id)) {
@@ -720,7 +723,10 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     return j.coach ? [{ n: 1, who: "Your seat", coach: j.coach.toUpperCase(), berth: berthNo(j.seat), type: null, typeFrom: null }] : [];
   }
 
-  const NAMES = { erail: "erail.in", confirmtkt: "ConfirmTkt", etrain: "etrain.info", railyatri: "RailYatri" };
+  const NAMES = { erail: "erail.in", confirmtkt: "ConfirmTkt", etrain: "etrain.info", railyatri: "RailYatri", ntes: "NTES" };
+  const DAYOF_EVERY = 3 * 60000;
+  let dayOfTimer = null; // one sheet open at a time, so one timer
+  detail.d.addEventListener("close", () => clearTimeout(dayOfTimer));
   const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
   const listOf = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
   // Bays in a coach, only for builds whose numbering is known. LHB and ICF coaches differ.
@@ -734,6 +740,9 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     let failed = null;
     let pick = 0;
     let here = null;
+    let today = null; // what today's run says at your station, from /api/dayof
+    const dayOf = !isPast(j) && inDayOf(j);
+    const todayBox = h("div", { class: "jn-today", "aria-live": "polite" });
     const coachBox = h("div", { class: "jn-coachbox" });
     const berthBox = h("div", { class: "jn-berthbox" });
     const pfBox = h("div", { class: "jn-pf" });
@@ -784,8 +793,11 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       const seat = seats[pick];
       if (!seat) return fill(coachBox);
       if (!info && !failed) return fill(coachBox, h("div", { class: "jn-coaches-skel", "aria-hidden": "true" }, Array.from({ length: 9 }, () => h("i", { class: "skel" }))), h("p", { class: "jn-fine", text: "Checking the coach order with three sources…" }));
-      if (!info?.coaches) return fill(coachBox, h("p", { class: "jn-fine", text: failed || "None of the sources lists a coach order for this train. The coach display on the platform shows it on the day." }));
-      const list = info.coaches;
+      const live = today?.coaches?.list?.length ? today.coaches.list.map((c) => ({ id: c.id, kind: /^[A-Z]+/.exec(c.id)?.[0] || c.id, cls: c.cls })) : null;
+      if (!live && !info?.coaches) return fill(coachBox, h("p", { class: "jn-fine", text: failed || "None of the sources lists a coach order for this train. The coach display on the platform shows it on the day." }));
+      const list = live || info.coaches;
+      const seqOf = (l) => l.filter((c) => NUMBERED_COACH.test(c.id)).map((c) => c.id).join(" ");
+      const sameAsPlan = live && info?.coaches ? seqOf(live) === seqOf(info.coaches) : null;
       const mine = list.findIndex((c) => c.id === seat.coach);
       const say = h("p", { class: "jn-coach-say", role: "status", "aria-live": "polite" });
       let walk = null;
@@ -797,7 +809,9 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       }
       const lo = here == null || mine < 0 ? -1 : Math.min(here, mine);
       const hi = here == null || mine < 0 ? -1 : Math.max(here, mine);
-      const engine = (end) => (info.engineFirst === (end === "start") ? h("li", { class: "jn-loco", "aria-hidden": "true" }, h("span", { text: "Engine" })) : null);
+      // The engine is drawn only from the published order's own marks, and only on that order.
+      const engineFirst = live ? null : info.engineFirst;
+      const engine = (end) => (engineFirst === (end === "start") ? h("li", { class: "jn-loco", "aria-hidden": "true" }, h("span", { text: "Engine" })) : null);
       const strip = h(
         "ol",
         { class: `jn-coaches${here != null ? " walking" : ""}`, "aria-label": "Coach order. Tap the coach you're at." },
@@ -818,13 +832,17 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
         ),
         engine("end")
       );
-      const front = frontLine(list);
+      const front = live ? null : frontLine(list);
+      const said = live
+        ? `Today's order at ${j.from.name}, from the railway's enquiry system (NTES), checked ${ago(today.status.checkedAt)}.${sameAsPlan === true ? " It matches the published order." : sameAsPlan === false ? " It differs from the published order, so go by this one." : ""}`
+        : `${sourcesLine()} Coach orders change now and then; the coach display on the platform shows today's.`;
       fill(coachBox, [
           h("p", { class: "jn-coach-ends", "aria-hidden": "true" }, h("span", { text: `${list[0].id} end` }), h("span", { text: `${list.at(-1).id} end` })),
           strip,
           say,
           front ? h("p", { class: "jn-coach-front" }, svg(icons.trainFront), front) : null,
-          h("p", { class: "jn-fine small", text: `${sourcesLine()} Coach orders change now and then; the coach display on the platform shows today's.` }),
+          live ? h("p", { class: "jn-verified" }, svg(icons.check), "Today's run") : null,
+          h("p", { class: "jn-fine small", text: said }),
         ]
       );
       // Keep both you and your coach in view, gliding there rather than jumping.
@@ -874,6 +892,8 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
     // Platform: every source side by side. They're all planned platforms; the day decides.
     async function paintPf() {
       const live = isTrackable(j);
+      // On the day, live values are in today's panel; this line keeps to what was planned.
+      const planned = dayOf;
       let seen = j.platformSeen && Date.now() - Date.parse(j.platformSeen.at) < (live ? 10 * 60000 : 12 * 3600000) && j.platformSeen.live === live ? j.platformSeen : null;
       const show = () => {
         const says = [];
@@ -882,7 +902,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
         if (st?.pf && st.from?.pf === "both") says.push(["both timetables (RailYatri, ConfirmTkt)", st.pf]);
         else if (st?.pf) says.push([`${NAMES[st.from?.pf] ? `${NAMES[st.from.pf]}'s` : "the"} timetable`, st.pf]);
         else if (st?.from?.pf && typeof st.from.pf === "object") for (const [k, v] of Object.entries(st.from.pf)) says.push([`${NAMES[k]}'s timetable`, v]);
-        if (seen?.pf) says.push([live ? "live status" : "the last run", seen.pf]);
+        if (seen?.pf && !planned) says.push([live ? "live status" : "the last run", seen.pf]);
         if (!says.length) return fill(pfBox);
         const values = [...new Set(says.map(([, v]) => v))];
         const liveSays = live && seen?.pf;
@@ -891,13 +911,13 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
           : values.length === 1
             ? `Platform ${values[0]}. ${cap(listOf(says.map(([w]) => w)))} ${says.length > 1 ? "all say so" : "says so"}.`
             : `The sources differ: ${says.map(([w, v]) => `${w} ${v}`).join(", ")}.`;
-        fill(pfBox, 
-          h("p", { class: "jn-pf-line" }, svg(icons.gate), h("span", { text: line })),
+        fill(pfBox,
+          h("p", { class: "jn-pf-line" }, svg(icons.gate), h("span", { text: dayOf ? `Planned: ${line.charAt(0).toLowerCase()}${line.slice(1)}` : line })),
           h("p", { class: "jn-fine small", text: "All of these are planned platforms, often from the same railway plan, so agreeing makes it likely, not certain. It's confirmed on the day; the station's displays and announcements have the final word." })
         );
       };
       show();
-      if (seen) return;
+      if (seen || planned) return;
       try {
         const data = await api("/api/train", { no: j.no, date: live ? j.startDate : addDays(today(), -1) }, { timeout: 20000, retries: 0 });
         const stop = (data.stops || []).find((x) => x.code === j.from.code);
@@ -909,8 +929,64 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       }
     }
 
-    const paintAll = () => (paintPicker(), paintCoach(), paintBerth(), paintPf());
+    /**
+     * Today, side by side: the platform and the delay at your station from each source that
+     * answered, and which ones didn't. Only NTES publishes the actual run; the others are shown
+     * for what they are.
+     */
+    function paintToday() {
+      if (!dayOf) return fill(todayBox, isPast(j) || !isTrackable(j) || Date.parse(j.dep) - Date.now() > 2 * 86400000 ? null : h("p", { class: "jn-fine small", text: `From ${DAYOF_HOURS} hours before you board, Track checks today's run with the railway's enquiry system for the actual coach order and platform.` }));
+      if (!today) return fill(todayBox, h("p", { class: "jn-today-t" }, h("span", { class: "spinner", "aria-hidden": "true" }), "Checking today's run…"));
+      const pf = today.platform || {};
+      const lines = [];
+      if (pf.ntes?.pf) lines.push(`Platform ${pf.ntes.pf} today, from the railway's enquiry system${pf.ntes.mark ? " (marked provisional there)" : ""}.`);
+      const others = [["RailYatri's live status", pf.railyatri], ["ConfirmTkt", pf.confirmtkt]].filter(([, v]) => v);
+      if (others.length) {
+        const vals = [...new Set(others.map(([, v]) => v))];
+        lines.push(
+          vals.length === 1
+            ? `${listOf(others.map(([w]) => w))} ${others.length > 1 ? "list" : "lists"} platform ${vals[0]}${pf.ntes?.pf ? (vals[0] === pf.ntes.pf ? ", the same" : "") : ". The railway's own system hasn't confirmed it yet"}.`
+            : `${others.map(([w, v]) => `${w} lists ${v}`).join("; ")}.`
+        );
+      }
+      const d = today.delay || {};
+      const late = (m) => (m === 0 ? "on time" : m > 0 ? `${m} min late` : `${-m} min early`);
+      const ds = [["NTES", d.ntes], ["RailYatri", d.railyatri], ["ConfirmTkt", d.confirmtkt]].filter(([, v]) => Number.isFinite(v));
+      if (ds.length) {
+        const vals = [...new Set(ds.map(([, v]) => v))];
+        lines.push(vals.length === 1 ? `Running ${late(vals[0])} at ${j.from.name}, by ${listOf(ds.map(([w]) => w))}.` : `At ${j.from.name}: ${ds.map(([w, v]) => `${w} says ${late(v)}`).join(", ")}.`);
+      }
+      fill(
+        todayBox,
+        h("p", { class: "jn-today-t" }, h("span", { class: "jn-live-dot", "aria-hidden": "true" }), `Today's run · checked ${ago(today.status.checkedAt)}`),
+        lines.map((t) => h("p", { class: "jn-today-line", text: t })),
+        h(
+          "ul",
+          { class: "jn-src-chips", "aria-label": "Sources" },
+          (today.sources || []).map((x) => h("li", { class: x.ok ? "ok" : "no", title: x.ok ? "Answered" : x.why }, h("span", { "aria-hidden": "true", text: x.ok ? "✓" : "–" }), ` ${NAMES[x.name] || x.name}${x.ok ? "" : `: ${x.why}`}`))
+        ),
+        !pf.ntes?.pf && !today.coaches ? h("p", { class: "jn-fine small", text: "Not confirmed by the railway yet: its enquiry system didn't answer. Track asks again every few minutes while this is open; the station's displays have the final word." }) : null
+      );
+    }
+
+    async function loadToday(force = false) {
+      clearTimeout(dayOfTimer);
+      if (!dayOf || !detail.d.open || detail.d.dataset.id !== j.id) return;
+      try {
+        today = await api("/api/dayof", { no: j.no, date: j.startDate, at: j.from.code, fresh: force ? 1 : null }, { timeout: 20000, retries: 0 });
+      } catch {
+        /* keep what we had; the next round tries again */
+      }
+      if (detail.d.open && detail.d.dataset.id === j.id) {
+        paintToday();
+        paintCoach();
+        dayOfTimer = setTimeout(loadToday, DAYOF_EVERY);
+      }
+    }
+
+    const paintAll = () => (paintToday(), paintPicker(), paintCoach(), paintBerth(), paintPf());
     paintAll();
+    if (dayOf) requestAnimationFrame(() => loadToday());
     if (!info) {
       api("/api/coaches", { no: j.no }, { timeout: 20000, retries: 1 })
         .then((d) => {
@@ -925,6 +1001,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       "section",
       { class: "jn-plat", "aria-label": "On the platform" },
       h("p", { class: "sheet-label", text: "On the platform" }),
+      todayBox,
       pfBox,
       picker,
       seats.length ? h("div", { class: "jn-card" }, h("p", { class: "jn-card-t", text: "Find your coach" }), coachBox) : null,

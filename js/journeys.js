@@ -110,6 +110,13 @@ export const boardDay = (j) => new Intl.DateTimeFormat("en-CA", { timeZone: IST 
 /** Travel day: you board today, or within 6 hours (a trip just after midnight), or it's on its way. */
 export const isTravelDay = (j, now = Date.now()) => isTrackable(j) && !isPast(j, now) && (boardDay(j) === todayIn(IST) || Date.parse(j.dep) - now < 6 * 3600000);
 
+/**
+ * The day-of window: from 8 hours before you board until half an hour after the train leaves
+ * your station. Then today's run is checked against the railway's own enquiry system.
+ */
+export const DAYOF_HOURS = 8;
+export const inDayOf = (j, now = Date.now()) => isTrackable(j) && !isPast(j, now) && Date.parse(j.dep) - now <= DAYOF_HOURS * 3600000 && Date.parse(j.dep) - now > -30 * 60000;
+
 /** The next journey within a week, for the home screen. */
 export function nextJourney(days = 7) {
   const now = Date.now();

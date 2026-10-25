@@ -845,3 +845,59 @@ test("coaches: another train's record, or a coach that doesn't read cleanly, is 
   assert.equal((await get("/api/coaches?no=12786")).body.coaches, null);
   assert.deepEqual([(await get("/api/coaches?no=abc")).status], [400]);
 });
+
+/* ---------- /api/dayof: today's run at your station ---------- */
+
+// NTES isn't reachable from where these tests were written, so its page here is hand-built in the
+// shape the Worker reads, not a recording. ConfirmTkt's running status is a real, public answer.
+const NTES_SAMPLE = rec("ntes-sample-12786.html");
+const CT_RUN = rec("confirmtkt-run-12786.html");
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function serveDayOf({ ntes = "ok", order = null } = {}) {
+  const d = istToday();
+  const [y, m, dd] = d.split("-");
+  let page = NTES_SAMPLE.replaceAll("{DD}", dd).replaceAll("{mon}", MON[+m - 1].toLowerCase()).replaceAll("{Mon}", MON[+m - 1]).replaceAll("{YYYY}", y);
+  if (order) page = order(page);
+  upstream.set("mntes/GetCSRFToken", () => new Response("<input type='hidden' name='csrfX' value='t0k3n'>"));
+  upstream.set("mntes/tr?opt=TrainRunning", () => (ntes === "hang" ? new Promise(() => {}) : ntes === "down" ? Promise.reject(new Error("reset")) : new Response(page)));
+  upstream.set("mntes/", () => new Response("<html></html>"));
+  upstream.set("confirmtkt.com/train-running-status/", () => new Response(CT_RUN));
+  upstream.set("railyatri.in", () => new Response("down", { status: 503 }));
+  return d;
+}
+
+test("dayof: today's coach order and platform at your station come from the railway's system, each source named", async () => {
+  const d = serveDayOf();
+  const { status, body } = await get(`/api/dayof?no=12786&date=${d}&at=SBC`);
+  assert.equal(status, 200);
+  assert.equal(body.coaches.source, "ntes");
+  assert.equal(body.coaches.list.map((c) => c.id).join(" "), "LPR GN GN H1 A2 A1 B6 B5 B4 B3 B2 B1 S7 S6 S5 S4 S3 S2 S1 GN GN SLRD");
+  assert.deepEqual(body.platform, { ntes: { pf: "6", mark: "*" }, railyatri: null, confirmtkt: "5" }, "each platform with its source, none merged");
+  assert.equal(body.delay.confirmtkt, 10);
+  assert.deepEqual(body.sources.map((s) => [s.name, s.ok, s.why]).sort(), [["confirmtkt", true, null], ["ntes", true, null], ["railyatri", false, "unreachable"]]);
+});
+
+test("dayof: a station NTES has no coach order for gets none, never another station's", async () => {
+  const d = serveDayOf();
+  const { body } = await get(`/api/dayof?no=12786&date=${d}&at=KGI`);
+  assert.equal(body.coaches, null);
+  assert.deepEqual(body.platform.ntes, { pf: "2", mark: null });
+});
+
+test("dayof: when NTES doesn't answer in time, the rest still do, and it says why", async () => {
+  const d = serveDayOf({ ntes: "hang" });
+  const t = Date.now();
+  const { body } = await get(`/api/dayof?no=12786&date=${d}&at=SBC`, { with: { DAYOF_NTES_MS: "300" } });
+  assert.ok(Date.now() - t < 3000, "not held up by the slow source");
+  assert.equal(body.coaches, null);
+  assert.equal(body.platform.ntes, null);
+  assert.equal(body.platform.confirmtkt, "5");
+  assert.deepEqual(body.sources.find((s) => s.name === "ntes"), { ...body.sources.find((s) => s.name === "ntes"), ok: false, why: "timed out" });
+});
+
+test("dayof: bad input is refused, and runs outside the tracker's window aren't looked up", async () => {
+  serveDayOf();
+  assert.equal((await get("/api/dayof?no=1278&at=SBC")).status, 400);
+  assert.equal((await get("/api/dayof?no=12786&at=S B")).status, 400);
+  assert.equal((await get(`/api/dayof?no=12786&at=SBC&date=${addDays(istToday(), 5)}`)).status, 400);
+});

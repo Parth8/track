@@ -933,6 +933,67 @@ await test("journeys: ticket times are matched to the timetable, never assumed t
   assert.deepEqual(p.errors, []);
 });
 
+await test("journeys: hours before boarding, today's run is checked, and every source is named", async () => {
+  const at = (mins) => new Date(Date.now() + mins * 60000).toISOString();
+  const j = {
+    id: "jday", no: "12786", name: "Ashokapuram - Kacheguda SF Express", startDate: istToday(),
+    from: { code: "SBC", name: "KSR Bengaluru" }, to: { code: "KCG", name: "Kacheguda" }, dep: at(120), arr: at(820), schedMin: 700, cls: "3A", coach: "B3", seat: "59 UB", pnr: "1234567890", notes: "",
+    pnrLinked: true, booking: { overall: "confirmed", chart: "prepared", platform: "5", checkedAt: at(0), passengers: [{ n: 1, kind: "confirmed", booking: "CNF", current: "CNF", coach: "B3", berth: "59", berthType: "Upper", berthFrom: "railway", position: null }] },
+  };
+  const order = "LPR GN GN H1 A2 A1 B6 B5 B4 B3 B2 B1 S7 S6 S5 S4 S3 S2 S1 GN GN SLRD".split(" ");
+  const dayof = (ntes) => ({
+    kind: "dayof", no: "12786", date: istToday(), at: "SBC",
+    coaches: ntes ? { list: order.map((id) => ({ id, cls: /^B/.test(id) ? "3A" : null })), source: "ntes" } : null,
+    platform: { ntes: ntes ? { pf: "6", mark: "*" } : null, railyatri: "5", confirmtkt: "5" },
+    delay: { ntes: ntes ? 13 : null, railyatri: 0, confirmtkt: 10 },
+    sources: [{ name: "ntes", ok: ntes, why: ntes ? null : "timed out" }, { name: "railyatri", ok: true, why: null }, { name: "confirmtkt", ok: true, why: null }],
+    status: { checkedAt: new Date().toISOString() },
+  });
+  for (const ntes of [true, false]) {
+    const p = await page();
+    await p.addInitScript((list) => localStorage.setItem("journeys", JSON.stringify(list)), [j]);
+    await p.context().route(`${API}/api/dayof**`, (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": new URL(SITE).origin }, body: JSON.stringify(dayof(ntes)) }));
+    // Today's live run, for the tracker the trip opens into
+    await p.context().route(`${API}/api/train**`, (route) =>
+      route.fulfill({
+        status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": new URL(SITE).origin },
+        body: JSON.stringify({
+          kind: "train", number: "12786", name: j.name, date: istToday(), status: { phase: "running" }, position: {},
+          stops: [
+            { code: "SBC", name: "KSR Bengaluru", km: 144, halts: true, platform: "5", sched: { arr: at(105), dep: at(120) }, actual: { arr: null, dep: null }, expected: { arr: at(118), dep: at(130) }, delay: { arr: 13, dep: 10 }, passed: false },
+            { code: "KCG", name: "Kacheguda", km: 769, halts: true, platform: "4", sched: { arr: at(820), dep: null }, actual: { arr: null, dep: null }, expected: { arr: at(830), dep: null }, delay: { arr: 10, dep: null }, passed: false },
+          ],
+        }),
+      })
+    );
+    await p.goto(`${SITE}?m=train&v=journeys`);
+    await settle(p, 500);
+    await p.locator(".jcard").click(); // on the day, a trip opens its live status…
+    await p.locator(".trip-guide").waitFor();
+    assert.match(await p.locator(".trip-guide").textContent(), /Your coach, berth and platform.*B3 · 59 UB · boarding at KSR Bengaluru/);
+    await p.locator(".trip-guide").click(); // …and its guide is one tap from there
+    const det = p.locator("#journey-detail");
+    await det.locator(".jn-today-line").first().waitFor({ timeout: 15000 });
+    const text = await det.locator(".jn-today").textContent();
+    if (ntes) {
+      assert.match(text, /Platform 6 today, from the railway's enquiry system \(marked provisional there\)\./);
+      assert.match(text, /RailYatri's live status and ConfirmTkt list platform 5\./);
+      assert.match(text, /At KSR Bengaluru: NTES says 13 min late, RailYatri says on time, ConfirmTkt says 10 min late\./);
+      await det.locator(".jn-verified").waitFor();
+      assert.match(await det.locator(".jn-coachbox").textContent(), /Today's order at KSR Bengaluru, from the railway's enquiry system \(NTES\), checked just now\. It matches the published order\./);
+      assert.equal(await det.locator(".jn-loco").count(), 0, "no engine is drawn on today's order: NTES doesn't mark it");
+    } else {
+      assert.match(text, /RailYatri's live status and ConfirmTkt list platform 5\. The railway's own system hasn't confirmed it yet\./);
+      assert.match(text, /NTES: timed out/);
+      assert.match(text, /Not confirmed by the railway yet/);
+      assert.equal(await det.locator(".jn-verified").count(), 0);
+    }
+    assert.match(await det.locator(".jn-pf-line").textContent(), /^Planned: platform 5\./);
+    assert.ok(!/\bnull\b/.test(await det.textContent()));
+    assert.deepEqual(p.errors, []);
+  }
+});
+
 await test("journeys: a PNR with no booking says so kindly", async () => {
   const p = await page({ env: { PNR_WAIT_MS: "2500" } }); // the Worker waits ~24 s for real
   await p.goto(`${SITE}?m=train&v=journeys`);
