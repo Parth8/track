@@ -591,9 +591,32 @@ test("pnr: several passengers, waitlisted and RAC, each read on its own", async 
   assert.equal(body.overall, "waitlist");
 });
 
+// RailYatri's real "please wait while we fetch it" page, for a booking it hasn't fetched yet. It
+// also carries their hidden "FLUSHED PNR" message, so the page alone can't tell "not yet" from "never".
+const pendingPage = readFileSync(new URL("./fixtures/pnr-pending.html", import.meta.url), "utf8");
+
+test("pnr: a first look-up waits while RailYatri fetches the booking, like their own page does", async () => {
+  let asks = 0;
+  upstream.set("/get-status/", () => new Response(JSON.stringify({ status: ++asks >= 3 }), { headers: { "Content-Type": "application/json" } }));
+  upstream.set("/pnr-status/", () => new Response(asks >= 3 ? pnrPage : pendingPage, { headers: { "Content-Type": "text/html" } }));
+  const r = await get("/api/pnr?pnr=1234567890", { with: { PNR_WAIT_MS: "12000" } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.passengers[0].coach, "B3");
+  assert.equal(asks, 3, "asked until it was ready");
+});
+
+test("pnr: a booking that's already fetched comes straight from the page, with no waiting", async () => {
+  servePnr();
+  const t = Date.now();
+  const r = await get("/api/pnr?pnr=1234567890");
+  assert.equal(r.status, 200);
+  assert.ok(Date.now() - t < 1000);
+  assert.equal(calls.filter((u) => u.includes("/get-status/")).length, 0);
+});
+
 test("pnr: an unknown PNR is a clear 404, and bad input never leaves the Worker", async () => {
-  servePnr(pnrPage, false);
-  const missing = await get("/api/pnr?pnr=9876543210");
+  servePnr(pendingPage, false);
+  const missing = await get("/api/pnr?pnr=9876543210", { with: { PNR_WAIT_MS: "4000" } });
   assert.deepEqual([missing.status, missing.body.error], [404, "pnr_not_found"]);
   calls = [];
   for (const bad of ["12345", "abcdefghij", "12345678901"]) {

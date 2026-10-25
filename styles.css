@@ -5022,6 +5022,53 @@ textarea.jn-input {
   font-size: 14.5px;
   font-weight: 700;
 }
+/* each end of the trip with its own date, and the journey time */
+.jn-summary .jn-summary-t {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.jn-end {
+  display: grid;
+  gap: 1px;
+}
+.jn-end .jn-end-day {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.jn-summary-t > i {
+  line-height: 1.35;
+}
+.jn-dur {
+  align-self: center;
+  margin-left: auto;
+  padding: 3px 9px;
+  border-radius: 99px;
+  background: var(--card);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 800;
+}
+.jn-summary:has(.pill-btn) .jn-dur {
+  margin-left: 0;
+}
+.jn-leg-day {
+  color: var(--ink-soft) !important;
+}
+.jn-leg-dur {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 -4px 26px !important;
+  font-size: 12.5px !important;
+  font-weight: 700;
+  color: var(--muted);
+}
+.jn-leg-dur svg {
+  width: 14px;
+  height: 14px;
+}
 .jn-summary-n {
   font-size: 13px;
   color: var(--muted);

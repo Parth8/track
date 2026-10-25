@@ -31,6 +31,8 @@
  *                             (default 3). Refreshing ones they follow, or ones anyone already
  *                             looked up, doesn't count.
  *   FLIGHT_PER_FLIGHT_DAILY text optional, paid refreshes one flight can use a day (default 8).
+ *   PNR_WAIT_MS       text    optional, how long to wait for a booking RailYatri hasn't fetched
+ *                             before (default 24000).
  */
 
 const UA =
@@ -99,7 +101,7 @@ export default {
         case "/api/seats":
           return reply(await seatsRoute(url, ctx), 200, cors, 300, env);
         case "/api/pnr":
-          return reply(await pnrRoute(url, ctx), 200, cors, 0, env); // personal: never kept by the browser or a proxy
+          return reply(await pnrRoute(url, ctx, env), 200, cors, 0, env); // personal: never kept by the browser or a proxy
         default:
           throw new ApiError(404, "not_found", "Unknown route.");
       }
@@ -1623,49 +1625,73 @@ const CLASS_BY_NAME = {
   "SECOND SITTING": "2S",
 };
 const BERTH_TYPES = { LB: "Lower", MB: "Middle", UB: "Upper", SL: "Side lower", SU: "Side upper", SM: "Side middle", WS: "Window", MS: "Middle", AS: "Aisle" };
-const PNR_MISSING = "No booking found for this PNR yet. New bookings can take a few minutes to show up, and old ones are cleared after the trip.";
+const PNR_MISSING = "We couldn't find this booking yet. If it's a new booking or its first look-up, try again in a minute. Old PNRs are cleared after the trip.";
+const PNR_WAIT_MS = 24000; // RailYatri's own page waits up to ~30 s for a booking it hasn't fetched before
 
-async function pnrRoute(url, ctx) {
+async function pnrRoute(url, ctx, env = {}) {
   const pnr = (url.searchParams.get("pnr") || "").replace(/\D/g, "");
   if (!/^\d{10}$/.test(pnr)) throw new ApiError(400, "invalid_pnr", "A PNR has 10 digits.");
   // Keyed by a hash, so no PNR is stored in the clear, even for the 5 minutes a copy is kept.
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`pnr|${pnr}`));
   const key = [...new Uint8Array(bytes)].slice(0, 16).map((b) => b.toString(16).padStart(2, "0")).join("");
   const fresh = url.searchParams.get("fresh") === "1";
-  return cached(ctx, `pnr/${key}`, TTL.pnr, () => fetchPnr(pnr), { fresh, floorMs: 60000 });
+  return cached(ctx, `pnr/${key}`, TTL.pnr, () => fetchPnr(pnr, Number(env.PNR_WAIT_MS) || PNR_WAIT_MS), { fresh, floorMs: 60000 });
 }
 
-async function fetchPnr(pnr) {
+async function fetchPnr(pnr, waitMs = PNR_WAIT_MS) {
   const headers = { "User-Agent": UA, Referer: "https://www.railyatri.in/pnr-status" };
   const slow = () => new ApiError(502, "upstream_unavailable", "PNR status is slow right now. Try again in a minute.");
-  // Their page asks for the status first (it can take a moment to arrive), then shows it.
-  let known = false;
-  for (let i = 0; i < 2 && !known; i++) {
-    if (i) await new Promise((r) => setTimeout(r, 2500));
+  const deadline = Date.now() + waitMs;
+  const left = () => deadline - Date.now();
+  const page = async () => {
+    const res = await getWithRetry(`https://www.railyatri.in/pnr-status/${pnr}`, { headers: { ...headers, Accept: "text/html" } }, { timeout: Math.max(3000, Math.min(12000, left())), retries: 0 });
+    if (!res.ok) throw slow();
+    return res.text();
+  };
+  // RailYatri only shows a booking it has already fetched from the railway. One it hasn't comes
+  // back as a "please wait" page (which also carries their hidden "not found" text), and their
+  // page then asks /get-status every few seconds until it's ready. So: read the page (instant
+  // when it's ready), else ask the same way they do, with growing pauses, for up to ~24 s.
+  let html = null;
+  let read = null;
+  let failed = 0;
+  try {
+    html = await page();
+    read = extractPnr(html, pnr);
+    if (read.data) return read.data;
+  } catch (err) {
+    failed++;
+    log("warn", "pnr page failed", String(err && err.message)); // never the PNR itself
+  }
+  const pending = !read || read.reason === "no_booking"; // not fetched yet, as opposed to unreadable
+  for (let wait = 1500; pending && left() > 2000; wait = Math.min(wait * 2, 6000)) {
+    let ready = false;
     try {
       const res = await getWithRetry(
         `https://www.railyatri.in/get-status/${pnr}`,
         { headers: { ...headers, Accept: "application/json", "X-Requested-With": "XMLHttpRequest" } },
-        { timeout: 8000, retries: 0 }
+        { timeout: Math.max(2000, Math.min(10000, left())), retries: 0 }
       );
-      known = res.ok && (await res.json().catch(() => null))?.status === true;
+      ready = res.ok && (await res.json().catch(() => null))?.status === true;
     } catch {
-      /* once more, then give up below */
+      failed++;
     }
+    if (ready) {
+      try {
+        html = await page();
+        read = extractPnr(html, pnr);
+        if (read.data) return read.data;
+        if (read.reason !== "no_booking") break; // it's there but unreadable: say so below
+      } catch (err) {
+        failed++;
+        log("warn", "pnr page failed", String(err && err.message));
+      }
+    }
+    if (left() < wait + 1000) break;
+    await new Promise((r) => setTimeout(r, wait));
   }
-  if (!known) throw new ApiError(404, "pnr_not_found", PNR_MISSING);
-  let html;
-  try {
-    const res = await getWithRetry(`https://www.railyatri.in/pnr-status/${pnr}`, { headers: { ...headers, Accept: "text/html" } }, { timeout: 12000, retries: 1 });
-    if (!res.ok) throw slow();
-    html = await res.text();
-  } catch (err) {
-    log("warn", "pnr page failed", String(err && err.message)); // never the PNR itself
-    throw err instanceof ApiError ? err : slow();
-  }
-  const read = extractPnr(html, pnr);
-  if (read.data) return read.data;
-  if (read.reason === "no_booking" || /FLUSHED PNR|PNR NOT YET GENERATED/i.test(html)) throw new ApiError(404, "pnr_not_found", PNR_MISSING);
+  if (!read && failed) throw slow(); // never reached RailYatri at all
+  if (!read || read.reason === "no_booking" || /FLUSHED PNR|PNR NOT YET GENERATED/i.test(html || "")) throw new ApiError(404, "pnr_not_found", PNR_MISSING);
   // The page changed shape, or showed another booking. Log which fields broke (never the PNR), so
   // a change on their side shows up straight away, and show nothing rather than something wrong.
   log("warn", "pnr page unreadable", read.reason, `missing=${read.missing.join(",")}`, `conflicts=${read.conflicts.join(",")}`);

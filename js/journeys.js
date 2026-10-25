@@ -193,6 +193,18 @@ export function bookingFrom(data) {
   };
 }
 
+/**
+ * When the ticket says you leave and arrive: the day you board and the boarding time, then the
+ * journey time after that. Null unless the PNR gave all three.
+ */
+export function ticketTimes(data) {
+  const day = data?.boardDate;
+  const at = data?.from?.time;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day || "") || !/^\d{2}:\d{2}$/.test(at || "") || !(data.journeyMin > 0)) return null;
+  const dep = Date.parse(`${day}T${at}:00+05:30`);
+  return { dep: new Date(dep).toISOString(), arr: new Date(dep + data.journeyMin * 60000).toISOString(), schedMin: data.journeyMin };
+}
+
 /** The first passenger's coach and berth, once there is one, for the journey's own seat fields. */
 export function seatFrom(booking) {
   const p = booking?.passengers?.find((x) => x.coach && x.berth);

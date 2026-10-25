@@ -20,6 +20,7 @@ import {
   pastStats,
   journeyIcs,
   boardDay,
+  ticketTimes,
   bookingFrom,
   seatFrom,
   bookingDue,
@@ -38,11 +39,11 @@ const PNR_PRIVACY = "Your PNR goes through Track's server to RailYatri's public 
  * telling you ("now confirmed: B3 59"), or null when nothing that matters moved.
  */
 export async function checkBooking(j, { fresh = false } = {}) {
-  const data = await api("/api/pnr", { pnr: j.pnr, fresh: fresh ? 1 : null }, { timeout: 25000, retries: 0 });
+  const data = await api("/api/pnr", { pnr: j.pnr, fresh: fresh ? 1 : null }, { timeout: 45000, retries: 0 });
   if (data.no !== j.no) throw new ApiError("pnr_other_train", `This PNR is for train ${data.no}, not ${j.no}.`, 409);
   const before = j.booking;
   const booking = bookingFrom(data);
-  updateJourney(j.id, { booking, pnrLinked: true, cls: j.cls || data.cls || null, ...(seatFrom(booking) || {}) });
+  updateJourney(j.id, { booking, pnrLinked: true, cls: j.cls || data.cls || null, ...(seatFrom(booking) || {}), ...(ticketTimes(data) || {}) });
   return bookingNews(j, before, booking);
 }
 
@@ -81,7 +82,7 @@ function passengersBlock(b) {
         "li",
         { class: `jn-pax-row ${p.kind}` },
         h("span", { class: "jn-pax-n", "aria-hidden": "true", text: String(p.n) }),
-        h("span", { class: "jn-pax-who" }, h("b", { text: passengerLine(p) }), h("small", { text: `Passenger ${p.n}${p.booking && p.booking !== p.current ? ` · booked ${p.booking}` : ""}` })),
+        h("span", { class: "jn-pax-who" }, h("b", { text: passengerLine(p) }), h("small", { text: `Passenger ${p.n}${p.booking ? ` · booked ${p.booking}` : ""}` })),
         KIND_WORD[p.kind] ? h("span", { class: `jn-pax-kind ${p.kind}`, text: KIND_WORD[p.kind] }) : null
       )
     )
@@ -169,6 +170,11 @@ function whenChip(j) {
   if (d === 1) return { cls: "info", text: "Tomorrow" };
   return { cls: "quiet", text: d < 30 ? `In ${d} days` : shortDay(boardDate(j)) };
 }
+
+/** The day a moment falls on in India, "Sat 14 Nov", so each end of a trip says its own date. */
+const dayOf = (iso) => shortDay(boardDay({ dep: iso }));
+/** The timetable's journey time, in minutes. */
+const tripMin = (j) => j.schedMin ?? Math.round((Date.parse(j.arr) - Date.parse(j.dep)) / 60000);
 
 const seatText = (j) => [j.cls, j.coach, j.seat].filter(Boolean).join(" · ");
 
@@ -466,6 +472,7 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
           "div",
           { class: "jn-leg-time" },
           timeNode(actual || sched, IST, { shift }),
+          h("small", { class: "jn-leg-day", text: dayOf(actual || sched) }),
           actual && Number.isFinite(delay) && Math.abs(delay) >= 3 ? h("small", { text: `planned ${clock(sched)}` }) : null
         )
       );
@@ -473,7 +480,13 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
 
     const nodes = [
       h("p", { class: "jn-sub" }, h("b", { text: `${j.no} ${j.name}` }), h("span", { text: longDate(bd) })),
-      h("div", { class: "jn-legs" }, leg("from"), leg("to")),
+      h(
+        "div",
+        { class: "jn-legs" },
+        leg("from"),
+        tripMin(j) > 0 ? h("p", { class: "jn-leg-dur" }, svg(icons.clock), `${duration(tripMin(j) * 60000)} journey`) : null,
+        leg("to")
+      ),
     ];
 
     if (past) {
@@ -719,9 +732,27 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       pnrErr.hidden = true;
       if (p.length !== 10) return void ((pnrErr.textContent = "A PNR has 10 digits. You'll find it at the top of your ticket or booking SMS."), (pnrErr.hidden = false), pnrIn.focus());
       pnrBtn.disabled = true;
-      pnrBtn.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), "Reading your booking…");
+      // The first look-up of a booking can take a while: RailYatri fetches it from the railway
+      // then. Say what's happening as it goes, rather than leave a spinner to guess at.
+      const say = (text) => pnrBtn.replaceChildren(h("span", { class: "spinner", "aria-hidden": "true" }), text);
+      say("Reading your booking…");
+      status.textContent = "Reading your booking";
+      const steps = [
+        setTimeout(() => say("Fetching it from the railway…"), 4000),
+        setTimeout(() => say("Still fetching, nearly there…"), 14000),
+      ];
       try {
-        const data = await api("/api/pnr", { pnr: p }, { timeout: 25000, retries: 0 });
+        const t0 = Date.now();
+        let data;
+        try {
+          data = await api("/api/pnr", { pnr: p }, { timeout: 45000, retries: 0 });
+        } catch (e) {
+          // A quick "not found" means the booking wasn't ready the moment we asked: ask once more.
+          if (!(e instanceof ApiError && e.code === "pnr_not_found" && Date.now() - t0 < 10000)) throw e;
+          say("Fetching it from the railway…");
+          await new Promise((r) => setTimeout(r, 6000));
+          data = await api("/api/pnr", { pnr: p, fresh: 1 }, { timeout: 45000, retries: 0 });
+        }
         chosen = await journeyFromPnr(data, p);
         stepDetails();
       } catch (e) {
@@ -729,6 +760,8 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
         pnrErr.hidden = false;
         pnrBtn.disabled = false;
         pnrBtn.replaceChildren(svg(icons.ticket), "Fill in from PNR");
+      } finally {
+        steps.forEach(clearTimeout);
       }
     }
 
@@ -757,14 +790,16 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
    */
   async function journeyFromPnr(d, pnr) {
     const booking = bookingFrom(d);
-    const base = { cls: d.cls || null, pnr, pnrLinked: true, booking, ...(seatFrom(booking) || {}) };
+    // The ticket's own times win over the timetable's: they're what was booked (the two can differ
+    // by a few minutes when a timetable changes).
+    const base = { cls: d.cls || null, pnr, pnrLinked: true, booking, ...(seatFrom(booking) || {}), ...(ticketTimes(d) || {}) };
     if (d.boardDate) {
       try {
         const between = await api("/api/between", { from: d.from.code, to: d.to.code, date: d.boardDate }, { timeout: 15000, retries: 1 });
         const tr = (between.trains || []).find((x) => x.number === d.no);
-        if (tr) return { no: tr.number, name: tr.name, startDate: tr.startDate, from: tr.from, to: tr.to, dep: tr.dep, arr: tr.arr, schedMin: tr.durationMin, km: tr.distanceKm ?? null, classes: tr.classes || [], ...base };
+        if (tr) return { no: tr.number, name: d.name || tr.name, startDate: tr.startDate, from: tr.from, to: tr.to, dep: tr.dep, arr: tr.arr, schedMin: tr.durationMin, km: tr.distanceKm ?? null, classes: tr.classes || [], ...base };
       } catch {
-        /* fall back to the PNR's own times */
+        /* the ticket's own details are enough */
       }
     }
     const day = d.boardDate || today();
@@ -836,9 +871,16 @@ export function createJourneySheets({ navigate, toast, onSaved }) {
       h(
         "div",
         { class: "jn-summary" },
-        h("p", { class: "jn-summary-t" }, timeNode(j.dep), h("i", { text: "→" }), timeNode(j.arr, IST, { shift: Math.max(0, dayShift(j.arr, bd)) })),
+        h(
+          "div",
+          { class: "jn-summary-t" },
+          h("span", { class: "jn-end" }, timeNode(j.dep), h("small", { class: "jn-end-day", text: dayOf(j.dep) })),
+          h("i", { "aria-hidden": "true", text: "→" }),
+          h("span", { class: "jn-end" }, timeNode(j.arr, IST, { shift: Math.max(0, dayShift(j.arr, bd)) }), h("small", { class: "jn-end-day", text: dayOf(j.arr) })),
+          tripMin(j) > 0 ? h("span", { class: "jn-dur", text: duration(tripMin(j) * 60000) }) : null
+        ),
         h("p", { class: "jn-summary-r", text: `${j.from.name} to ${j.to.name}` }),
-        h("p", { class: "jn-summary-n" }, h("b", { class: "tn", text: j.no }), ` ${j.name} · ${shortDay(bd)}`),
+        h("p", { class: "jn-summary-n" }, h("b", { class: "tn", text: j.no }), ` ${j.name}`),
         !editing && !fieldsMade?.fromResults && !j.booking ? h("button", { type: "button", class: "pill-btn", text: "Change train", on: { click: () => stepFind({ from: j.from.code, to: j.to.code, date: bd }) } }) : null
       ),
       j.booking && !editing ? h("div", { class: "jn-bk found" }, bookingHead(j.booking), passengersBlock(j.booking)) : null,

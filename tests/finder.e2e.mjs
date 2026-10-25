@@ -62,9 +62,12 @@ const upstream = async (url) => {
 // PNR 1234567890 is a recorded booking (12786 SBC → KCG, 3A, one passenger in B3/59), moved to
 // 3 days from now; PNR 1234567891 is the same booking with two passengers, one still waitlisted.
 const PNR_PAGE = readFileSync(new URL("./fixtures/pnr-sbc-kcg.html", import.meta.url), "utf8");
+const PNR_PENDING = readFileSync(new URL("./fixtures/pnr-pending.html", import.meta.url), "utf8");
 function pnrAnswer(u) {
   const pnr = u.pathname.split("/").pop();
-  if (u.pathname.startsWith("/get-status/")) return new Response(JSON.stringify({ status: pnr.startsWith("123456789") }), { headers: { "Content-Type": "application/json" } });
+  const known = pnr.startsWith("123456789");
+  if (u.pathname.startsWith("/get-status/")) return new Response(JSON.stringify({ status: known }), { headers: { "Content-Type": "application/json" } });
+  if (!known) return new Response(PNR_PENDING, { headers: { "Content-Type": "text/html" } }); // RailYatri's "please wait" page
   const [y, m, d] = addDays(istToday(), 3).split("-");
   let html = PNR_PAGE.replace("14-11-2026", `${d}-${m}-${y}`).replaceAll("1234567890", pnr); // the page shows the PNR asked for
   if (pnr === "1234567891") {
@@ -805,6 +808,11 @@ await test("journeys: a PNR fills in the whole trip, and every passenger on it",
   await sheet.locator(".jn-summary").waitFor();
   assert.match(await sheet.locator(".jn-summary").textContent(), /12786/);
   assert.match(await sheet.locator(".jn-summary").textContent(), /KSR Bengaluru to Kacheguda/);
+  // Each end says its own date (you arrive the next morning), and the ticket's journey time shows
+  const dayName = (iso) => new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(`${iso}T12:00:00Z`));
+  const ends = await sheet.locator(".jn-summary .jn-end-day").allTextContents();
+  assert.deepEqual(ends.map((t) => t.replace(",", "")), [dayName(addDays(istToday(), 3)), dayName(addDays(istToday(), 4))].map((t) => t.replace(",", "")));
+  assert.equal(await sheet.locator(".jn-summary .jn-dur").textContent(), "11h 55m");
   assert.equal(await sheet.locator('.jn-classes button[aria-pressed="true"]').textContent(), "3A");
   assert.equal(await sheet.locator("#jn-coach").inputValue(), "B3");
   assert.equal(await sheet.locator("#jn-seat").inputValue(), "59");
@@ -826,20 +834,22 @@ await test("journeys: a PNR fills in the whole trip, and every passenger on it",
   await det.waitFor();
   assert.equal(await det.locator(".jn-pax-row").count(), 2);
   assert.match(await det.textContent(), /PF 5 \(tentative\)/);
+  assert.equal(await det.locator(".jn-leg-dur").textContent(), "11h 55m journey");
+  assert.equal(await det.locator(".jn-leg-day").count(), 2, "a date by each station");
   assert.equal(await det.locator(".cta", { hasText: "Share trip" }).count(), 1);
   assert.deepEqual(p.errors, []);
 });
 
 await test("journeys: a PNR with no booking says so kindly", async () => {
-  const p = await page();
+  const p = await page({ env: { PNR_WAIT_MS: "2500" } }); // the Worker waits ~24 s for real
   await p.goto(`${SITE}?m=train&v=journeys`);
   await settle(p, 500);
   await p.locator("#journeys-add").click();
   const sheet = p.locator("#journey-add");
   await sheet.locator("#jn-pnr-find").fill("9999999999");
   await sheet.locator(".cta", { hasText: "Fill in from PNR" }).click();
-  await sheet.locator(".field-error:not([hidden])").first().waitFor({ timeout: 10000 });
-  assert.match(await sheet.locator(".field-error:not([hidden])").first().textContent(), /No booking found for this PNR yet/);
+  await sheet.locator(".field-error:not([hidden])").first().waitFor({ timeout: 40000 });
+  assert.match(await sheet.locator(".field-error:not([hidden])").first().textContent(), /couldn.t find this booking yet/);
   assert.equal(await sheet.locator(".cta", { hasText: "Fill in from PNR" }).isEnabled(), true, "ready to try again");
   assert.deepEqual(p.errors, []);
 });
