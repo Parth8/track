@@ -881,13 +881,14 @@ await test("journeys: on the platform, find your coach and your berth, and name 
   assert.equal(await coachSay.textContent(), "Walk 6 coaches towards S5about 140 m");
   await det.locator(".jn-coach b", { hasText: /^B2$/ }).click();
   assert.equal(await coachSay.textContent(), "Walk 1 coach towards B3about 20 m");
-  assert.equal(await det.locator(".jn-coachbox .jn-card-head .chip").textContent(), "2 of 3 sources agree");
+  assert.equal(await det.locator(".jn-coachbox .jn-card-head .chip").textContent(), "All 3 sources place B3", "even etrain's older rake has B3 between B4 and B2");
   assert.equal(await det.locator(".jn-loco").count(), 1, "the engine is drawn at its end");
   // The evidence is folded away until asked for
   const coachSure = det.locator(".jn-coachbox .jn-sure");
   assert.equal(await coachSure.getAttribute("open"), null);
   await coachSure.locator("summary").click();
   assert.match(await coachSure.textContent(), /erail\.in and ConfirmTkt list this order; etrain\.info lists another\./);
+  assert.match(await coachSure.textContent(), /erail\.in, ConfirmTkt and etrain\.info put B3 between B4 and B2\./);
   assert.match(await coachSure.textContent(), /The LPR end probably comes in first, behind the engine, as no reversal is listed before here\./);
   // The berth: what to look for, whichever door you came in by
   const berthSay = det.locator(".jn-berthbox .jn-coach-say");
@@ -1023,7 +1024,7 @@ await test("journeys: the way in shows your next trip, and adds one from a PNR",
   await p.locator("#journey-add .cta", { hasText: "Save journey" }).click();
   await settle(p, 400);
   assert.equal(await p.locator("#jn-entry-count").textContent(), "1");
-  assert.match(await p.locator("#jn-entry-sub").textContent(), /^Next: \w{3}, \d+ \w{3} · SBC → KCG · B3 59 UB$/);
+  assert.match(await p.locator("#jn-entry-sub").textContent(), /^Next: \w{3},? \d+ \w{3} · SBC → KCG · B3 59 UB$/);
   await p.goto(`${SITE}?m=flight`);
   await settle(p, 300);
   assert.equal(await entry.isHidden(), true, "trains only");

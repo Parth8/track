@@ -881,6 +881,8 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
       else if (info.agreement === "majority") lines.push(`${listOf(yes)} list this order; ${listOf(no)} ${no.length > 1 ? "list" : "lists"} another.`);
       else if (info.agreement === "tie") lines.push(`The sources list different orders. This is ${yes[0]}'s, the most recently dated.`);
       else lines.push(`Only ${yes[0]} lists an order for this train.`);
+      const spot = spotAgree(list, seats[pick]?.coach);
+      if (spot?.total && spot.between.length) lines.push(`${listOf(spot.yes) || "No source"} ${spot.yes.length > 1 ? "put" : "puts"} ${seats[pick].coach} between ${spot.between.join(" and ")}${spot.no.length ? `; ${listOf(spot.no)} ${spot.no.length > 1 ? "list" : "lists"} it elsewhere` : ""}.`);
       const front = frontLine(list);
       if (front) lines.push(front);
       lines.push("Orders change now and then; the coach display on the platform shows today's.");
@@ -898,15 +900,36 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
       const before = info.stops.slice(0, i).filter((s) => s.reversal);
       const engineLeads = before.length % 2 === 0 ? info.engineFirst : !info.engineFirst;
       const lead = engineLeads ? list[0] : list.at(-1);
+      // Where the run starts, the train usually stands at the platform already: no "comes in first".
+      if (i === 0) return `The engine is probably at the ${lead.id} end, as the sources that show it list it there.`;
       return `The ${lead.id} end probably comes in first, behind the engine${before.length ? ` (it changes ends at ${listOf(before.map((s) => s.code))})` : ", as no reversal is listed before here"}.`;
     }
 
-    function agreeChip(live) {
+    /**
+     * What matters is where your coach is, not whether whole trains match: sources that order the
+     * sleepers differently can still agree exactly on where B1 is. A source agrees on the spot when
+     * it lists your coach between the same two coaches (read either way round).
+     */
+    function spotAgree(list, coach) {
+      const seq = list.filter((c) => NUMBERED_COACH.test(c.id)).map((c) => c.id);
+      const k = seq.indexOf(coach);
+      if (k < 0) return null;
+      const around = (q, at) => [q[at - 1] || "", q[at + 1] || ""].sort().join("|");
+      const want = around(seq, k);
+      const src = (info?.sources || []).filter((x) => x.order);
+      const yes = src.filter((x) => {
+        const q = x.order.split(" ");
+        const at = q.indexOf(coach);
+        return at >= 0 && around(q, at) === want;
+      });
+      return { yes: yes.map((x) => NAMES[x.name]), no: src.filter((x) => !yes.includes(x)).map((x) => NAMES[x.name]), total: src.length, between: [seq[k - 1], seq[k + 1]].filter(Boolean) };
+    }
+
+    function agreeChip(live, spot, coach) {
       if (live) return h("span", { class: "chip small ok" }, svg(icons.check), "Today's run");
-      const src = info?.sources || [];
-      if (!src.length) return null;
-      const yes = src.filter((s) => s.agrees).length;
-      return h("span", { class: `chip small ${yes === src.length ? "ok" : yes > src.length / 2 ? "quiet" : "warn"}`, text: yes === src.length ? `${yes} sources agree` : `${yes} of ${src.length} sources agree` });
+      if (!spot?.total) return null;
+      const n = spot.yes.length;
+      return h("span", { class: `chip small ${n === spot.total ? "ok" : n > spot.total / 2 ? "quiet" : "warn"}`, text: n === spot.total ? `All ${n} sources place ${coach}` : `${n} of ${spot.total} sources place ${coach}` });
     }
 
     // The coach order, drawn as the train. Tap the coach in front of you to see which way to walk.
@@ -958,7 +981,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
         engine("end")
       );
       fill(coachBox, [
-        h("div", { class: "jn-card-head" }, h("p", { class: "jn-card-t", text: "Find your coach" }), agreeChip(!!live)),
+        h("div", { class: "jn-card-head" }, h("p", { class: "jn-card-t", text: "Find your coach" }), agreeChip(!!live, live ? null : spotAgree(list, seat.coach), seat.coach)),
         strip,
         say,
         sure(orderSure(list, live, sameAsPlan)),
