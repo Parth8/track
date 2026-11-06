@@ -1063,6 +1063,79 @@ await test("tracker: the stops after yours fold behind a chevron, and open again
   assert.deepEqual(p.errors, []);
 });
 
+await test("tracker in a booking: honest times, refresh, and a stop you pick stays picked", async () => {
+  // 12785 on 6 Nov at 5:49 AM, as the source sent it: 27 min late at the train, but "0 min late"
+  // from KSR Bengaluru on, which would mean making up 27 min in 37 of running.
+  const run = JSON.parse(rec("run-12785-running.json"));
+  run.status.delayMin = 27;
+  for (const x of run.stops) if (!x.passed) {
+    const d = ["BNCE", "BNC"].includes(x.code) ? 27 : 0;
+    x.delay = { arr: d, dep: d };
+    x.expected = { arr: x.sched.arr && new Date(Date.parse(x.sched.arr) + d * 60000).toISOString(), dep: x.sched.dep && new Date(Date.parse(x.sched.dep) + d * 60000).toISOString() };
+  }
+  const j = { id: "jreal", no: "12785", name: "Kacheguda - Ashokapuram SF Express", startDate: "2026-11-05", from: { code: "KCG", name: "Kacheguda" }, to: { code: "SBC", name: "KSR Bengaluru" }, dep: "2026-11-05T13:35:00.000Z", arr: "2026-11-06T00:40:00.000Z", schedMin: 665, cls: "3A", coach: "B1", seat: "39 SL", pnr: "", notes: "" };
+  const p = await page();
+  await p.clock.install({ time: new Date("2026-11-06T00:19:00Z") }); // 5:49 AM in India
+  await p.addInitScript((l) => localStorage.getItem("journeys") || localStorage.setItem("journeys", JSON.stringify(l)), [j]);
+  await p.context().route(`${API}/api/train**`, (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": new URL(SITE).origin }, body: JSON.stringify(run) }));
+  const openLive = async () => {
+    await p.goto(`${SITE}?m=train&v=journeys`);
+    await settle(p, 400);
+    await p.locator(".jcard").click();
+    await p.locator("#journey-detail .jn-live-btn").click();
+    await p.locator("#journey-detail .jn-live-panel .hero-card").waitFor();
+  };
+  await openLive();
+  const det = p.locator("#journey-detail");
+  // Not 6:10: the source's "0 min late" is more than the train could make up
+  assert.equal((await det.locator(".hero-time").textContent()).replace(/\s+/g, ""), "~6:27AM");
+  assert.equal(await det.locator(".hero-card .chip").first().textContent(), "Likely 17–27m late");
+  // When it was checked, when it checks next, and a way to check now
+  assert.match(await det.locator(".jn-live-fresh p").textContent(), /^Checked 5:49 AM · next check in \d+ min$/);
+  await det.locator(".jn-live-refresh").click();
+  assert.equal(await det.locator(".jn-live-refresh span").textContent(), "Just checked", "no repeat call within a minute");
+  // Readable inside the sheet: the sheet's small grey text doesn't reach the tracker
+  const styles = await p.evaluate(() => {
+    const cs = (sel) => getComputedStyle(document.querySelector(`#journey-detail ${sel}`));
+    return { name: cs(".tl-name").color, now: cs(".now-text").color, hero: cs(".hero-time").marginTop };
+  });
+  assert.notEqual(styles.now, styles.name, "the Now card keeps its light text");
+  assert.equal(styles.hero, "0px");
+  // Pick Bangalore Cant: it's your stop now, said in a toast you can see
+  await det.locator(".tl-row", { hasText: "Bangalore Cant" }).click();
+  await det.locator(".hero-place", { hasText: "Bangalore Cant" }).waitFor();
+  assert.equal(await p.evaluate(() => document.querySelector(".toast").parentElement.id), "journey-detail", "the toast shows inside the open sheet");
+  assert.match(await p.locator(".toast").textContent(), /Bangalore Cant \(Bengaluru\) is now your stop for this trip/);
+  assert.equal(await det.locator(".hero-ticket").textContent(), "Ticket: SBC · Use it");
+  // It stays picked after reopening the app
+  await p.reload();
+  await openLive();
+  assert.match(await det.locator(".hero-place").textContent(), /Bangalore Cant/);
+  assert.match(await det.locator(".jn-live-btn small").textContent(), /your stop: Bangalore Cant/);
+  // And back to the ticket's, which clears the pick
+  await det.locator(".hero-ticket").click();
+  await det.locator(".hero-place", { hasText: "KSR Bengaluru" }).waitFor();
+  assert.equal(await p.evaluate(() => JSON.parse(localStorage.getItem("journeys"))[0].stopOverride), null);
+  assert.equal(await det.locator(".hero-ticket").count(), 0);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("tracker: a stop picked on a run you've saved is kept on that journey", async () => {
+  const run = rec("run-12785-running.json");
+  const j = { id: "jsave", no: "12785", name: "Kacheguda - Ashokapuram SF Express", startDate: "2026-11-05", from: { code: "KCG", name: "Kacheguda" }, to: { code: "SBC", name: "KSR Bengaluru" }, dep: "2026-11-05T13:35:00.000Z", arr: "2026-11-06T00:40:00.000Z", cls: "3A", coach: "B1", seat: "39", pnr: "", notes: "" };
+  const p = await page();
+  await p.clock.install({ time: new Date("2026-11-06T00:07:00Z") });
+  await p.addInitScript((l) => localStorage.getItem("journeys") || localStorage.setItem("journeys", JSON.stringify(l)), [j]);
+  await p.context().route(`${API}/api/train**`, (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": new URL(SITE).origin }, body: run }));
+  await p.goto(`${SITE}?m=train&no=12785&d=2026-11-05&s=SBC`);
+  await p.locator(".hero-card").waitFor();
+  await p.locator(".tl-row", { hasText: "Bangalore Cant" }).click();
+  await p.locator(".hero-place", { hasText: "Bangalore Cant" }).waitFor();
+  assert.deepEqual(await p.evaluate(() => JSON.parse(localStorage.getItem("journeys"))[0].stopOverride), { code: "BNC", name: "Bangalore Cant (Bengaluru)" });
+  assert.equal(await p.locator(".hero-ticket").textContent(), "Ticket: SBC · Use it");
+  assert.deepEqual(p.errors, []);
+});
+
 await test("journeys: a PNR with no booking says so kindly", async () => {
   const p = await page({ env: { PNR_WAIT_MS: "2500" } }); // the Worker waits ~24 s for real
   await p.goto(`${SITE}?m=train&v=journeys`);

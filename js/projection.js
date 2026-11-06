@@ -5,13 +5,22 @@
 //  1. Start from the newest real delay: the last station the train actually reached or left, or
 //     the live position's delay if that report is further along the line.
 //  2. Carry it forward. At a long halt a late train can make up time, down to a short stop
-//     (MIN_HALT); that's the only recovery assumed here.
-//  3. If the source projects a stop too, its figure is used as the likely value, but the range
-//     always reaches the carried delay, so a hoped-for recovery is never shown as certain.
+//     (MIN_HALT); that's the only recovery assumed for the likely time.
+//  3. Work out the most it could plausibly make up as well: those shortened halts plus up to
+//     RECOVERY of the scheduled running time between stops (timetables pad their sections).
+//     That's the floor: no projection, ours or the source's, goes below it.
+//  4. If the source projects a stop, its figure is the likely value when it's above the floor;
+//     below it, the floor stands instead. The range always reaches the carried delay, so a
+//     hoped-for recovery is never shown as certain.
 // Every stop ahead gets `est: { arr, dep }`, each { lo, hi, likely } in minutes late, and its
 // expected times set from `likely`. Stops already passed keep their actual times, untouched.
 
 const MIN_HALT = 2; // minutes: about the shortest stop a train makes at a scheduled halt
+// The share of scheduled running time a late train can make up between stops. Set from a real
+// run (12785, 6 Nov 2026): 27 min late at Yelahanka was projected 13 min late at KSR Bengaluru,
+// about 19% of the running time between them.
+const RECOVERY = 0.2;
+const SLACK = 2; // minutes of rounding allowed before a source's projection counts as implausible
 const MIN = 60000;
 
 const plus = (iso, mins) => (iso ? new Date(Date.parse(iso) + mins * MIN).toISOString().replace(".000Z", "Z") : null);
@@ -56,18 +65,31 @@ export function projectRun(j) {
   if (!anchor) return j;
   const ahead = new Set(halts.slice(anchor.from).filter((s) => !s.passed && !s.actual?.arr && !s.actual?.dep));
   let carry = Math.max(0, anchor.delay); // a late train doesn't leave a halt early
+  let floor = carry; // the least late it could plausibly be
+  let prev = halts[anchor.from - 1] || null; // the last halt behind the train
+  let first = true;
   const stops = j.stops.map((s) => {
     if (!ahead.has(s)) return s;
-    const range = (carried, source) => {
+    // Running time from the last halt to this one; if the train is already part-way, only what's left.
+    let run = prev ? Math.max(0, lateBy(prev.sched.dep || prev.sched.arr, s.sched.arr || s.sched.dep) || 0) : 0;
+    const km = j.position?.kmDone;
+    if (first && prev && Number.isFinite(km) && s.km > prev.km) run *= Math.min(1, Math.max(0, (s.km - km) / (s.km - prev.km)));
+    first = false;
+    prev = s;
+    floor = Math.max(0, floor - RECOVERY * run);
+    const range = (carried, least, source) => {
       const src = Number.isFinite(source) ? Math.max(0, source) : null;
-      return { lo: src == null ? carried : Math.min(src, carried), hi: src == null ? carried : Math.max(src, carried), likely: src ?? carried };
+      const overruled = src != null && src < least - SLACK; // more recovery than is plausible
+      const likely = src == null ? carried : overruled ? least : src;
+      return { lo: Math.round(Math.min(least, likely)), hi: Math.round(Math.max(carried, likely)), likely: Math.round(likely), overruled };
     };
     const hasSrc = (which) => !!s.expected?.[which] && Number.isFinite(s.delay?.[which]);
-    const arr = s.sched.arr ? range(carry, hasSrc("arr") ? s.delay.arr : null) : null;
+    const arr = s.sched.arr ? range(carry, floor, hasSrc("arr") ? s.delay.arr : null) : null;
     // Time made up at the halt: anything beyond a short stop.
     const halt = s.sched.arr && s.sched.dep ? Math.max(0, lateBy(s.sched.arr, s.sched.dep)) : 0;
     carry = Math.max(0, carry - Math.max(0, halt - MIN_HALT));
-    const dep = s.sched.dep ? range(carry, hasSrc("dep") ? s.delay.dep : null) : null;
+    floor = Math.max(0, floor - Math.max(0, halt - MIN_HALT));
+    const dep = s.sched.dep ? range(carry, floor, hasSrc("dep") ? s.delay.dep : null) : null;
     return {
       ...s,
       expected: { arr: arr ? plus(s.sched.arr, arr.likely) : null, dep: dep ? departs(s, arr, dep) : null },

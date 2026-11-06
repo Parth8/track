@@ -20,7 +20,7 @@ test("without the source's projections, the latest delay carries forward: never 
   const p = projectRun(bare());
   const bnc = at(p, "BNC");
   assert.equal(ist(bnc.expected.arr), "05:54", "5:31 scheduled, 23 min late as the train last reported");
-  assert.equal(estText(bnc.est.arr), "~23m late");
+  assert.equal(estText(bnc.est.arr), "20–23m late", "likely 23, with what it could plausibly make up on the way");
 });
 
 test("a long halt is where a late train can make up time, down to a short stop", () => {
@@ -63,4 +63,26 @@ test("a run that hasn't started, or has finished, is left as it is", () => {
     const j = { ...run, status: { ...run.status, phase } };
     assert.equal(projectRun(j), j);
   }
+});
+
+test("a source projecting more recovery than is plausible is overruled by the floor", () => {
+  // As the source sent it at 5:49: 27 min late at the train, but 0 at KSR Bengaluru, 37 min of
+  // running later. That would mean making up 27 min in 37: not possible.
+  const j = structuredClone(run);
+  j.status.delayMin = 27;
+  for (const s of j.stops) if (!s.passed) {
+    const d = ["BNCE", "BNC"].includes(s.code) ? 27 : 0;
+    s.delay = { arr: d, dep: d };
+    s.expected = { arr: s.sched.arr && new Date(Date.parse(s.sched.arr) + d * 60000).toISOString(), dep: s.sched.dep && new Date(Date.parse(s.sched.dep) + d * 60000).toISOString() };
+  }
+  const sbc = at(projectRun(j), "SBC");
+  assert.equal(sbc.est.arr.overruled, true);
+  assert.equal(ist(sbc.expected.arr), "06:27", "not 6:10");
+  assert.equal(estText(sbc.est.arr), "17–27m late");
+});
+
+test("a plausible source projection stands, within a couple of minutes of rounding", () => {
+  const p = projectRun(run);
+  assert.equal(at(p, "BNC").est.arr.overruled, false);
+  assert.equal(ist(at(p, "SBC").expected.arr), "06:23", "RailYatri's 13 min late at KSR Bengaluru is plausible");
 });

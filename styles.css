@@ -1069,8 +1069,10 @@ sup.plus {
   animation: rowIn 0.5s var(--ease-out) both;
   animation-delay: calc(var(--i) * 45ms + 120ms);
 }
-.tl-row:hover {
-  background: color-mix(in srgb, var(--tint) 35%, transparent);
+@media (hover: hover) {
+  .tl-row:hover {
+    background: color-mix(in srgb, var(--tint) 35%, transparent);
+  }
 }
 .tl-row.current {
   background: color-mix(in srgb, var(--tint) 55%, transparent);
@@ -1701,14 +1703,23 @@ sup.plus {
   font-weight: 600;
   text-align: right;
 }
-.sheet p {
+/* Plain sheet text only: :where() keeps this from outranking anything with its own styles,
+   such as the tracker drawn inside a booking. */
+:where(.sheet) p {
   font-size: 12.5px;
   color: var(--muted);
   line-height: 1.55;
   margin-top: 12px;
 }
-.sheet a {
+:where(.sheet) a {
   color: var(--deep);
+}
+/* The tracker drawn inside a booking looks exactly as it does on its own screen. */
+:where(.jn-live-panel) p {
+  font-size: revert;
+  color: revert;
+  line-height: revert;
+  margin-top: 0; /* as the site's base gives every paragraph */
 }
 
 /* ============================================================
@@ -6277,7 +6288,7 @@ textarea.jn-input {
 }
 .t-est-range {
   display: block;
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 700;
   color: var(--muted);
   white-space: nowrap;
@@ -6305,4 +6316,64 @@ textarea.jn-input {
 .tl-fold.later.open button {
   background: transparent;
   border: 1.5px dashed var(--hair);
+}
+
+/* ---------- live status in a booking: when it was checked, and a way to check now ---------- */
+.jn-live-fresh {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px 10px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--tint) 45%, var(--card));
+}
+.jn-live-fresh p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+}
+.jn-live-fresh b {
+  color: var(--ink);
+}
+.jn-live-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 99px;
+  background: var(--deep);
+  color: var(--card);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.jn-live-refresh svg {
+  width: 16px;
+  height: 16px;
+}
+.jn-live-refresh.spinning svg {
+  animation: spin 0.9s linear infinite;
+}
+.jn-live-refresh:disabled {
+  opacity: 0.75;
+}
+/* your stop differs from the ticket's */
+.hero-row {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.hero-ticket {
+  margin-left: auto;
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+}
+.hero-ticket + .pill-btn {
+  margin-left: 0;
 }

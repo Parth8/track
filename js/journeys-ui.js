@@ -32,6 +32,7 @@ import {
   berthNo,
   coachWalk,
   BERTH_NAMES,
+  stopOf,
 } from "./journeys.js";
 
 const today = () => todayIn(IST);
@@ -40,7 +41,7 @@ const fill = (el, ...kids) => el.replaceChildren(...kids.flat().filter((k) => k 
 const CLASS_NAMES = { "1A": "AC First Class", "2A": "AC 2 Tier", "3A": "AC 3 Tier", "3E": "AC 3 Economy", EA: "Anubhuti", EC: "Executive Chair", EV: "Vistadome", CC: "AC Chair Car", FC: "First Class", SL: "Sleeper", "2S": "Second Sitting" };
 const daysUntil = (iso) => Math.round((Date.parse(`${iso.slice(0, 10)}T00:00:00Z`) - Date.parse(`${today()}T00:00:00Z`)) / 86400000);
 const boardDate = boardDay;
-const trackLink = (j) => ({ m: "train", no: j.no, d: j.startDate, s: j.to.code });
+const trackLink = (j) => ({ m: "train", no: j.no, d: j.startDate, s: stopOf(j).code });
 const PNR_PRIVACY = "Your PNR goes through Track's server to RailYatri's public PNR status, only to read your booking. It isn't logged or stored there, and the booking is kept on this device.";
 
 /**
@@ -185,11 +186,13 @@ export async function checkDueBookings(toast, { max = 3 } = {}) {
  * whoever's picking you up sees when you'll actually arrive.
  */
 export async function shareTrip(j, toast) {
-  const url = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}`, location.href.split("?")[0]).href;
+  const stop = stopOf(j);
+  const url = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${stop.code}`, location.href.split("?")[0]).href;
   const bd = boardDate(j);
-  const text = `I'm taking train ${j.no} ${j.name || ""} from ${j.from.name} on ${longDate(bd)}, due at ${j.to.name} at ${clock(j.arr)}${dayShift(j.arr, bd) > 0 ? " the next day" : ""}. Follow it live:`.replace(/\s+/g, " ");
+  const due = stop === j.to ? `due at ${j.to.name} at ${clock(j.arr)}${dayShift(j.arr, bd) > 0 ? " the next day" : ""}` : `getting off at ${stop.name}`;
+  const text = `I'm taking train ${j.no} ${j.name || ""} from ${j.from.name} on ${longDate(bd)}, ${due}. Follow it live:`.replace(/\s+/g, " ");
   try {
-    if (navigator.share) return void (await navigator.share({ title: `Train ${j.no} to ${j.to.name}`, text, url }));
+    if (navigator.share) return void (await navigator.share({ title: `Train ${j.no} to ${stop.name}`, text, url }));
   } catch (e) {
     if (e.name === "AbortError") return;
   }
@@ -528,7 +531,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
           "div",
           {},
           h("p", { class: "jn-leg-place" }, h("b", { text: s.name }), h("span", { class: "tc-code", text: s.code })),
-          h("p", { class: "jn-leg-sub", text: [side === "from" ? "Board" : "Get off", pf ? `PF ${pf}` : null].filter(Boolean).join(" · ") }),
+          h("p", { class: "jn-leg-sub", text: [side === "from" ? "Board" : stopOf(j) !== j.to ? `Ticket's stop · you're getting off at ${stopOf(j).name}` : "Get off", pf ? `PF ${pf}` : null].filter(Boolean).join(" · ") }),
           // The train is at your station before it leaves: say when it gets in, and the halt.
           side === "from" && !actual && j.fromArr && j.fromArr !== j.dep
             ? h("p", { class: "jn-leg-sub", text: `Arrives ${clock(j.fromArr)}, ${Math.round((Date.parse(j.dep) - Date.parse(j.fromArr)) / 60000)} min halt` })
@@ -725,7 +728,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
     liveCtl?.stop();
     liveCtl = null;
     const panel = h("div", { class: "jn-live-panel", id: `jn-live-${j.id}`, hidden: true });
-    const sub = isLiveNow(j) ? "On its way now" : `Your stop: ${j.to.name}`;
+    const sub = isLiveNow(j) ? `On its way now · your stop: ${stopOf(j).name}` : `Your stop: ${stopOf(j).name}`;
     const btn = h(
       "button",
       { type: "button", class: "jn-live-btn", "aria-expanded": "false", "aria-controls": panel.id },
@@ -850,6 +853,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
     function paintToday() {
       if (!dayOf) return fill(todayBox, !isPast(j) && isTrackable(j) ? h("p", { class: "jn-fine small", text: `From ${DAYOF_HOURS} hours before you board, this checks today's run with the railway's own system.` }) : null);
       if (!today) return fill(todayBox, h("p", { class: "jn-today-t" }, h("span", { class: "spinner", "aria-hidden": "true" }), "Checking today's run…"));
+      if (today.failed) return fill(todayBox, h("p", { class: "jn-today-t" }, h("span", { text: "Couldn't check today's run just now. Trying again in a few minutes." })));
       const d = today.delay || {};
       const ds = [["NTES", d.ntes], ["RailYatri", d.railyatri], ["ConfirmTkt", d.confirmtkt]].filter(([, v]) => Number.isFinite(v));
       const lo = Math.min(...ds.map(([, v]) => v));
@@ -1071,7 +1075,8 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
       try {
         today = await api("/api/dayof", { no: j.no, date: j.startDate, at: j.from.code, fresh: force ? 1 : null }, { timeout: 20000, retries: 0 });
       } catch {
-        /* keep what we had; the next round tries again */
+        // Keep what we had; with nothing yet, say so rather than spin.
+        if (!today) today = { failed: true };
       }
       if (detail.d.open && detail.d.dataset.id === j.id) {
         paintAll();
@@ -1106,7 +1111,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
   }
 
   function downloadIcs(j) {
-    const link = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}`, location.href).href;
+    const link = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${stopOf(j).code}`, location.href).href;
     const blob = new Blob([journeyIcs(j, link)], { type: "text/calendar" });
     const a = h("a", { href: URL.createObjectURL(blob), download: `train-${j.no}-${boardDate(j)}.ics` });
     document.body.append(a);

@@ -1,4 +1,4 @@
-import { h, svg, $, todayIn, addDays, longDate, dayLabel, relativeDay, prefersReducedMotion, isDarkTheme, ago, IST, timeNode } from "./util.js";
+import { h, svg, $, todayIn, addDays, longDate, dayLabel, relativeDay, prefersReducedMotion, isDarkTheme, ago, IST, timeNode, clock } from "./util.js";
 import { icons, art } from "./icons.js";
 import { api, weatherAt, ApiError } from "./api.js";
 import { createFlipDate } from "./flip.js";
@@ -12,7 +12,7 @@ import { createRoutePanel, createResults, routeRange } from "./finder.js";
 import { createFlightResults, flightRouteRange } from "./flight-finder.js";
 import { createIsland } from "./island.js";
 import { createJourneysView, createJourneySheets, checkDueBookings } from "./journeys-ui.js";
-import { sortedJourneys, nextJourney, isTrackable, isLiveNow, isTravelDay, bookingChip, recordRun, needsRecord, onJourneysChange, journeysForRun, isPast } from "./journeys.js";
+import { sortedJourneys, nextJourney, isTrackable, isLiveNow, isTravelDay, bookingChip, recordRun, needsRecord, onJourneysChange, journeysForRun, isPast, stopOf, updateJourney, journeyById } from "./journeys.js";
 
 const today = () => todayIn(IST);
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
@@ -209,12 +209,12 @@ function paintHomeJourney() {
       "a",
       {
         class: `home-jn${live ? " live" : ""}`,
-        href: isTrackable(j) ? `?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}` : "?m=train&v=journeys",
+        href: isTrackable(j) ? `?m=train&no=${j.no}&d=${j.startDate}&s=${stopOf(j).code}` : "?m=train&v=journeys",
         on: {
           click: (e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey) return;
             e.preventDefault();
-            if (isTrackable(j)) navigate({ m: "train", no: j.no, d: j.startDate, s: j.to.code });
+            if (isTrackable(j)) navigate({ m: "train", no: j.no, d: j.startDate, s: stopOf(j).code });
             else navigate({ m: "train", v: "journeys" });
           },
         },
@@ -392,11 +392,11 @@ async function autoPinToday() {
   autoPinTried = Date.now();
   try {
     const data = await api("/api/train", { no: j.no, date: j.startDate }, { timeout: 25000, retries: 0 });
-    const view = renderTrain(data, { stop: j.to.code, foldOpen: false, onPickStop() {}, onToggleFold() {}, onChangeStop() {} });
+    const view = renderTrain(data, { stop: stopOf(j).code, foldOpen: false, onPickStop() {}, onToggleFold() {}, onChangeStop() {} });
     if (pinned || !view.island) return;
     lastPinData = data;
     pinFetchedAt = Date.now();
-    savePin({ mode: "train", no: j.no, date: j.startDate, stop: j.to.code, island: view.island, auto: j.id });
+    savePin({ mode: "train", no: j.no, date: j.startDate, stop: stopOf(j).code, island: view.island, auto: j.id });
     syncIsland();
     refreshPinned();
     toast(`Your ${j.no} is pinned to the top for today's trip`, { label: "Unpin", run: () => togglePin("pinned") });
@@ -904,8 +904,16 @@ function paint() {
       ? renderTrain(s.data, {
           stop: s.stop,
           foldOpen: s.foldOpen,
+          ticketStop: savedHere(s)?.to || null,
+          onResetStop: () => {
+            const mj = savedHere(s);
+            if (mj) navigate({ m: "train", no: s.no, d: current().date, s: mj.to.code }, { replace: true });
+          },
           onPickStop: (code) => {
             const r = current();
+            // A run you've saved: the pick is kept on that journey too, so it's there next time.
+            const mj = savedHere(s);
+            if (mj) updateJourney(mj.id, { stopOverride: code === mj.to.code ? null : { code, name: s.data.stops.find((x) => x.code === code)?.name || code } });
             navigate({ m: r.mode, no: r.no, d: r.date, s: code }, { replace: true });
             const name = s.data.stops.find((x) => x.code === code)?.name;
             toast(name ? `${name} is now your stop` : "Your stop is updated");
@@ -1056,13 +1064,29 @@ function freshNote(s) {
  * the sheet closes). Returns { stop, refresh }.
  */
 function mountLive(el, j) {
-  const s = { mode: "train", no: j.no, date: j.startDate, stop: j.to.code, inSheet: true, stopped: false, timer: null, data: null, foldOpen: false, mapEl: null, mapCtl: null };
+  const s = { mode: "train", no: j.no, date: j.startDate, stop: stopOf(j).code, inSheet: true, stopped: false, timer: null, data: null, foldOpen: false, mapEl: null, mapCtl: null, loadedAt: 0, nextAt: 0, busy: false };
+  /** Your stop for this trip, kept on the journey: picked here, it stays until you pick again. */
+  const pickStop = (code) => {
+    const name = s.data?.stops.find((x) => x.code === code)?.name || code;
+    const mine = journeyById(j.id) || j;
+    const override = code === mine.to.code ? null : { code, name };
+    updateJourney(j.id, { stopOverride: override });
+    s.stop = code;
+    if (pinned && pinned.mode === "train" && pinned.no === j.no && pinned.date === j.startDate) savePin({ ...pinned, stop: code });
+    draw();
+    syncIsland();
+    toast(override ? `${name} is now your stop for this trip` : `Back to ${mine.to.name}, as on your ticket`);
+  };
   const draw = () => {
+    if (!s.data) return;
+    const mine = journeyById(j.id) || j;
     const view = renderTrain(s.data, {
       stop: s.stop,
       foldOpen: s.foldOpen,
-      onPickStop: () => toast("Your stop comes from your booking. Edit the journey to change it."),
-      onChangeStop: null, // in a booking, the stop is the booking's
+      onPickStop: pickStop,
+      onChangeStop: null, // tap a station in the list instead
+      ticketStop: mine.to,
+      onResetStop: () => pickStop(mine.to.code),
       onToggleFold: () => ((s.foldOpen = true), draw()),
       laterOpen: s.laterOpen,
       onToggleLater: () => ((s.laterOpen = !s.laterOpen), draw()),
@@ -1076,26 +1100,53 @@ function mountLive(el, j) {
         mountWhenVisible(s, view.map);
       }
     }
-    const full = h("a", { class: "jn-live-full", href: `?m=train&no=${j.no}&d=${j.startDate}&s=${j.to.code}`, on: { click: (e) => (e.preventDefault(), navigate({ m: "train", no: j.no, d: j.startDate, s: j.to.code })) } }, "Open full screen", svg(icons.next));
-    el.replaceChildren(view.node, h("div", { class: "jn-live-foot" }, freshNote(s), full));
+    const full = h("a", { class: "jn-live-full", href: `?m=train&no=${j.no}&d=${j.startDate}&s=${s.stop}`, on: { click: (e) => (e.preventDefault(), navigate({ m: "train", no: j.no, d: j.startDate, s: s.stop })) } }, "Open full screen", svg(icons.next));
+    el.replaceChildren(freshBar(), view.node, h("div", { class: "jn-live-foot" }, full));
     for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
   };
+  /** When this was last checked, when it checks next, and a way to check now. */
+  function freshBar() {
+    const next = s.nextAt ? Math.max(1, Math.round((s.nextAt - Date.now()) / 60000)) : null;
+    const btn = h("button", { type: "button", class: `jn-live-refresh${s.busy ? " spinning" : ""}`, "aria-label": "Check now", disabled: s.busy }, svg(icons.refresh), h("span", { text: s.busy ? "Checking…" : "Refresh" }));
+    btn.addEventListener("click", () => {
+      if (Date.now() - s.loadedAt < 60000) {
+        btn.lastChild.textContent = "Just checked";
+        setTimeout(() => btn.isConnected && (btn.lastChild.textContent = "Refresh"), 2000);
+        return;
+      }
+      load(true);
+    });
+    return h(
+      "div",
+      { class: "jn-live-fresh" },
+      h("p", {}, h("b", { text: `Checked ${clockLocal(s.loadedAt)}` }), h("span", { text: next ? ` · next check in ${next} min` : s.data?.status?.phase === "arrived" ? " · journey complete" : " · no more checks" })),
+      btn
+    );
+  }
   async function load(force = false) {
     clearTimeout(s.timer);
     if (s.stopped) return;
+    s.busy = true;
+    if (s.data) draw();
     try {
       const data = await api("/api/train", { no: j.no, date: j.startDate, fresh: force ? 1 : null }, { timeout: 25000, retries: 1 });
       if (s.stopped) return;
       s.data = data;
-      draw();
+      s.loadedAt = Date.now();
       recordRun(j.no, j.startDate, data);
       const every = trainCadence(data, s.stop).ms;
+      s.nextAt = every ? Date.now() + every : 0;
       if (every) s.timer = setTimeout(load, every);
     } catch (e) {
       if (s.stopped) return;
       if (!s.data) el.replaceChildren(h("p", { class: "jn-fine", text: e instanceof ApiError && e.code === "not_found" ? "This run hasn't started reporting yet. It shows here once it does." : "Couldn't load live status just now. Trying again in a minute." }));
+      else toast("Couldn't refresh just now. Showing the last check.");
+      s.nextAt = Date.now() + 60000;
       s.timer = setTimeout(load, 60000);
+    } finally {
+      s.busy = false;
     }
+    if (!s.stopped && s.data) draw();
   }
   el.replaceChildren(h("div", { class: "jn-live-skel", "aria-hidden": "true" }, h("span", { class: "skel", vars: { width: "55%", height: "26px" } }), h("span", { class: "skel", vars: { width: "100%", height: "90px" } }), h("span", { class: "skel", vars: { width: "80%", height: "18px" } })));
   load();
@@ -1107,6 +1158,15 @@ function mountLive(el, j) {
     refresh: () => load(true),
   };
 }
+
+/** The saved, not-yet-finished journey this run belongs to, if any. */
+function savedHere(s) {
+  if (s.mode !== "train") return null;
+  return journeysForRun(s.no, s.date || today()).find((x) => !isPast(x)) || null;
+}
+
+/** "5:49 AM" in the person's clock setting, from a timestamp. */
+const clockLocal = (ms) => (ms ? clock(new Date(ms).toISOString()) : "just now");
 
 function mountWhenVisible(s, spec) {
   const start = async () => {
@@ -1551,6 +1611,10 @@ shareSheet.addEventListener("click", (e) => {
 let toastTimer;
 /** A short message at the top. With an action (like Undo), it stays a little longer and can be tapped. */
 function toast(message, action = null) {
+  // An open sheet sits in the browser's top layer, above the page: show the toast inside it,
+  // or it would be hidden behind the sheet.
+  const host = [...document.querySelectorAll("dialog[open]")].at(-1) || document.body;
+  if (toastEl.parentElement !== host) host.append(toastEl);
   toastEl.replaceChildren(
     h("span", { text: message }),
     ...(action

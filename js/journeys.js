@@ -104,6 +104,12 @@ export function sortedJourneys(filter = "upcoming") {
   return list.sort((a, b) => Date.parse(b.dep) - Date.parse(a.dep));
 }
 
+/**
+ * Where you get off: the station you picked while tracking, else the one on your ticket. Picking
+ * the ticket's station again clears the choice.
+ */
+export const stopOf = (j) => (j.stopOverride?.code && j.stopOverride.code !== j.to.code ? j.stopOverride : j.to);
+
 /** The day you board, in India. */
 export const boardDay = (j) => new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(new Date(j.dep));
 

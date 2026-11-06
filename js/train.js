@@ -57,13 +57,17 @@ export function renderTrain(run, ctx) {
       "div",
       { class: "hero-row" },
       h("span", { class: "eyebrow-pin" }, svg(icons.pin), mineIsOrigin ? "Your start" : "Your stop"),
+      // Picked a different stop from the ticket's: say so, with a way back.
+      ctx.ticketStop && ctx.ticketStop.code !== mine.code && ctx.onResetStop
+        ? h("button", { type: "button", class: "pill-btn hero-ticket", "aria-label": `Use your ticket's stop, ${ctx.ticketStop.name}`, on: { click: () => ctx.onResetStop() } }, `Ticket: ${ctx.ticketStop.code} · Use it`)
+        : null,
       ctx.onChangeStop ? h("button", { class: "pill-btn", type: "button", text: "Change", "aria-label": "Change your stop", on: { click: () => ctx.onChangeStop() } }) : null
     ),
     h("h2", { class: "hero-place display", id: "hero-place", text: mine.name }),
     h(
       "div",
       { class: "hero-time-row" },
-      h("p", { class: "hero-time", "data-k": "hero-time" }, mineTime ? timeNode(mineTime) : "--:--"),
+      h("p", { class: "hero-time", "data-k": "hero-time" }, mineTime && mineEst?.hi >= 3 ? h("span", { class: "t-approx", "aria-label": "around", text: "~" }) : null, mineTime ? timeNode(mineTime) : "--:--"),
       h("div", { class: "hero-when" }, h("span", { text: dayLabel(mineTime) }), h("strong", { class: "tn", "data-k": "hero-when", text: whenText }))
     ),
     h("div", { class: "hero-chips" }, chips.map((c) => h("span", { class: `chip ${c.cls}`, text: c.text }))),
@@ -262,8 +266,9 @@ export function renderTrain(run, ctx) {
         h("p", { class: "tl-meta tn", text: meta.join(", ") }),
         chip ? h("span", { class: `chip ${chip.cls}`, text: chip.text }) : null
       ),
-      timeCell(s, "arr", i === 0, j.date),
-      timeCell(s, "dep", !next, j.date)
+      // "+1" counts from the row's own day: the day marker above already says which day that is
+      timeCell(s, "arr", i === 0, dayOf || j.date),
+      timeCell(s, "dep", !next, dayOf || j.date)
     );
     tl.append(row);
     if (isCurrent) currentRow = row;
