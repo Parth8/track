@@ -1,5 +1,6 @@
 import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, pointAtKm, timeNode, dayShift, IST } from "./util.js";
 import { icons, weatherLook } from "./icons.js";
+import { projectRun, estText } from "./projection.js";
 
 const bestArr = (s) => s.actual.arr || s.expected.arr || s.sched.arr;
 const bestDep = (s) => s.actual.dep || s.expected.dep || s.sched.dep;
@@ -9,7 +10,9 @@ const bestDep = (s) => s.actual.dep || s.expected.dep || s.sched.dep;
  * ctx: { stop, foldOpen, onPickStop(code), onToggleFold() }
  * Returns { node, map: { el, opts } | null, currentRow, addWeather(w) }
  */
-export function renderTrain(j, ctx) {
+export function renderTrain(run, ctx) {
+  // Stops ahead get times worked out from the latest actual delay, every time this draws.
+  const j = projectRun(run);
   const halts = j.stops.filter((s) => s.halts);
   const origin = halts[0];
   const dest = halts.at(-1);
@@ -25,6 +28,7 @@ export function renderTrain(j, ctx) {
   const mineIsOrigin = mine === origin;
   const mineTime = mineIsOrigin ? bestDep(mine) : bestArr(mine);
   const mineDelay = (mineIsOrigin ? mine.delay.dep : mine.delay.arr) ?? (mine.passed ? null : j.status.delayMin);
+  const mineEst = !mine.passed ? (mineIsOrigin ? mine.est?.dep : mine.est?.arr) : null; // a range, not a promise
   const until = mineTime ? Date.parse(mineTime) - Date.now() : null;
 
   let whenText;
@@ -35,7 +39,8 @@ export function renderTrain(j, ctx) {
   const chips = [];
   if (phase === "not_started" && !mine.passed) chips.push({ cls: "info", text: "Not started yet" });
   const dc = delayChip(mineDelay);
-  if (dc) {
+  if (mineEst && mineEst.hi >= 3) chips.push({ cls: "late", text: `Likely ${estText(mineEst)}` });
+  else if (dc) {
     const how = dc.cls === "ok" ? "on time" : dc.cls === "late" ? `${fmtMin(mineDelay)} late` : `${fmtMin(mineDelay)} early`;
     chips.push({ cls: dc.cls, text: mine.passed ? `${mineIsOrigin ? "Left" : "Arrived"} ${how}` : `Expected ${how}` });
   }
@@ -106,7 +111,7 @@ export function renderTrain(j, ctx) {
     );
   } else {
     const where = pos.stationName ? ["Passed ", b(pos.stationName), pos.kmPast ? `, ${pos.kmPast} km beyond` : "", ". "] : ["On the move. "];
-    const next = nextStop ? ["Next stop ", b(nextStop.name), " at ", b(clock(bestArr(nextStop))), "."] : [];
+    const next = nextStop ? ["Next stop ", b(nextStop.name), approx(nextStop, "arr") ? " around " : " at ", b(clock(bestArr(nextStop))), "."] : [];
     now.append(lead("Now"), text(...where, ...next));
   }
   const staleMin = j.status.lastUpdated ? (Date.now() - Date.parse(j.status.lastUpdated)) / 60000 : 0;
@@ -356,9 +361,16 @@ export function renderTrain(j, ctx) {
   // The island: your stop and its time, how it's running, and what's next while it moves.
   const islandDetail = [];
   if (phase === "running" && atStop && atStop !== mine) islandDetail.push(`Halting at ${atStop.name}${atStop.platform ? `, PF ${atStop.platform}` : ""}`);
-  else if (phase === "running" && nextStop && nextStop !== mine) islandDetail.push(`Next: ${nextStop.name}, ${clock(bestArr(nextStop))}`);
+  else if (phase === "running" && nextStop && nextStop !== mine) islandDetail.push(`Next: ${nextStop.name}, ${approx(nextStop, "arr")}${clock(bestArr(nextStop))}`);
   if (!mine.passed && mine.platform) islandDetail.push(`PF ${mine.platform} at ${mine.name}`);
-  const islandChip = dc ? { cls: dc.cls, text: dc.cls === "ok" ? "On time" : dc.text } : phase === "not_started" ? { cls: "info", text: "Not started" } : null;
+  const islandChip =
+    mineEst && mineEst.hi >= 3
+      ? { cls: "late", text: estText(mineEst).replace(/^(\d+)–(\d+)m late$/, "$1–$2m late") }
+      : dc
+        ? { cls: dc.cls, text: dc.cls === "ok" ? "On time" : dc.text }
+        : phase === "not_started"
+          ? { cls: "info", text: "Not started" }
+          : null;
   const island = {
     mode: "train",
     top: `${j.number} · ${mine.name}`,
@@ -374,6 +386,9 @@ export function renderTrain(j, ctx) {
   return { node, map, currentRow, share, island, anchor: hero, weather: mine.lat != null ? [{ lat: mine.lat, lon: mine.lon, apply: addWeather }] : [] };
 }
 
+/** "~" for a projected time; nothing for a real or timetable one. */
+const approx = (s, which) => (!s.actual?.[which] && s.est?.[which]?.hi >= 3 ? "~" : "");
+
 function rail(up, down, isHere = false) {
   return h(
     "span",
@@ -385,6 +400,7 @@ function rail(up, down, isHere = false) {
 }
 
 // Times on a later day than the train's start get "+1", as printed timetables do.
+// Projected times get a "~" and a softer look: where the train will probably be, not a promise.
 function timeCell(s, which, blank, startDate) {
   if (blank) return h("span", { class: "tl-time" }, h("small", { text: " " }), h("b", { class: "t-none", text: "-" }));
   const sched = s.sched[which];
@@ -392,13 +408,17 @@ function timeCell(s, which, blank, startDate) {
   const expected = s.expected[which];
   const shown = actual || expected || sched;
   const delay = s.delay[which];
+  const est = !actual ? s.est?.[which] : null;
+  const projected = est && est.hi >= 3;
   let cls = "";
   if (actual && delay != null) cls = delay >= 5 ? "t-late" : "t-early";
+  else if (projected) cls = "t-est";
   return h(
     "span",
-    { class: "tl-time" },
+    { class: "tl-time", "aria-label": projected ? `Around ${clock(shown)}, ${estText(est)}, scheduled ${clock(sched)}` : null },
     h("small", {}, actual || expected ? timeNode(sched) : " "),
-    h("b", { class: cls, "data-k": `${s.code}-${which}` }, timeNode(shown, IST, { shift: dayShift(shown, startDate) }))
+    h("b", { class: cls, "data-k": `${s.code}-${which}` }, projected ? h("i", { class: "t-approx", "aria-hidden": "true", text: "~" }) : null, timeNode(shown, IST, { shift: dayShift(shown, startDate) })),
+    projected ? h("small", { class: "t-est-range", text: estText(est) }) : null
   );
 }
 
@@ -419,7 +439,8 @@ function gtkItem(icon, tone, title, sub) {
  *   under an hour away, or halting at a station: every 5 minutes
  *   arrived: no more checks
  */
-export function trainCadence(j, stopCode) {
+export function trainCadence(run, stopCode) {
+  const j = projectRun(run);
   const halts = (j?.stops || []).filter((s) => s.halts);
   if (!halts.length) return { ms: 12 * 60000, text: "every 12 min" };
   if (j.status?.phase === "arrived") return { ms: 0, text: "Journey complete" };
