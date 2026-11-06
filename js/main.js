@@ -912,6 +912,10 @@ function paint() {
             window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
           },
           onChangeStop: () => {
+            if (!s.laterOpen) {
+              s.laterOpen = true; // every station is a choice when changing your stop
+              paint();
+            }
             const card = $("#timeline-card");
             if (!card) return;
             card.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
@@ -920,6 +924,11 @@ function paint() {
           },
           onToggleFold: () => {
             s.foldOpen = true;
+            paint();
+          },
+          laterOpen: s.laterOpen,
+          onToggleLater: () => {
+            s.laterOpen = !s.laterOpen;
             paint();
           },
         })
@@ -1055,6 +1064,8 @@ function mountLive(el, j) {
       onPickStop: () => toast("Your stop comes from your booking. Edit the journey to change it."),
       onChangeStop: null, // in a booking, the stop is the booking's
       onToggleFold: () => ((s.foldOpen = true), draw()),
+      laterOpen: s.laterOpen,
+      onToggleLater: () => ((s.laterOpen = !s.laterOpen), draw()),
     });
     if (view.map) {
       if (s.mapEl) {

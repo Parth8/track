@@ -1031,6 +1031,38 @@ await test("journeys: the way in shows your next trip, and adds one from a PNR",
   assert.deepEqual(p.errors, []);
 });
 
+await test("tracker: the stops after yours fold behind a chevron, and open again", async () => {
+  const run = rec("run-12785-running.json"); // 12785 on 6 Nov, recorded while it ran
+  const p = await page();
+  await p.context().route(`${API}/api/train**`, (route) => route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": new URL(SITE).origin }, body: run }));
+  await p.goto(`${SITE}?m=train&no=12785&d=2026-11-05&s=BNC`);
+  await p.locator(".hero-card").waitFor();
+  const halts = JSON.parse(run).stops.filter((x) => x.halts);
+  const after = halts.length - 1 - halts.findIndex((x) => x.code === "BNC");
+  const fold = p.locator(".tl-fold.later button");
+  assert.equal(await fold.getAttribute("aria-expanded"), "false");
+  assert.match(await fold.textContent(), new RegExp(`^${after} later stopsEnds at Ashokapuram, ~\\d{1,2}:\\d{2} [AP]M$`));
+  assert.equal(await p.locator(".tl-row .tl-code", { hasText: /^SBC$/ }).count(), 0, "KSR Bengaluru is folded away");
+  assert.equal(await p.locator(".tl-row.mine .tl-code").textContent(), "BNC");
+  await fold.click();
+  await p.locator(".tl-row .tl-code", { hasText: /^SBC$/ }).waitFor();
+  assert.equal(await p.locator(".tl-fold.later button").getAttribute("aria-expanded"), "true");
+  assert.match(await p.locator(".tl-fold.later button").textContent(), new RegExp(`Hide the ${after} stops after yours`));
+  await p.locator(".tl-fold.later button").click();
+  await settle(p, 200);
+  assert.equal(await p.locator(".tl-row .tl-code", { hasText: /^SBC$/ }).count(), 0, "and folds again");
+  assert.equal(await p.getByText("10 min halt at KSR Bengaluru").count(), 0, "no tips for halts after you've got off");
+  // Changing your stop opens them, so any station can be picked
+  await p.locator(".hero-card .pill-btn", { hasText: "Change" }).click();
+  await p.locator(".tl-row .tl-code", { hasText: /^SBC$/ }).waitFor();
+  // Your stop at the end of the line: nothing to fold, and the halt on the way is worth knowing
+  await p.goto(`${SITE}?m=train&no=12785&d=2026-11-05&s=AP`);
+  await p.locator(".hero-card").waitFor();
+  assert.equal(await p.locator(".tl-fold.later").count(), 0);
+  assert.match(await p.getByText("10 min halt at KSR Bengaluru").locator("..").textContent(), /Around ~\d{1,2}:\d{2} [AP]M/);
+  assert.deepEqual(p.errors, []);
+});
+
 await test("journeys: a PNR with no booking says so kindly", async () => {
   const p = await page({ env: { PNR_WAIT_MS: "2500" } }); // the Worker waits ~24 s for real
   await p.goto(`${SITE}?m=train&v=journeys`);

@@ -7,7 +7,8 @@ const bestDep = (s) => s.actual.dep || s.expected.dep || s.sched.dep;
 
 /**
  * Build the train status screen.
- * ctx: { stop, foldOpen, onPickStop(code), onToggleFold() }
+ * ctx: { stop, foldOpen, onPickStop(code), onToggleFold(), laterOpen, onToggleLater() }
+ * Stops after yours fold away behind a chevron when onToggleLater is given.
  * Returns { node, map: { el, opts } | null, currentRow, addWeather(w) }
  */
 export function renderTrain(run, ctx) {
@@ -169,6 +170,23 @@ export function renderTrain(run, ctx) {
     if (hiddenIdx.size < 2) hiddenIdx.clear();
   }
 
+  // The stops after yours fold away: what's left of the run once you're off it.
+  const mineIdx = halts.indexOf(mine);
+  const later = ctx.onToggleLater && mineIdx >= 0 ? halts.length - 1 - mineIdx : 0;
+  const laterFolded = later > 0 && !ctx.laterOpen;
+  const laterFold = (open) =>
+    h(
+      "div",
+      { class: `tl-fold later${open ? " open" : ""}` },
+      rail(dest.passed ? "done" : "ahead", "none"),
+      h(
+        "button",
+        { type: "button", "aria-expanded": String(open), on: { click: ctx.onToggleLater } },
+        h("span", { class: "tl-fold-text" }, h("strong", { text: open ? `Hide the ${later} stop${later > 1 ? "s" : ""} after yours` : `${later} later stop${later > 1 ? "s" : ""}` }), open ? null : h("span", { text: `Ends at ${dest.name}, ${approx(dest, "arr")}${clock(bestArr(dest))}` })),
+        h("i", { class: "tl-chev", "aria-hidden": "true" })
+      )
+    );
+
   let rowI = 0;
   let prevDay = j.date;
   let currentRow = null;
@@ -176,6 +194,10 @@ export function renderTrain(run, ctx) {
 
   halts.forEach((s, i) => {
     const next = halts[i + 1];
+    if (laterFolded && i > mineIdx) {
+      if (i === mineIdx + 1) tl.append(laterFold(false));
+      return;
+    }
     if (hiddenIdx.has(i)) {
       if (i === 1) {
         const worst = [...hiddenIdx].map((k) => halts[k]).reduce((acc, x) => ((x.delay.arr ?? -99) > (acc?.delay.arr ?? -99) ? x : acc), null);
@@ -187,8 +209,8 @@ export function renderTrain(run, ctx) {
             h(
               "button",
               { type: "button", "aria-expanded": "false", on: { click: ctx.onToggleFold } },
-              h("strong", { text: `${hiddenIdx.size} earlier stops` }),
-              worst && worst.delay.arr >= 10 ? h("span", { text: `Peak delay ${fmtMin(worst.delay.arr)} at ${worst.name}` }) : null
+              h("span", { class: "tl-fold-text" }, h("strong", { text: `${hiddenIdx.size} earlier stops` }), worst && worst.delay.arr >= 10 ? h("span", { text: `Peak delay ${fmtMin(worst.delay.arr)} at ${worst.name}` }) : null),
+              h("i", { class: "tl-chev", "aria-hidden": "true" })
             )
           )
         );
@@ -256,6 +278,7 @@ export function renderTrain(run, ctx) {
       tl.append(here);
       currentRow = here;
     }
+    if (later > 0 && !laterFolded && i === halts.length - 1) tl.append(laterFold(true));
   });
   node.append(tl);
 
@@ -265,10 +288,11 @@ export function renderTrain(run, ctx) {
   const items = [];
 
   const mineArr = bestArr(mine);
-  const upcoming = halts.filter((s) => !s.passed && s !== dest && s !== origin && s.haltMin >= 10);
+  // Only halts you're still aboard for: before your stop, not after it.
+  const upcoming = halts.filter((s, i) => !s.passed && s !== dest && s !== origin && i < halts.indexOf(mine) && s.haltMin >= 10);
   if (upcoming.length) {
     const s = upcoming[0];
-    items.push(gtkItem(icons.cup, "warm", `${s.haltMin} min halt at ${s.name}`, `Around ${clock(bestArr(s))}. Enough time to step out for food or water.`));
+    items.push(gtkItem(icons.cup, "warm", `${s.haltMin} min halt at ${s.name}`, `Around ${approx(s, "arr")}${clock(bestArr(s))}. Enough time to step out for food or water.`));
   }
   if (!mine.passed && mineArr && dateKey(mineArr) !== j.date) {
     items.push(gtkItem(icons.moonTrain, "", "Overnight journey", `${mine.name} is on ${dayLabel(mineArr)}.`));

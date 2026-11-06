@@ -1230,6 +1230,9 @@ sup.plus {
   min-height: 54px;
 }
 .tl-fold button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex: 1;
   border: 0;
   background: color-mix(in srgb, var(--tint) 40%, var(--card));
@@ -6278,4 +6281,28 @@ textarea.jn-input {
   font-weight: 700;
   color: var(--muted);
   white-space: nowrap;
+}
+
+/* the folds before and after your stop: a chevron that turns as they open */
+.tl-fold-text {
+  flex: 1;
+  min-width: 0;
+  display: block;
+}
+.tl-chev {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-right: 4px;
+  border-right: 2.5px solid var(--deep);
+  border-bottom: 2.5px solid var(--deep);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.tl-fold.open .tl-chev {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+.tl-fold.later.open button {
+  background: transparent;
+  border: 1.5px dashed var(--hair);
 }
