@@ -4,7 +4,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import worker, { extractPnr, trackOf, airportDelaysOf, faPageData, faPageFlight, faPageInbound, boardRow } from "../worker/worker.js";
+import worker, { extractPnr, trackOf, airportDelaysOf, faPageData, faPageFlight, faPageInbound, boardRow, icaoFromSearch } from "../worker/worker.js";
 import { fidsAnswer, flightAnswer, MemoryKV } from "./fids.mjs";
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -1161,6 +1161,113 @@ test("flights: the belt at Hyderabad comes from Hyderabad airport's own board", 
     assert.equal(f.arrival.beltFrom, "Hyderabad airport");
     await get(`/api/flight?no=6E6254&date=${day}`, { with: flightEnv() });
     assert.equal(boardCalls, 1, "one board read serves every flight on it for 3 minutes");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+/* ---------- any airline, anywhere ---------- */
+
+test("any airline: FlightAware's search names the airline's ICAO code, and unknown owners are skipped", () => {
+  // As FlightAware answered for EK500 and S5123, 19 Nov 2026
+  const ek = [{ ident: "EK500", operator: "Unknown Owner" }, { ident: "UAE500", operator: "Emirates" }];
+  assert.equal(icaoFromSearch(ek, "EK500"), "UAE");
+  assert.equal(icaoFromSearch([{ ident: "S5123", operator: "Unknown Owner" }, { ident: "SDG123", operator: "Star Air" }], "S5123"), "SDG");
+  assert.equal(icaoFromSearch([{ ident: "AKJ1381", operator: "Akasa Air" }], "QP1381"), "AKJ");
+  assert.equal(icaoFromSearch([], "G8101"), null);
+  assert.equal(icaoFromSearch([{ ident: "XYZ999", operator: "Other" }], "AB123"), null, "a different number isn't a match");
+});
+
+test("any airline: an airline not in our table is found once, remembered, and used", async () => {
+  const day = istToday();
+  const e = flightEnv();
+  let searches = 0;
+  const page = readFileSync(new URL("./fixtures/fa-page-air.html", import.meta.url), "utf8").replaceAll('"iata":"6E"', '"iata":"ZZ"');
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("omnisearch")) return (searches++, new Response(JSON.stringify({ data: [{ ident: "ZZZ6254", operator: "Zed Air" }] })));
+    if (u.includes("flightaware.com/live/flight/ZZZ6254")) return new Response(page);
+    if (u.includes("adsb")) return new Response(JSON.stringify({ ac: [] }));
+    return new Response(null, { status: 204 });
+  };
+  const a = await get(`/api/flight?no=ZZ6254&date=2026-11-19`, { with: e });
+  assert.equal(await e.QUOTA.get("airline-icao/ZZ"), "ZZZ");
+  if (a.status === 200) assert.equal(a.body.status.source, "flightaware-page");
+  caches.default.expire("fapage/ZZZ6254");
+  calls.length = 0;
+  await get(`/api/flight?no=ZZ6254&date=${day}`, { with: e }).catch(() => null);
+  assert.equal(searches, 1, "the airline is looked up once, then remembered");
+  assert.ok(calls.some((u) => u.includes("/live/flight/ZZZ6254")), "and its page is read by the remembered code");
+});
+
+test("any airport: a belt nobody free has comes from one paid look-up after landing, at most twice", async () => {
+  const day = istToday();
+  const realNow = Date.now;
+  const shiftMs = Date.parse(`${day}T00:00:00Z`) - Date.parse("2026-11-19T00:00:00Z");
+  const shift = (html) => html.replace(/"(scheduled|estimated|actual|timestamp)":(\d{10})/g, (_, k, v) => `"${k}":${Number(v) + shiftMs / 1000}`);
+  // The air capture, with the landing and gate arrival made actual, at an airport with no board
+  const page = shift(readFileSync(new URL("./fixtures/fa-page-air.html", import.meta.url), "utf8"))
+    .replaceAll('"flightStatus":"airborne"', '"flightStatus":"arrived"')
+    .replaceAll('"iata":"HYD"', '"iata":"XYZ"');
+  let paid = 0;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("flightaware.com/live/flight/IGO6254")) return new Response(page);
+    if (u.includes("/flights/number/6E6254/"))
+      return (paid++, new Response(JSON.stringify([{ number: "6E 6254", status: "Arrived", airline: { name: "IndiGo", iata: "6E" }, departure: { airport: { iata: "IXC", timeZone: "Asia/Kolkata" }, scheduledTime: { utc: `${day} 17:00Z` } }, arrival: { airport: { iata: "XYZ", timeZone: "Asia/Kolkata" }, scheduledTime: { utc: `${day} 19:30Z` }, baggageBelt: paid >= 2 ? "4" : null } }])));
+    if (u.includes("adsb")) return new Response(JSON.stringify({ ac: [] }));
+    return new Response(null, { status: 204 });
+  };
+  Date.now = () => Date.parse("2026-11-19T20:20:00Z") + shiftMs; // 10 minutes after landing
+  try {
+    const e = flightEnv();
+    const a = await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+    assert.equal(a.body.status.phase, "landed");
+    assert.equal(a.body.arrival.belt, null, "not assigned yet at the first look");
+    assert.equal(paid, 1);
+    await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+    assert.equal(paid, 1, "the answer is kept 15 minutes before asking again");
+    caches.default.expire(`paidx/6E6254/${day}/belt`);
+    const b = await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+    assert.equal(b.body.arrival.belt, "4");
+    assert.equal(b.body.arrival.beltFrom, "AeroDataBox");
+    caches.default.expire(`paidx/6E6254/${day}/belt`);
+    caches.default.expire(`fapage/IGO6254`);
+    await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+    assert.ok(paid <= 2, "never more than twice for one flight's belt");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("flightaware page: a flight that doesn't operate that day is a plain 'not found', with nothing paid", async () => {
+  const pre = readFileSync(new URL("./fixtures/fa-page-pre.html", import.meta.url), "utf8");
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("flightaware.com/live/flight/IGO6254")) return new Response(pre);
+    return new Response(null, { status: 204 });
+  };
+  // The capture lists 8 to 20 Nov 2026. On 1 Dec, a number last seen on the 20th isn't flying.
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-12-01T06:00:00Z");
+  try {
+    const r = await get(`/api/flight?no=6E6254&date=2026-12-01`, { with: flightEnv() });
+    assert.equal(r.status, 404);
+    assert.match(r.body.message, /doesn't seem to operate that day/);
+    assert.ok(!calls.some((u) => u.includes("aerodatabox")), "no paid call to confirm it");
+  } finally {
+    Date.now = realNow;
+  }
+  // And a day inside the span with nothing on it: 6E 6254 flies daily, so make one day empty
+  const gap = pre.replace(/"scheduled":1795021200/g, '"scheduled":1794021200');
+  globalThis.fetch = async (url) => (String(url).includes("IGO6254") ? new Response(gap) : new Response(null, { status: 204 }));
+  Date.now = () => Date.parse("2026-11-19T12:00:00Z");
+  try {
+    caches.default.expire("fapage/IGO6254");
+    const r2 = await get(`/api/flight?no=6E6254&date=2026-11-18`, { with: flightEnv() });
+    assert.equal(r2.status, 404);
   } finally {
     Date.now = realNow;
   }

@@ -649,7 +649,7 @@ const AIRLINE_NAME = {
 const airlineName = (iata, given) => AIRLINE_NAME[iata] || given || iata;
 
 const AIRLINE_ICAO = {
-  "6E": "IGO", AI: "AIC", IX: "AXB", QP: "AKJ", SG: "SEJ", UK: "VTI", I5: "IAD", S5: "SNJ", "9I": "LLR",
+  "6E": "IGO", AI: "AIC", IX: "AXB", QP: "AKJ", SG: "SEJ", UK: "VTI", I5: "IAD", S5: "SDG", "9I": "LLR",
   EK: "UAE", QR: "QTR", EY: "ETD", SQ: "SIA", BA: "BAW", LH: "DLH", AF: "AFR", KL: "KLM", TK: "THY",
   UL: "ALK", TG: "THA", MH: "MAS", CX: "CPA", G9: "ABY", FZ: "FDB", WY: "OMA", GF: "GFA", SV: "SVA",
   AA: "AAL", UA: "UAL", DL: "DAL", VS: "VIR", LX: "SWR", QF: "QFA", NH: "ANA", JL: "JAL",
@@ -679,8 +679,9 @@ async function flightRoute(url, env, ctx, request) {
   // everyone, Refresh can ask again after 15 s). Paid sources are only for when it can't answer.
   if (env.FA_PAGE !== "off" && Math.abs(daysBetween(today, date)) <= 2) {
     try {
-      flight = await fromFaPage(ctx, raw, date, fresh);
+      flight = await fromFaPage(ctx, raw, date, fresh, env);
     } catch (err) {
+      if (err instanceof ApiError && err.code === "not_found") throw err; // known not to fly that day
       log("warn", "flightaware page", err.code || String(err.message || err).slice(0, 80));
     }
     if (flight) putFlight(ctx, key, flight); // the fallback copy, should the page stop answering
@@ -792,6 +793,9 @@ async function flightRoute(url, env, ctx, request) {
     if (b?.belt) ((arr.belt = b.belt), (arr.beltFrom = b.from));
     if (b?.terminal && !arr.terminal) arr.terminal = b.terminal;
   }
+  // Anywhere else: a paid look-up, but only when a gate or belt can exist and nothing free has it,
+  // at most twice each per flight, and within the month's budget.
+  if (env.ADB_KEY && flight.status.source !== "aerodatabox") await paidGateBelt(env, ctx, request, flight, raw, date, item).catch(() => {});
   // The plane flying in: its live position and landing time, free, on every request before departure.
   if (flight.inbound && flight.status.phase === "pre" && !flight.inbound.landed) {
     const ib = flight.inbound;
@@ -1226,6 +1230,42 @@ async function fromAirportBoard(ctx, code, type, number, schedIso, tz) {
   return { gate: clean(row.gate), belt: clean(row.belt), terminal: clean(row.terminal), from: board.name };
 }
 
+/**
+ * Gate in the last 90 minutes before departure, belt from 20 minutes before landing to an hour
+ * after, when no free source had them. Each is asked for at most twice per flight (the second
+ * after a wait, in case it wasn't assigned yet), and only while someone is looking.
+ */
+async function paidGateBelt(env, ctx, request, f, raw, date, item) {
+  const now = Date.now();
+  const ph = f.status.phase;
+  const dep = f.departure;
+  const arr = f.arrival;
+  const depAt = Date.parse(dep.revised || dep.sched || 0);
+  const arrAt = Date.parse(arr.actual || arr.revised || arr.sched || 0);
+  const needGate = ph === "pre" && !dep.gate && depAt - now < 90 * 60000 && depAt - now > -15 * 60000;
+  const needBelt = !arr.belt && ((ph === "air" && arrAt - now < 20 * 60000) || (ph === "landed" && now - arrAt < 60 * 60000));
+  const kind = needBelt ? "belt" : needGate ? "gate" : null;
+  if (!kind) return;
+  const kv = env.QUOTA;
+  const key = `paidx/${raw}/${date}/${kind}`;
+  const hit = await cacheGet(key);
+  let got = hit?.data || null;
+  if (!got) {
+    const tries = Number(kv?.get ? await kv.get(key) : 0) || 0;
+    if (tries >= 2) return;
+    await spend(env, request, "track", item);
+    if (kv?.put) await kv.put(key, String(tries + 1), { expirationTtl: 2 * 86400 });
+    const a = await fetchFlight(env, ctx, raw, date);
+    got = { gate: a.departure.gate || null, depTerminal: a.departure.terminal || null, belt: a.arrival.belt || null, arrTerminal: a.arrival.terminal || null };
+    // Wait before a second try: 30 minutes for a gate, 15 for a belt
+    ctx.waitUntil(caches.default.put(cacheKey(key), new Response(JSON.stringify(got), { headers: { "Cache-Control": `max-age=${kind === "gate" ? 1800 : 900}`, "X-Fetched-At": String(now) } })).catch(() => {}));
+  }
+  if (got.gate && !dep.gate) ((dep.gate = got.gate), (dep.gateFrom = "AeroDataBox"));
+  if (got.depTerminal && !dep.terminal) dep.terminal = got.depTerminal;
+  if (got.belt && !arr.belt) ((arr.belt = got.belt), (arr.beltFrom = "AeroDataBox"));
+  if (got.arrTerminal && !arr.terminal) arr.terminal = got.arrTerminal;
+}
+
 /* ---------- FlightAware's public flight page: free, fresh, read on demand ---------- */
 
 // The page carries the same data its own screen draws from, as one JSON object. It's read only
@@ -1353,7 +1393,8 @@ export function faPageFlight(data, raw, date) {
       phase,
       raw: e.flightStatus || "",
       source: "flightaware-page",
-      reported: true,
+      // An estimate or an actual means someone has reported on it; just a schedule doesn't
+      reported: !!(t.out.est || t.out.actual || t.off.est || t.off.actual || t.in.est || t.in.actual),
       delayDep: mins(t.out.sched, outBest),
       delayArr: mins(t.in.sched, inBest),
       lastUpdated: new Date().toISOString(),
@@ -1420,14 +1461,53 @@ export function faPageInbound(data, ref, into, beforeIso) {
   };
 }
 
+/**
+ * FlightAware names flights by the airline's ICAO code (UAE500 for EK 500). Any airline works:
+ * our own table first, then FlightAware's own search box, remembered for good per airline.
+ */
+async function faIdent(env, raw) {
+  const iata = raw.slice(0, 2);
+  const num = raw.slice(2);
+  const kv = env.QUOTA;
+  const known = (kv?.get ? await kv.get(`airline-icao/${iata}`).catch(() => null) : null) || AIRLINE_ICAO[iata];
+  if (known) return known + num;
+  const res = await getWithRetry(`https://www.flightaware.com/ajax/ignoreall/omnisearch/flight.rvt?v=50&locale=en_US&searchterm=${encodeURIComponent(raw)}`, { headers: { "User-Agent": UA, Accept: "application/json" } }, { timeout: 5000, retries: 0 }).catch(() => null);
+  const list = res?.ok ? (await res.json().catch(() => null))?.data || [] : [];
+  const hit = icaoFromSearch(list, raw);
+  if (hit && kv?.put) await kv.put(`airline-icao/${iata}`, hit).catch(() => {});
+  return hit ? hit + num : null;
+}
+
+/** From FlightAware's search answers, the airline's ICAO code for this flight number, if one fits. */
+export function icaoFromSearch(list, raw) {
+  const num = raw.slice(2);
+  const fit = (list || []).find((x) => {
+    const id = String(x?.ident || "");
+    return id !== raw && id.endsWith(num) && /^[A-Z]{3}$/.test(id.slice(0, -num.length)) && !/unknown/i.test(x?.operator || "");
+  });
+  return fit ? fit.ident.slice(0, -num.length) : null;
+}
+
 /** A flight from FlightAware's public pages: its own, and its inbound plane's before it leaves. */
-async function fromFaPage(ctx, raw, date, fresh) {
-  const icao = AIRLINE_ICAO[raw.slice(0, 2)];
-  if (!icao) return null;
-  const ident = icao + raw.slice(2);
+async function fromFaPage(ctx, raw, date, fresh, env = {}) {
+  const ident = await faIdent(env, raw);
+  if (!ident) return null;
   const data = await faPage(ctx, ident, fresh);
+  // The page must be this airline's flight, not another one using the same number
+  const main = Object.values(data?.flights || {})[0];
+  const pageIata = main?.codeShare?.airline?.iata || main?.airline?.iata;
+  if (pageIata && pageIata.toUpperCase() !== raw.slice(0, 2)) return null;
   const flight = faPageFlight(data, raw, date);
-  if (!flight) return null;
+  if (!flight) {
+    // The page lists this flight's days from about ten back to a day or two ahead. A date inside
+    // that span with nothing on it means the flight doesn't operate then: say so, without paying
+    // another source to confirm it.
+    const days = [main, ...(main?.activityLog?.flights || [])].map(faDay).filter(Boolean).sort();
+    const inSpan = days.length >= 3 && date > days[0] && date < days.at(-1);
+    const stopped = days.length && days.at(-1) < addDays(istToday(), -2); // not flown for days: not operating now
+    if (inSpan || (stopped && date >= days.at(-1))) throw new ApiError(404, "not_found", `No flight ${raw.slice(0, 2)} ${raw.slice(2)} on ${date}. It doesn't seem to operate that day.`);
+    return null;
+  }
   if (flight.inboundRef && flight.status.phase === "pre") {
     const ibIdent = flight.inboundRef.split("-")[0];
     const ibData = await faPage(ctx, ibIdent, false).catch(() => null);
