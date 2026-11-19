@@ -7013,3 +7013,289 @@ textarea.jn-input {
     animation: none;
   }
 }
+
+/* ============================================================
+   Flight board v2: a calm status line, ends grouped as you scan
+   ============================================================ */
+.fboard .fb-band {
+  background: color-mix(in srgb, var(--hair) 55%, var(--card));
+  color: var(--ink);
+  padding: 14px 16px;
+  position: relative;
+}
+.fboard .fb-band.go {
+  padding-right: 36px;
+  cursor: pointer;
+}
+.fboard .fb-band.bad {
+  background: var(--rose-tint);
+  color: var(--rose-ink);
+}
+.fb-head {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.fb-head .lead {
+  font-size: inherit;
+  font-weight: inherit;
+  opacity: 1;
+}
+.fb-head .big {
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.fb-band.good .fb-head .big {
+  color: var(--early);
+}
+.fb-band.warn .fb-head .big {
+  color: var(--late);
+}
+.fboard .fb-band .sub {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.fb-go {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin-top: -5px;
+  border-right: 2px solid var(--muted);
+  border-top: 2px solid var(--muted);
+  transform: rotate(45deg);
+}
+.fb-band.go:active {
+  filter: brightness(0.97);
+}
+.fb-place {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.fb-place svg {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  color: var(--ink);
+}
+.fb-place b {
+  font-weight: 800;
+}
+.fb-time {
+  font-size: 40px;
+}
+.fb-meta {
+  font-weight: 500;
+  color: var(--muted);
+}
+.fb-meta b {
+  font-weight: 800;
+  color: var(--ink-soft);
+}
+.fb-meta b.t-late {
+  color: var(--late);
+}
+.fb-meta b.t-early {
+  color: var(--early);
+}
+.fb-side {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  margin-top: 6px;
+}
+.fb-side .fb-tile {
+  flex-direction: row;
+  gap: 4px;
+  min-width: 46px;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: #f4c430;
+  color: #2a2205;
+}
+.fb-side .fb-tile svg {
+  width: 17px;
+  height: 17px;
+}
+.fb-side .fb-tile strong {
+  font-size: 19px;
+}
+.fb-side .fb-tile.empty {
+  background: #f4c430;
+  color: #2a2205;
+  opacity: 0.9;
+}
+.fb-term {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.fb-term b {
+  color: var(--ink);
+  font-weight: 700;
+}
+.fb-facts {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.fb-facts svg {
+  width: 14px;
+  height: 14px;
+  margin-right: 2px;
+}
+.fb-mid {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+.fb-mid .fb-line,
+.fb-mid .fb-progress {
+  grid-column: 1 / -1;
+}
+.fb-rule {
+  display: block;
+  height: 1px;
+  background: var(--hair);
+}
+
+/* Your booking code and seat: light, icon-led */
+.fmine {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.fm-box {
+  position: relative;
+}
+.fm-slot {
+  appearance: none;
+  font: inherit;
+  width: 100%;
+  min-height: 96px;
+  text-align: left;
+  cursor: pointer;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1.5px solid var(--hair);
+  background: var(--card);
+  color: var(--ink);
+}
+.fm-slot svg {
+  width: 24px;
+  height: 24px;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+.fm-slot strong {
+  font-size: 15.5px;
+  font-weight: 800;
+}
+.fm-value {
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.fm-slot.set .fm-value {
+  color: var(--ink);
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+}
+.fm-paste {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  appearance: none;
+  border: 0;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 9px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--blue-bg);
+  color: var(--blue);
+}
+.fm-input {
+  width: 100%;
+  min-height: 96px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 2px solid var(--accent);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.fm-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--late);
+}
+.fm-private {
+  grid-column: 1 / -1;
+  margin: -2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Good to know: a list of rows */
+.gtk-list {
+  padding: 4px 16px;
+}
+.gtk-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 0;
+}
+.gtk-row + .gtk-row {
+  border-top: 1px solid var(--hair);
+}
+.gtk-row .fact-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+}
+.gtk-row .fact-icon svg {
+  width: 20px;
+  height: 20px;
+}
+.gtk-row strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.gtk-row small {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 1px;
+}

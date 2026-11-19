@@ -1278,7 +1278,8 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   await p.goto(`${SITE}?m=flight&no=6E6254&d=${day}`);
   await p.locator(".inbound-card").waitFor();
   const text = (sel) => p.locator(sel).first().textContent();
-  assert.match(await text(".phase-banner .sub"), /Delayed 15m, now 10:45 PM/);
+  assert.match(await text(".phase-banner .fb-head"), /^Gate departure in \d+ min$/);
+  assert.match(await text(".phase-banner .sub"), /^Your plane is in the air from Goa/);
   // 6E 724 from Goa is 154 km out: about 20 min to land, 5 to the gate, 25 to turn round. Its live
   // landing time is worked out by the Worker on the real clock, so only the shape is checked here.
   assert.match(await text(".inbound-card .ib-lead"), /6E 724 from Goa brings the plane/);
@@ -1292,6 +1293,15 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   assert.match(await text(".hist-lead"), /Usually leaves 11 min early/);
   assert.equal(await p.locator(".hist-col").count(), 11);
   assert.match(await text(".data-credit"), /FlightAware/);
+  // Booking code and seat: typed in, checked, kept on this phone
+  await p.locator(".fm-slot").nth(1).dispatchEvent("click");
+  await p.locator(".fm-input").nth(1).fill("14c");
+  await p.locator(".fm-input").nth(1).press("Enter");
+  assert.equal(await text(".fm-slot.set .fm-value"), "14C");
+  assert.match(await p.evaluate(() => localStorage.getItem("flightMine")), /"seat":"14C"/);
+  // The status line opens the section behind it
+  await p.locator(".phase-banner").dispatchEvent("click");
+  assert.equal(await p.locator(".inbound-card").getAttribute("open"), "");
   // The board: late in colour, tiles that say what isn't announced yet
   assert.equal(await p.locator(".fb-end.dep .fb-time .t-late").count(), 1);
   assert.equal(await text(".fb-end.arr .fb-tile:not(.empty) strong"), "6", "belt 6, before landing");
@@ -1314,8 +1324,8 @@ await test("flights: with nothing reported, the schedule is the schedule, not 'o
   await p.clock.install({ time: new Date(`${day}T16:21:00Z`) });
   await p.goto(`${SITE}?m=flight&no=6E6254&d=${addDays(day, 1)}`);
   await p.locator(".phase-banner .sub").waitFor();
-  assert.equal(await p.locator(".phase-banner .sub").textContent(), "No live update yet. Scheduled 10:30 PM");
-  assert.match(await p.locator(".fb-meta").first().textContent(), /^Scheduled, no update yet · in \d+h \d+m$/);
+  assert.equal(await p.locator(".phase-banner .sub").textContent(), "No live update from IndiGo yet. Times are the schedule.");
+  assert.match(await p.locator(".fb-meta").first().textContent(), /^Scheduled, no update yet · Departs in \d+h \d+m$/);
   assert.match(await p.locator(".fb-meta").nth(1).textContent(), /A model estimates 1:03 AM/);
   assert.equal(await p.locator(".fb-time .t-late, .fb-time .t-early").count(), 0, "no colour: nothing's known either way");
   assert.deepEqual(p.errors, []);
