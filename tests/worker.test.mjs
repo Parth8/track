@@ -4,7 +4,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import worker, { extractPnr, trackOf, airportDelaysOf, faPageData, faPageFlight, faPageInbound } from "../worker/worker.js";
+import worker, { extractPnr, trackOf, airportDelaysOf, faPageData, faPageFlight, faPageInbound, boardRow } from "../worker/worker.js";
 import { fidsAnswer, flightAnswer, MemoryKV } from "./fids.mjs";
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -983,12 +983,12 @@ test("flightaware: the airline's estimates, all four times, the inbound plane an
   assert.equal(f.faId, "IGO6254-1795107600-airline-0");
   assert.equal(f.inbound.prev, undefined, "its own earlier leg only matters before it leaves");
   assert.equal(await e.QUOTA.get(`fa/${day.slice(0, 7)}`), "4");
+  assert.ok(!calls.some((u) => u.includes("aerodatabox") && u.includes("/flights/")), "no AeroDataBox flight lookup");
   // Airport delays are shared: another look within half an hour doesn't ask again
   calls.length = 0;
   caches.default.expire(`flight/6E6254/${day}`);
   await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
   assert.equal(calls.filter((u) => u.includes("/delays")).length, 0);
-  assert.ok(!calls.some((u) => u.includes("aerodatabox") && u.includes("/flights/")), "no AeroDataBox flight lookup");
   assert.ok(!JSON.stringify(f).includes("fa-test-key"));
 });
 
@@ -1123,4 +1123,45 @@ test("flights: FlightAware's page comes first, free, and Refresh asks it again",
   assert.equal(c.body.status.servedStale, true);
   assert.ok(!calls.some((u) => u.includes("aerodatabox")), "still nothing paid");
   assert.equal(await e.QUOTA.get(`adb/${day.slice(0, 7)}`), null);
+});
+
+/* ---------- airports' own boards: gate and belt ---------- */
+
+test("airport boards: a flight's row by number and its local scheduled day", () => {
+  const hyd = fixture("hyd-board.json");
+  // 6E 6254 lands 1:00 AM on 20 Nov, India time: 19:30 on the 19th in UTC
+  const r = boardRow(hyd.arrivals.data, "6E 6254", "2026-11-19T19:30:00Z", "Asia/Kolkata");
+  assert.equal(r.belt, "8");
+  assert.equal(boardRow(hyd.arrivals.data, "6E6254", "2026-11-20T19:30:00Z", "Asia/Kolkata"), null, "a different day's flight isn't this one");
+  assert.equal(boardRow(hyd.departures.data, "6E 409", "2026-11-19T13:20:00Z", "Asia/Kolkata").gate, "15");
+});
+
+test("flights: the belt at Hyderabad comes from Hyderabad airport's own board", async () => {
+  const day = istToday();
+  const shift = (html) => html.replace(/"(scheduled|estimated|actual|timestamp)":(\d{10})/g, (_, k, v) => `"${k}":${Number(v) + (Date.parse(`${day}T00:00:00Z`) - Date.parse("2026-11-19T00:00:00Z")) / 1000}`);
+  const page = shift(readFileSync(new URL("./fixtures/fa-page-air.html", import.meta.url), "utf8"));
+  const hyd = fixture("hyd-board.json");
+  const next = addDays(day, 1).replace(/-/g, "");
+  for (const r of hyd.arrivals.data) r.rawScheduledTime = r.rawScheduledTime.replace(/^\d{8}/, r.flightNumber === "6E 6254" ? next : day.replace(/-/g, ""));
+  let boardCalls = 0;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes("flightaware.com/live/flight/IGO6254")) return new Response(page);
+    if (u.includes("hyderabad.aero")) return (boardCalls++, new Response(JSON.stringify(hyd.arrivals)));
+    if (u.includes("adsb")) return new Response(JSON.stringify({ ac: [] }));
+    throw new Error(`unexpected ${u}`);
+  };
+  // The clock as when the page was captured (11:50 PM in India), moved to the same day
+  const realNow = Date.now;
+  Date.now = () => Date.parse("2026-11-19T18:20:00Z") + (Date.parse(`${day}T00:00:00Z`) - Date.parse("2026-11-19T00:00:00Z")) + (realNow() % 1000);
+  try {
+    const { body: f } = await get(`/api/flight?no=6E6254&date=${day}`, { with: flightEnv() });
+    assert.equal(f.status.phase, "air");
+    assert.equal(f.arrival.belt, "8");
+    assert.equal(f.arrival.beltFrom, "Hyderabad airport");
+    await get(`/api/flight?no=6E6254&date=${day}`, { with: flightEnv() });
+    assert.equal(boardCalls, 1, "one board read serves every flight on it for 3 minutes");
+  } finally {
+    Date.now = realNow;
+  }
 });

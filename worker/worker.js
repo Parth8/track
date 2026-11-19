@@ -777,6 +777,21 @@ async function flightRoute(url, env, ctx, request) {
       }
     }
   }
+  // Gate and belt from the airports themselves, when they publish a board. Free, and shared.
+  {
+    const ph = flight.status.phase;
+    const dep = flight.departure;
+    const arr = flight.arrival;
+    const nearArr = Date.parse(arr.revised || arr.sched || 0) - Date.now() < 4 * 3600000;
+    const [g, b] = await Promise.all([
+      ph === "pre" && AIRPORT_BOARDS[dep.code] ? fromAirportBoard(ctx, dep.code, "departures", flight.number, dep.sched, dep.tz) : null,
+      ph !== "cancelled" && ph !== "diverted" && nearArr && AIRPORT_BOARDS[arr.code] ? fromAirportBoard(ctx, arr.code, "arrivals", flight.number, arr.sched, arr.tz) : null,
+    ]);
+    if (g?.gate) ((dep.gate = g.gate), (dep.gateFrom = g.from));
+    if (g?.terminal && !dep.terminal) dep.terminal = g.terminal;
+    if (b?.belt) ((arr.belt = b.belt), (arr.beltFrom = b.from));
+    if (b?.terminal && !arr.terminal) arr.terminal = b.terminal;
+  }
   // The plane flying in: its live position and landing time, free, on every request before departure.
   if (flight.inbound && flight.status.phase === "pre" && !flight.inbound.landed) {
     const ib = flight.inbound;
@@ -1173,6 +1188,42 @@ export function normaliseFa(raw, date, f, list = [], info = {}) {
 function haversineKm(lat1, lon1, lat2, lon2) {
   const r = Math.PI / 180;
   return 6371 * 2 * Math.asin(Math.sqrt(Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2));
+}
+
+/* ---------- Airports' own flight boards: gates and belts, from the airport itself ---------- */
+
+// The airport assigns gates and belts, and some publish their boards openly. One read of a
+// board (arrivals or departures) serves every flight on it for everyone for 3 minutes, so it
+// costs nothing per flight. Add an airport here once its board is known to answer.
+const AIRPORT_BOARDS = {
+  HYD: {
+    name: "Hyderabad airport",
+    url: (type) => `https://www.hyderabad.aero/next-api/flights?type=${type}&flightType=all&limit=1000`,
+    rows: (json) => (Array.isArray(json?.data) ? json.data : []),
+  },
+};
+const BOARD_TTL_S = 180;
+
+/** A flight's row on an airport's board: the same number, on the same local day as scheduled. */
+export function boardRow(rows, number, schedIso, tz) {
+  const no = String(number || "").replace(/\s+/g, "").toUpperCase();
+  const day = schedIso ? localDay(schedIso, tz).replace(/-/g, "") : null;
+  return (rows || []).find((r) => String(r.flightNumber || "").replace(/\s+/g, "").toUpperCase() === no && (!day || String(r.rawScheduledTime || "").startsWith(day))) || null;
+}
+
+/** Gate (departures) or belt (arrivals) for a flight, from its airport's own board; null when the airport has none. */
+async function fromAirportBoard(ctx, code, type, number, schedIso, tz) {
+  const board = AIRPORT_BOARDS[code];
+  if (!board) return null;
+  const data = await cached(ctx, `board/${code}/${type}`, BOARD_TTL_S, async () => {
+    const res = await getWithRetry(board.url(type), { headers: { "User-Agent": UA, Accept: "application/json" } }, { timeout: 6000, retries: 0 });
+    if (!res.ok) throw new ApiError(502, "upstream_unavailable", `${board.name} answered ${res.status}.`);
+    return { rows: board.rows(await res.json()).map((r) => ({ flightNumber: r.flightNumber, rawScheduledTime: r.rawScheduledTime, gate: r.gate || null, belt: r.belt || null, terminal: r.terminal || null })), status: {} };
+  }).catch(() => null);
+  const row = boardRow(data?.rows, number, schedIso, tz);
+  if (!row) return null;
+  const clean = (v) => (v != null && /^[A-Z0-9]{1,5}$/i.test(String(v).trim()) ? String(v).trim().toUpperCase() : null);
+  return { gate: clean(row.gate), belt: clean(row.belt), terminal: clean(row.terminal), from: board.name };
 }
 
 /* ---------- FlightAware's public flight page: free, fresh, read on demand ---------- */

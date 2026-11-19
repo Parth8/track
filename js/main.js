@@ -72,16 +72,13 @@ const MODES = {
     dateHelp: "Local date at the airport the flight leaves from. Don't know the number? Use From and to above.",
     cta: "Track flight",
     range: () => [addDays(today(), -2), addDays(today(), 7)],
-    // live position is free, so refresh often while airborne; schedules change slowly
-    // Positions are free, so in the air the map moves every 30 s. Before take-off the details
-    // themselves only change every 30 to 60 minutes (see the Worker), so checking every 2 is plenty.
-    // In the air every 30 s; before take-off every 2 min (every minute in the last hour); after
-    // landing every 5 min for an hour and a half, for the belt; then it's done.
+    // Before take-off every 2 min (every minute in the last hour); in the air every 5 min; after
+    // landing every 5 min for half an hour, for the belt; then it's done.
     refreshMs: (data) => {
       const ph = data?.status?.phase;
-      if (ph === "air") return 30000;
+      if (ph === "air") return 300000;
       if (ph === "cancelled") return 0;
-      if (ph === "landed") return Date.now() - Date.parse(data.arrival?.actual || data.arrival?.revised || data.arrival?.sched || 0) < 90 * 60000 ? 300000 : 0;
+      if (ph === "landed") return Date.now() - Date.parse(data.arrival?.actual || data.arrival?.revised || data.arrival?.sched || 0) < 30 * 60000 ? 300000 : 0;
       const dep = Date.parse(data?.departure?.revised || data?.departure?.sched || 0);
       return dep && dep - Date.now() < 3600000 ? 60000 : 120000;
     },
@@ -358,13 +355,13 @@ async function refreshPinned(force = false) {
     const view = p.mode === "train" ? renderTrain(data, { stop: p.stop, foldOpen: false, onPickStop() {}, onToggleFold() {}, onChangeStop() {} }) : renderFlight(data);
     if (pinned !== p) return;
     savePin({ ...p, island: view.island });
-    done = p.mode === "train" ? data.status?.phase === "arrived" : ["landed", "cancelled"].includes(data.status?.phase);
+    done = p.mode === "train" ? data.status?.phase === "arrived" : !MODES.flight.refreshMs(data);
     syncIsland();
   } catch {
     /* keep the saved copy: the island shows how old it is */
   }
-  // The same calm pace as the journey's own screen; in the air, the plane's position is free to follow.
-  const every = p.mode === "train" ? lastPinData && trainCadence(lastPinData, p.stop).ms : lastPinData?.status?.phase === "air" ? 60000 : 180000;
+  // The same pace as the journey's own screen.
+  const every = p.mode === "train" ? lastPinData && trainCadence(lastPinData, p.stop).ms : lastPinData && MODES.flight.refreshMs(lastPinData);
   if (pinned === p && !done && every) pinTimer = setTimeout(() => refreshPinned(true), every);
 }
 document.addEventListener("visibilitychange", () => {
@@ -1041,7 +1038,7 @@ function freshNote(s) {
   if (s.mode === "train") {
     const c = trainCadence(d, s.stop);
     line = c.ms ? `Checking ${c.text}` : null;
-  } else if (d.status.phase === "air") line = "Following the plane live. Its position updates every 30 seconds";
+  } else if (d.status.phase === "air") line = "Following the plane. Its position and times update every 5 minutes";
   else if (d.status.phase === "pre" && d.status.windowMin) {
     const every = d.status.windowMin >= 60 ? `${Math.round(d.status.windowMin / 60)} hour${d.status.windowMin >= 120 ? "s" : ""}` : `${d.status.windowMin} min`;
     line = `Flight details checked ${d.status.checkedAt ? ago(d.status.checkedAt) : "recently"}, every ${every} at this stage`;
@@ -1226,7 +1223,8 @@ function mountFlightLive(el, j) {
       s.loadedAt = Date.now();
       recordFlight(data);
       // In the air the position moves every half minute; before, the details change slowly.
-      const every = data.status.phase === "air" ? 60000 : data.status.phase === "pre" ? Math.max(2, Math.min(15, data.status.windowMin || 10)) * 60000 : 0;
+      // The same pace as the full screen: a minute in the last hour, 5 in the air, 5 for half an hour after landing
+      const every = MODES.flight.refreshMs(data);
       s.nextAt = every ? Date.now() + every : 0;
       if (every) s.timer = setTimeout(load, every);
     } catch (e) {

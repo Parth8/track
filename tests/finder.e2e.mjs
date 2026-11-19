@@ -62,7 +62,9 @@ const upstream = async (url) => {
     const ixc = u.pathname.endsWith("IXC");
     return new Response(JSON.stringify({ iata: ixc ? "IXC" : "HYD", shortName: ixc ? "Chandigarh" : "Rajiv Gandhi Intl", municipalityName: ixc ? "Chandigarh" : "Hyderabad", timeZone: "Asia/Kolkata", location: ixc ? { lat: 30.67, lon: 76.79 } : { lat: 17.24, lon: 78.43 } }));
   }
-  if (u.hostname.includes("adsb")) return new Response(JSON.stringify({ ac: u.pathname.includes("IGO724") ? [{ lat: 29.31, lon: 77.3, alt_baro: 20600, gs: 413, track: 11, seen_pos: 3 }] : [] }));
+  // No live fixes in these tests: a live landing time is worked out on the real clock, which would
+  // make the results depend on the time of day. The airline's estimates stand in.
+  if (u.hostname.includes("adsb")) return new Response(JSON.stringify({ ac: [] }));
   // AeroDataBox with nothing heard from the airline about 6E 6254: "Unknown", and its own model's guess
   const unknown = /\/flights\/number\/6E6254\/(\d{4}-\d{2}-\d{2})/.exec(u.pathname);
   if (unknown) {
@@ -1282,12 +1284,10 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   assert.equal(await text(".phase-banner .lead"), "Departs in");
   assert.match(await text(".phase-banner .sub"), /Delayed 15m, now 10:45 PM/);
   assert.match(await text(".phase-banner"), /Your plane is in the air from Goa/);
-  // 6E 724 from Goa is 154 km out: about 20 min to land, 5 to the gate, 25 to turn round. Its live
-  // landing time is worked out by the Worker on the real clock, so only the shape is checked here.
+  // 6E 724 from Goa reaches the gate 10:17 PM, as the airline estimates, for a 10:45 PM departure
   assert.match(await text(".inbound-card .ib-lead"), /6E 724 from Goa brings the plane/);
-  const verdict = await text(".inbound-card .ib-verdict");
-  assert.match(verdict, /^Your departure can't be before about \d{1,2}:\d{2} [AP]M$/);
-  assert.match(await text(".phase-banner"), new RegExp(`expect ${verdict.replace(/.*about /, "")} or later`));
+  assert.match(await text(".inbound-card .ib-verdict"), /^Tight: 28 min to turn round/);
+  assert.match(await text(".phase-banner"), /reaches the gate 10:17 PM, a tight turnaround/);
   // All four times, with the schedule struck through where it moved
   const rows = await p.locator(".g2g-row .g2g-label").allTextContents();
   assert.deepEqual(rows, ["Leaves the gate", "Takes off", "Lands", "At the gate"]);
