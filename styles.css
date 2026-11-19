@@ -6377,3 +6377,247 @@ textarea.jn-input {
 .hero-ticket + .pill-btn {
   margin-left: 0;
 }
+
+/* ============================================================
+   Flights: gate to gate, where's your plane, recent days
+   ============================================================ */
+.card-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+.g2g {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+.g2g-row {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  padding: 8px 0;
+  position: relative;
+}
+.g2g-row > i {
+  grid-row: 1 / 3;
+  width: 12px;
+  height: 12px;
+  margin-top: 5px;
+  border-radius: 50%;
+  border: 2.5px solid var(--line);
+  background: var(--card);
+  position: relative;
+  z-index: 1;
+}
+.g2g-row.done > i {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.g2g-row:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 5.5px;
+  top: 22px;
+  bottom: -8px;
+  border-left: 1.5px dashed color-mix(in srgb, var(--line) 70%, var(--hair));
+}
+.g2g-label {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.g2g-time {
+  grid-row: 1 / 3;
+  grid-column: 3;
+  text-align: right;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.g2g-time s {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.g2g-kind {
+  grid-column: 2;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.g2g-note {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--hair);
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.inbound-card .ib-lead {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.ib-track {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 12px;
+}
+.ib-end {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--ink-soft);
+}
+.ib-line {
+  flex: 1;
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hair);
+}
+.ib-line i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.8s var(--ease-out);
+}
+.ib-line b {
+  position: absolute;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--tint);
+  color: var(--deep);
+  transition: left 0.8s var(--ease-out);
+}
+.ib-line b svg {
+  width: 16px;
+  height: 16px;
+  transform: rotate(90deg);
+}
+.ib-now,
+.ib-gate {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.ib-verdict {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 14.5px;
+  font-weight: 700;
+  background: var(--mint-bg);
+  color: var(--early);
+}
+.ib-verdict.warn,
+.ib-verdict.late {
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+}
+
+.hist-lead {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.hist-sub {
+  margin: 2px 0 14px;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+}
+.hist-strip {
+  display: flex;
+  gap: 2px;
+  height: 72px;
+  position: relative;
+}
+.hist-strip::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--hair);
+}
+.hist-col {
+  flex: 1;
+  position: relative;
+  border-radius: 4px;
+  outline-offset: 2px;
+}
+.hist-col i {
+  position: absolute;
+  left: 15%;
+  right: 15%;
+  min-height: 3px;
+  background: var(--early);
+}
+.hist-col.up i {
+  bottom: 50%;
+  border-radius: 4px 4px 0 0;
+}
+.hist-col.down i {
+  top: 50%;
+  border-radius: 0 0 4px 4px;
+}
+.hist-col.slow i {
+  background: color-mix(in srgb, var(--late) 55%, var(--card));
+}
+.hist-col.late i {
+  background: var(--late);
+}
+.hist-col.x i {
+  background: repeating-linear-gradient(45deg, var(--rose-ink) 0 3px, transparent 3px 6px);
+  border: 1px solid var(--rose-ink);
+}
+.hist-col:hover i,
+.hist-col:focus-visible i {
+  filter: brightness(1.15);
+}
+.hist-axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.map-plane.inbound {
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+  box-shadow: 0 0 0 1.5px var(--line);
+}
+.map-plane.inbound svg {
+  color: var(--ink-soft);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ib-line i,
+  .ib-line b {
+    transition: none;
+  }
+}
+.banner.warn {
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+}
+.banner strong {
+  font-weight: 800;
+}
+.tl-time .t-due {
+  font-size: 0.9em;
+  letter-spacing: 0;
+}

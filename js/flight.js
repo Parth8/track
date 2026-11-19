@@ -1,5 +1,6 @@
 import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing, timeNode, dayShift } from "./util.js";
 import { icons, weatherLook, bodyType } from "./icons.js";
+import { historySummary, turnaround, inboundAtGate, ON_TIME_MIN } from "./flight-insights.js";
 
 /**
  * Flight status screen. The order changes with the phase:
@@ -27,6 +28,16 @@ export function renderFlight(f) {
   const now = Date.now();
   const reported = !!(f.position && Number.isFinite(f.position.lat));
   const live = reported && f.position.source === "live";
+  // Has anyone (airline, airport) said anything about this flight? Older data without the flag counts as yes.
+  const reported0 = f.status.reported !== false;
+  const turn = turnaround(f, now);
+  const ib = f.inbound;
+  const tight =
+    turn?.verdict === "late"
+      ? `Your plane is still on its way from ${ib.from.city || ib.from.code}, so expect ${t12(turn.earliest, depTz)} or later`
+      : turn?.verdict === "tight"
+        ? `Your plane reaches the gate ${t12(turn.gate.at, depTz)}, a tight turnaround`
+        : null;
 
   let fraction = phase === "landed" ? 1 : 0;
   if (phase === "air" && takeoff && arrTime) {
@@ -58,6 +69,13 @@ export function renderFlight(f) {
       badge = { text: `Waiting at ${dep.code}`, cls: "estimated" };
       note = "Your route. The plane moves along it once it takes off.";
       opts.position = line[0];
+      // The plane flying in, live, with a faint line to your airport
+      const ip = f.inbound?.position;
+      if (ip && Number.isFinite(ip.lat) && f.inbound.phase === "air") {
+        opts.inbound = { position: [ip.lon, ip.lat], trackDeg: ip.trackDeg, line: greatCircle([ip.lon, ip.lat], [dep.lon, dep.lat], 32) };
+        badge = { text: "Your plane, flying in", cls: "" };
+        note = `${f.inbound.number || "The inbound flight"} on its way to ${dep.code}. It flies your route once it has turned round.`;
+      }
     } else if (phase === "air") {
       if (reported) {
         badge = live ? { text: "Live position", cls: "" } : { text: "Reported position", cls: "" };
@@ -125,14 +143,24 @@ export function renderFlight(f) {
   } else if (phase === "pre") {
     const d = f.status.delayDep;
     tone(d);
+    if (turn?.verdict === "late") banner.classList.replace("good", "warn") || banner.classList.replace("tone", "warn");
     const until = Date.parse(depTime) - now;
     const dc = delayChip(d);
-    const statusWord = /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
+    const statusWord = f.status.leftGate ? "Left the gate" : /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
+    // No report from anyone isn't "on time": say it's the schedule, and how old the last word is.
+    const timing = !reported0
+      ? `No live update yet. Scheduled ${t12(depTime, depTz)}`
+      : dc && dc.cls === "late"
+        ? `Delayed ${fmtMin(d)}, now ${t12(depTime, depTz)}`
+        : d != null && d <= -5
+          ? `Early, now ${t12(depTime, depTz)}`
+          : `On time at ${t12(depTime, depTz)}`;
     banner.append(
       lead(until > 0 ? "Departs in" : "Departure"),
       big(until > 0 ? countdown(until) : timeNode(depTime, depTz, { shift: dayShift(depTime, baseDate, depTz) })),
-      sub([statusWord, dc && dc.cls === "late" ? `Delayed ${fmtMin(d)}, now ${t12(depTime, depTz)}` : `On time at ${t12(depTime, depTz)}`].filter(Boolean).join(". "))
+      sub([statusWord, timing].filter(Boolean).join(". "))
     );
+    if (tight) banner.append(sub(tight));
   } else if (phase === "air") {
     const d = f.status.delayArr;
     tone(d);
@@ -193,6 +221,10 @@ export function renderFlight(f) {
       neutral = true;
     }
     if (!isDep && phase === "landed") note = late ? `Landed ${late.text.toLowerCase()}` : "Landed";
+    // A model's guess at the arrival, kept apart from anything the airline said
+    if (!late && phase === "pre") neutral = true; // "Scheduled" isn't good news, just the plan
+    if (!isDep && !late && m.predicted && phase === "pre") note = `Scheduled. A model estimates ${t12(m.predicted, tz)}`;
+    if (isDep && !reported0 && phase === "pre") note = "Scheduled, no update yet";
     const chips = [];
     if (m.gate) chips.push(h("span", { class: "gate-chip" }, svg(icons.gate), m.gate, h("small", { text: "Gate" })));
     if (m.terminal) chips.push(h("span", { class: "chip quiet", text: `Terminal ${m.terminal}` }));
@@ -216,6 +248,7 @@ export function renderFlight(f) {
     );
   };
   const blockMins = depTime && arrTime ? Date.parse(arrTime) - Date.parse(depTime) : null;
+  const overnight = arrTime && dateKey(arrTime, arrTz) !== baseDate;
   blocks.route = h(
     "section",
     { class: "card" },
@@ -223,11 +256,114 @@ export function renderFlight(f) {
     h(
       "div",
       { class: "leg-mid" },
-      h("span", { class: "tn", text: [blockMins ? duration(blockMins) : null, f.distanceKm ? `${f.distanceKm.toLocaleString("en-IN")} km` : null].filter(Boolean).join(", ") }),
+      h("span", { class: "tn", text: [blockMins ? duration(blockMins) : null, f.distanceKm ? `${f.distanceKm.toLocaleString("en-IN")} km` : null, overnight ? "Overnight" : null].filter(Boolean).join(" · ") }),
       h("i")
     ),
     legBlock("arr", arr, arrTz, arrTime, f.status.delayArr, false)
   );
+
+  /* ---------------- gate to gate: the four times ---------------- */
+  if (f.times) {
+    const rows = [
+      ["out", "Leaves the gate", dep, depTz],
+      ["off", "Takes off", dep, depTz],
+      ["on", "Lands", arr, arrTz],
+      ["in", "At the gate", arr, arrTz],
+    ];
+    const list = h("ol", { class: "g2g" });
+    for (const [k, label, , tz] of rows) {
+      const t = f.times[k] || {};
+      const shown = t.actual || t.est || t.sched;
+      if (!shown) continue;
+      const kind = t.actual ? "done" : t.est ? "est" : "sched";
+      const moved = t.sched && Math.abs(Date.parse(shown) - Date.parse(t.sched)) >= 60000;
+      const delta = t.sched ? Math.round((Date.parse(shown) - Date.parse(t.sched)) / 60000) : 0;
+      list.append(
+        h(
+          "li",
+          { class: `g2g-row ${kind}` },
+          h("i", { "aria-hidden": "true" }),
+          h("span", { class: "g2g-label", text: label }),
+          h(
+            "span",
+            { class: "g2g-time tn" },
+            timeNode(shown, tz, { shift: dayShift(shown, baseDate, tz) }),
+            moved ? h("s", { text: t12(t.sched, tz) }) : null
+          ),
+          h("small", { class: `g2g-kind ${moved && delta > 0 ? "t-late" : moved ? "t-early" : ""}`, text: t.actual ? "Actual" : t.est ? (moved ? `${fmtMin(delta)} ${delta > 0 ? "late" : "early"}` : "Expected") : "Scheduled" })
+        )
+      );
+    }
+    const taxiOut = f.times.out?.actual && f.times.off?.actual ? Date.parse(f.times.off.actual) - Date.parse(f.times.out.actual) : null;
+    const taxiIn = f.times.on?.actual && f.times.in?.actual ? Date.parse(f.times.in.actual) - Date.parse(f.times.on.actual) : null;
+    const air = (f.times.off?.actual || f.times.off?.est) && (f.times.on?.actual || f.times.on?.est) ? Date.parse(f.times.on.actual || f.times.on.est) - Date.parse(f.times.off.actual || f.times.off.est) : null;
+    const notes = [air ? `${duration(air)} in the air` : null, taxiOut ? `${duration(taxiOut)} taxiing out` : null, taxiIn ? `${duration(taxiIn)} taxiing in` : null].filter(Boolean);
+    if (list.childElementCount)
+      blocks.times = h("section", { class: "card g2g-card" }, h("h3", { class: "card-title", text: "Gate to gate" }), list, notes.length ? h("p", { class: "g2g-note tn", text: notes.join(" · ") }) : null);
+  }
+
+  /* ---------------- where's your plane: the flight flying in ---------------- */
+  if (ib && phase === "pre") {
+    const from = ib.from.city || ib.from.code;
+    const gate = inboundAtGate(ib);
+    let now1 = "";
+    if (ib.phase === "cancelled") now1 = "That flight is cancelled; the airline will bring another plane.";
+    else if (ib.phase === "diverted") now1 = "That flight has diverted; the airline will bring another plane.";
+    else if (ib.landed) now1 = gate?.how === "actual" ? `At the gate in ${dep.code} since ${t12(gate.at, depTz)}.` : `Landed in ${dep.code}, taxiing to the gate.`;
+    else if (ib.phase === "air") {
+      const lands = ib.liveEta || ib.times.on.est || ib.times.on.sched;
+      now1 = `In the air from ${from}. Lands ${t12(lands, depTz)}${ib.liveEta ? " going by its live speed" : ""}.`;
+    } else {
+      const out = ib.times.out.est || ib.times.out.sched;
+      now1 = `Still in ${from}. Due to leave ${t12(out, depTz)}${ib.delayDep >= 5 ? `, ${fmtMin(ib.delayDep)} late` : ""}.`;
+    }
+    const verdicts = {
+      here: ["ok", "Your plane is here"],
+      ok: ["ok", `Enough time to turn round: ${turn?.gapMin} min`],
+      tight: ["warn", `Tight: ${turn?.gapMin} min to turn round, about ${turn?.minTurn} is the quickest`],
+      late: ["late", turn?.earliest ? `Your departure can't be before about ${t12(turn.earliest, depTz)}` : ""],
+    };
+    const [cls, verdict] = turn ? verdicts[turn.verdict] : ["", ""];
+    const pct = ib.landed ? 100 : Number.isFinite(ib.progress) ? ib.progress : ib.phase === "air" ? 50 : 0;
+    const bar = h("div", { class: "ib-track", "aria-hidden": "true" }, h("span", { class: "ib-end", text: ib.from.code }), h("div", { class: "ib-line" }, h("i"), h("b", {}, svg(icons.plane))), h("span", { class: "ib-end", text: dep.code }));
+    bar.querySelector(".ib-line i").style.width = `${pct}%`;
+    bar.querySelector(".ib-line b").style.left = `${pct}%`;
+    blocks.inbound = h(
+      "section",
+      { class: "card inbound-card" },
+      h("h3", { class: "card-title", text: "Where's your plane" }),
+      h("p", { class: "ib-lead" }, h("strong", { text: ib.number || "The inbound flight" }), ` from ${from} brings the plane for this flight.`),
+      bar,
+      h("p", { class: "ib-now", text: now1 }),
+      gate && !ib.landed ? h("p", { class: "ib-gate tn", text: `At the gate about ${t12(gate.at, depTz)}${gate.how === "schedule" ? " (schedule)" : ""}` }) : null,
+      verdict ? h("p", { class: `ib-verdict ${cls}`, text: verdict }) : null
+    );
+  }
+
+  /* ---------------- the last two weeks of this flight ---------------- */
+  const hist = historySummary(f.history);
+  if (hist && phase !== "air") {
+    const max = Math.max(30, ...hist.bars.map((b) => Math.abs(b.delay ?? 0)));
+    const strip = h("div", { class: "hist-strip", role: "img", "aria-label": `Departure delay over the last ${hist.days} days. ${hist.text.join(". ")}.` });
+    for (const b of hist.bars) {
+      const late = b.delay != null && b.delay > ON_TIME_MIN;
+      const label = b.cancelled ? `${dayLabel(`${b.date}T12:00:00Z`, depTz)}: cancelled` : `${dayLabel(`${b.date}T12:00:00Z`, depTz)}: ${b.delay > 0 ? `${b.delay} min late` : b.delay < 0 ? `${-b.delay} min early` : "on time"}`;
+      const col = h("div", { class: `hist-col${b.cancelled ? " x" : late ? " late" : b.delay > 0 ? " slow" : " early"}`, title: label, tabindex: "0", "aria-label": label }, h("i"));
+      const hgt = b.cancelled ? 100 : Math.max(4, (Math.abs(b.delay) / max) * 100);
+      col.querySelector("i").style.height = `${hgt / 2}%`;
+      col.classList.add(b.delay > 0 || b.cancelled ? "up" : "down");
+      strip.append(col);
+    }
+    blocks.history = h(
+      "section",
+      { class: "card hist-card" },
+      h("h3", { class: "card-title", text: "Recent days" }),
+      h("p", { class: "hist-lead", text: hist.text[0] }),
+      h("p", { class: "hist-sub", text: hist.text.slice(1).join(" · ") }),
+      strip,
+      h("div", { class: "hist-axis" }, h("span", { text: "Earlier" }), h("span", { text: "Above the line: late · below: early" }), h("span", { text: "Yesterday" }))
+    );
+  }
 
   /* ---------------- good to know: icon tiles ---------------- */
   const gtkTitle = h("h2", { class: "section-title display", text: "Good to know" });
@@ -251,7 +387,11 @@ export function renderFlight(f) {
 
   const fixed = [];
   const body = bodyType(f.aircraft?.model);
-  if (body) fixed.push(tile(body.icon, "", body.label, f.aircraft.model, f.aircraft.reg ? `Registration ${f.aircraft.reg}` : null));
+  if (body) fixed.push(tile(body.icon, "", body.label, f.aircraft.model, f.aircraft.reg ? `Registration ${f.aircraft.reg}` : f.aircraft.code ? `Type ${f.aircraft.code}` : null));
+  if (f.plan?.eteMin && !(phase === "landed" && dep.actual && arr.actual))
+    fixed.push(tile(icons.plane, "", "Planned air time", duration(f.plan.eteMin * 60000), [f.plan.speedKmh ? `Cruise ${f.plan.speedKmh.toLocaleString("en-IN")} km/h` : null, f.plan.altitudeFt ? `${f.plan.altitudeFt.toLocaleString("en-IN")} ft` : null].filter(Boolean).join(", ") || null));
+  const seats = f.seats && [f.seats.first ? `${f.seats.first} first` : null, f.seats.business ? `${f.seats.business} business` : null, f.seats.economy ? `${f.seats.economy} economy` : null].filter(Boolean);
+  if (seats?.length) fixed.push(tile(icons.seat || icons.desk, "lav", "Seats", seats.join(", "), null));
   if (phase === "landed" && dep.actual && arr.actual) {
     fixed.push(tile(icons.timer, "", "Time in the air", duration(Date.parse(arr.actual) - Date.parse(dep.actual)), "Runway to runway"));
   } else if (blockMins) {
@@ -263,6 +403,7 @@ export function renderFlight(f) {
     fixed.push(tile(icons.terminal, "lav", "Terminals", `${dep.terminal ? `T${dep.terminal}` : dep.code} to ${arr.terminal ? `T${arr.terminal}` : arr.code}`, null));
 
   const wide = [];
+  if (f.codeshares?.length) wide.push(tile(icons.route, "lav", "Also sold as", f.codeshares.join(", "), "The same plane under partner airlines' numbers", true));
   const refTime = new Date(arrTime || now);
   const diff = tzOffset(arrTz, refTime) - tzOffset(depTz, refTime);
   if (diff && arrTime) {
@@ -361,7 +502,7 @@ export function renderFlight(f) {
     "p",
     { class: "data-credit" },
     "Flight data by ",
-    link("https://aerodatabox.com", "AeroDataBox"),
+    f.status.source === "flightaware" ? link("https://www.flightaware.com", "FlightAware") : link("https://aerodatabox.com", "AeroDataBox"),
     ". Live positions from ",
     link("https://adsb.lol", "adsb.lol"),
     " and ",
@@ -372,9 +513,9 @@ export function renderFlight(f) {
   /* ---------------- order by phase ---------------- */
   const order =
     {
-      pre: ["head", "banner", "route", "map"],
-      air: ["head", "map", "stats", "banner", "route"],
-      landed: ["head", "banner", "belt", "share", "route", "map"],
+      pre: ["head", "banner", "inbound", "route", "times", "map", "history"],
+      air: ["head", "map", "stats", "banner", "route", "times"],
+      landed: ["head", "banner", "belt", "share", "route", "times", "map", "history"],
       cancelled: ["head", "banner", "route", "map"],
       diverted: ["head", "banner", "map", "route"],
     }[phase] || ["head", "banner", "route", "map"];
@@ -442,7 +583,13 @@ export function renderFlight(f) {
       top: route,
       main: until > 0 ? [{ text: "Departs in " }, { strong: countdown(until) }] : [{ text: "Departs " }, timeAt(depTime, depTz)],
       chip,
-      detail: [dep.gate ? `Gate ${dep.gate}` : null, dep.terminal ? `Terminal ${dep.terminal}` : null, dep.checkIn && !dep.gate ? `Check-in ${dep.checkIn}` : null].filter(Boolean),
+      detail: [
+        dep.gate ? `Gate ${dep.gate}` : null,
+        dep.terminal ? `Terminal ${dep.terminal}` : null,
+        dep.checkIn && !dep.gate ? `Check-in ${dep.checkIn}` : null,
+        turn?.verdict === "late" ? `Plane still coming, ${clock(turn.earliest, depTz)} at the earliest` : turn?.verdict === "tight" ? "Tight turnaround" : null,
+        !reported0 ? "No live update yet" : null,
+      ].filter(Boolean),
       progress: null,
     };
   } else if (phase === "air") {

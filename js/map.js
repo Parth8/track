@@ -71,6 +71,8 @@ export async function mountMap(container, opts) {
       ? h("div", { class: "map-plane", "aria-hidden": "true" }, svg(icons.plane))
       : h("div", { class: "map-marker", "aria-hidden": "true" });
   const marker = new Marker({ element: markerEl, rotationAlignment: "map" });
+  // A second plane: the one flying in to operate this flight
+  const inboundMarker = new Marker({ element: h("div", { class: "map-plane inbound", "aria-hidden": "true" }, svg(icons.plane)), rotationAlignment: "map" });
 
   const empty = { type: "FeatureCollection", features: [] };
   const lineFeature = (coords) => ({ type: "Feature", geometry: { type: "LineString", coordinates: coords }, properties: {} });
@@ -99,9 +101,16 @@ export async function mountMap(container, opts) {
     if (o.hideMarker) marker.remove();
     else marker.setLngLat(pos).addTo(map);
     if (o.mode === "flight" && Number.isFinite(o.trackDeg)) marker.setRotation(o.trackDeg);
+    const ib = o.inbound;
+    map.getSource("inbound").setData(ib?.line?.length > 1 ? lineFeature(ib.line) : empty);
+    if (ib?.position) {
+      inboundMarker.setLngLat(ib.position).addTo(map);
+      if (Number.isFinite(ib.trackDeg)) inboundMarker.setRotation(ib.trackDeg);
+    } else inboundMarker.remove();
     if (!fitted) {
       const b = new LngLatBounds(line[0], line[0]);
       line.forEach((p) => b.extend(p));
+      if (o.inbound?.position) b.extend(o.inbound.position);
       map.fitBounds(b, { padding: { top: 56, bottom: 40, left: 40, right: 40 }, duration: 0, maxZoom: 9 });
       fitted = true;
     }
@@ -123,6 +132,14 @@ export async function mountMap(container, opts) {
     map.addSource("done", { type: "geojson", data: empty });
     map.addSource("ahead", { type: "geojson", data: empty });
     map.addSource("ends", { type: "geojson", data: empty });
+    map.addSource("inbound", { type: "geojson", data: empty });
+    map.addLayer({
+      id: "inbound",
+      type: "line",
+      source: "inbound",
+      layout: { "line-cap": "round" },
+      paint: { "line-color": c.deep, "line-opacity": 0.45, "line-width": 2, "line-dasharray": [1, 2] },
+    });
     map.addLayer({
       id: "ahead",
       type: "line",

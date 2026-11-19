@@ -21,6 +21,14 @@
  *                             Add it with the "Secret" type, never "Text". It is only ever
  *                             sent to the AeroDataBox host, and every response is checked
  *                             so that no secret value can leave this Worker.
+ *   FA_KEY            SECRET  optional, FlightAware AeroAPI key. With it, flights from 12 hours
+ *                             before departure to 2 hours after landing come from FlightAware:
+ *                             the airline's estimates for gate and runway times, the plane flying
+ *                             in, gates, belts and the last two weeks of the flight. AeroDataBox
+ *                             stays the fallback, and covers flights outside that window.
+ *   FA_MONTHLY_CAP    text    optional, AeroAPI calls a month (default 300)
+ *   FA_PER_FLIGHT_DAILY text  optional, AeroAPI calls one flight can use a day (default 16)
+ *   FA_VISITOR_DAILY  text    optional, new flights one visitor can bring onto AeroAPI a day (default 4)
  *   ADB_HOST          text    optional, default aerodatabox.p.rapidapi.com
  *   REQUIRE_ORIGIN    text    optional, "false" lets you test in a browser tab
  *   QUOTA             KV namespace binding: the flight-data budget. Flight search stays off
@@ -291,8 +299,12 @@ async function trainRoute(url, ctx) {
 
   const fresh = url.searchParams.get("fresh") === "1";
   return cached(ctx, `train/${no}/${date}`, TTL.train, async () => {
-    // Today: the crowd-sourced feed has predictions. Past runs: the official record is better.
-    const order = offset === 0 ? [fromRailYatri, fromNtes] : [fromNtes, fromRailYatri];
+    // RailYatri first for every run, overnight ones included: it answers in a second or two and
+    // has the newest reports. NTES never answers from Cloudflare's network (it times out after
+    // ~16 s), so it's kept as a short last resort rather than a first stop that holds everything up.
+    const ntes = (n, d, o, c) => within(6000, fromNtes(n, d, o, c));
+    Object.defineProperty(ntes, "name", { value: "fromNtes" });
+    const order = [fromRailYatri, ntes];
     const failures = [];
     for (const source of order) {
       try {
@@ -652,7 +664,7 @@ const AIRLINE_ICAO = {
  *   5. otherwise the last known copy, labelled, or a clear "resting" message
  */
 async function flightRoute(url, env, ctx, request) {
-  if (!env.ADB_KEY) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
+  if (!env.ADB_KEY && !env.FA_KEY) throw new ApiError(503, "flights_not_configured", "Flight tracking is not switched on yet.");
   const raw = (url.searchParams.get("no") || "").toUpperCase().replace(/\s+/g, "");
   if (!/^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(raw)) throw new ApiError(400, "invalid_flight", "Flight numbers look like 6E 6252 or AI 101.");
   const today = istToday();
@@ -683,6 +695,17 @@ async function flightRoute(url, env, ctx, request) {
         flight = old;
         if (live) flight.position = live;
         liveDone = true;
+      }
+    }
+    // FlightAware's AeroAPI, when a key is set: the airline's own estimates for all four times,
+    // the plane flying in, and the last two weeks of this flight. Used around the flight only.
+    if (!flight && env.FA_KEY && faWindow(old, date, now)) {
+      try {
+        flight = await fromFlightAware(env, ctx, request, raw, date);
+        if (flight) putFlight(ctx, key, flight);
+      } catch (err) {
+        log("warn", "flightaware", err.code || String(err.message || err).slice(0, 80));
+        flight = null; // fall back to AeroDataBox below
       }
     }
     // A departure board someone's search already paid for
@@ -727,6 +750,16 @@ async function flightRoute(url, env, ctx, request) {
         flight.status.phase = "air";
         flight.status.inferred = true;
       }
+    }
+  }
+  // The plane flying in: its live position and landing time, free, on every request before departure.
+  if (flight.inbound && flight.status.phase === "pre" && !flight.inbound.landed) {
+    const ib = flight.inbound;
+    const live = await livePosition(ctx, { callsign: ib.callsign, aircraft: { reg: ib.reg } }).catch(() => null);
+    if (live && ((live.altFt ?? 0) > 1500 || (live.speedKmh ?? 0) > 220)) {
+      ib.position = live;
+      ib.phase = "air";
+      ib.liveEta = liveEta({ position: live, arrival: { lat: flight.departure.lat, lon: flight.departure.lon } });
     }
   }
   // While it flies, a landing time worked out from its live speed and the distance left (free).
@@ -797,6 +830,234 @@ async function fetchFlight(env, ctx, raw, date) {
   if (!Array.isArray(list) || !list.length) throw new ApiError(404, "not_found", `No flight ${raw} found on ${date}.`);
   ctx.waitUntil(rememberAirports(env, [list[0].departure?.airport, list[0].arrival?.airport]).catch(() => {}));
   return normaliseFlight(raw, date, list);
+}
+
+/* ---------- FlightAware AeroAPI: the airline's estimates, the inbound plane, recent history ---------- */
+
+const FA_BASE = "https://aeroapi.flightaware.com/aeroapi";
+const FA_CAP_DEFAULT = 300; // AeroAPI calls a month (each flight check is one, two with an inbound plane)
+const FA_PER_FLIGHT_DEFAULT = 16; // calls one flight can use in a day
+const FA_VISITOR_DEFAULT = 4; // new flights one visitor can bring onto FlightAware in a day
+
+// ICAO type codes as people know them.
+const AIRCRAFT_TYPES = {
+  A19N: "Airbus A319neo", A319: "Airbus A319", A20N: "Airbus A320neo", A320: "Airbus A320", A21N: "Airbus A321neo", A321: "Airbus A321",
+  A332: "Airbus A330-200", A333: "Airbus A330-300", A339: "Airbus A330-900neo", A359: "Airbus A350-900", A35K: "Airbus A350-1000", A388: "Airbus A380",
+  B737: "Boeing 737-700", B738: "Boeing 737-800", B739: "Boeing 737-900", B38M: "Boeing 737 MAX 8", B39M: "Boeing 737 MAX 9",
+  B763: "Boeing 767-300", B772: "Boeing 777-200", B77L: "Boeing 777-200LR", B77W: "Boeing 777-300ER", B788: "Boeing 787-8", B789: "Boeing 787-9", B78X: "Boeing 787-10",
+  B744: "Boeing 747-400", B748: "Boeing 747-8", AT72: "ATR 72", AT75: "ATR 72-500", AT76: "ATR 72-600", DH8D: "De Havilland Dash 8-400",
+  E190: "Embraer E190", E195: "Embraer E195", E290: "Embraer E190-E2", E295: "Embraer E195-E2", CRJ9: "Bombardier CRJ900", A20X: "Airbus A320",
+};
+export const aircraftName = (code) => (code ? AIRCRAFT_TYPES[code.toUpperCase()] || code.toUpperCase() : null);
+
+/**
+ * Whether to ask FlightAware: from 12 hours before departure until 2 hours after landing, going by
+ * what we last knew; with nothing known yet, for flights from yesterday to tomorrow.
+ */
+export function faWindow(old, date, now = Date.now()) {
+  if (old?.departure?.sched) {
+    const dep = Date.parse(old.departure.sched);
+    const arr = Date.parse(old.arrival?.sched || old.departure.sched) + 2 * 3600000;
+    return now > dep - 12 * 3600000 && now < arr;
+  }
+  const days = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${istToday()}T00:00:00Z`)) / 86400000);
+  return Math.abs(days) <= 1;
+}
+
+/** FlightAware's own budget, separate from AeroDataBox's: a month cap, a per-flight cap, a per-visitor cap. */
+async function spendFa(env, request, item) {
+  const kv = env.QUOTA;
+  if (!kv || typeof kv.get !== "function") return;
+  const mk = `fa/${istToday().slice(0, 7)}`;
+  const used = Number(await kv.get(mk)) || 0;
+  if (used >= intEnv(env.FA_MONTHLY_CAP, FA_CAP_DEFAULT)) throw new ApiError(503, "fa_resting", "FlightAware lookups are used up for this month.");
+  const fk = `fa-calls/${istToday()}/${item}`;
+  const n = Number(await kv.get(fk)) || 0;
+  if (n >= intEnv(env.FA_PER_FLIGHT_DAILY, FA_PER_FLIGHT_DEFAULT)) throw new ApiError(503, "fa_flight_rest", "This flight has had its FlightAware checks for today.");
+  const vk = await visitorKey(request);
+  if (vk && !item.startsWith("inbound/")) {
+    const key = `fa-${vk}`;
+    let seen = [];
+    try {
+      seen = JSON.parse((await kv.get(key)) || "[]");
+    } catch {
+      seen = [];
+    }
+    if (!seen.includes(item)) {
+      if (seen.length >= intEnv(env.FA_VISITOR_DAILY, FA_VISITOR_DEFAULT)) throw new ApiError(429, "fa_visitor_limit", "Enough new flights from you today.");
+      await kv.put(key, JSON.stringify([...seen, item]), { expirationTtl: 2 * 86400 });
+    }
+  }
+  await kv.put(fk, String(n + 1), { expirationTtl: 2 * 86400 });
+  await kv.put(mk, String(used + 1), { expirationTtl: 40 * 86400 });
+}
+
+async function faGet(env, path) {
+  let res;
+  try {
+    res = await getWithRetry(`${FA_BASE}${path}`, { headers: { "x-apikey": env.FA_KEY, Accept: "application/json" } }, { timeout: 8000, retries: 0 });
+  } catch {
+    throw new ApiError(502, "upstream_unavailable", "FlightAware is slow right now.");
+  }
+  if (res.status === 404 || res.status === 400) throw new ApiError(404, "not_found", "FlightAware doesn't know this flight.");
+  if (res.status === 401 || res.status === 403 || res.status === 429) throw new ApiError(503, "fa_quota", "FlightAware turned the lookup down.");
+  if (!res.ok) throw new ApiError(502, "upstream_unavailable", "FlightAware is slow right now.");
+  return res.json();
+}
+
+/** The local calendar day an ISO time falls on in a time zone. */
+const localDay = (iso, tz) => (iso ? new Intl.DateTimeFormat("en-CA", { timeZone: tz || "UTC" }).format(new Date(iso)) : null);
+const faMin = (sec) => (Number.isFinite(sec) ? Math.round(sec / 60) : null);
+const faTimes = (f, k) => ({ sched: f[`scheduled_${k}`] || null, est: f[`estimated_${k}`] || null, actual: f[`actual_${k}`] || null });
+
+/** One flight looked up on FlightAware, with its inbound plane. Null when FlightAware has no such flight that day. */
+async function fromFlightAware(env, ctx, request, raw, date) {
+  await spendFa(env, request, `${raw}/${date}`);
+  const data = await faGet(env, `/flights/${encodeURIComponent(raw)}?ident_type=designator&max_pages=1`);
+  const list = Array.isArray(data?.flights) ? data.flights : [];
+  const f = list.find((x) => localDay(x.scheduled_out || x.scheduled_off, x.origin?.timezone) === date);
+  if (!f) return null;
+  const [depInfo, arrInfo] = await Promise.all([f.origin?.code_iata, f.destination?.code_iata].map((c) => (c ? airportInfo(env, c).catch(() => null) : null)));
+  const flight = normaliseFa(raw, date, f, list, { dep: depInfo, arr: arrInfo });
+  // The plane flying in to operate this flight: worth a second call only before it leaves.
+  if (f.inbound_fa_flight_id && flight.status.phase === "pre") {
+    try {
+      await spendFa(env, request, `inbound/${raw}/${date}`);
+      const ib = (await faGet(env, `/flights/${encodeURIComponent(f.inbound_fa_flight_id)}`))?.flights?.[0];
+      flight.inbound = ib ? inboundOf(ib, f.origin?.code_iata) : null;
+    } catch {
+      flight.inbound = null;
+    }
+  }
+  return flight;
+}
+
+/** The inbound flight, kept only if it really flies into this flight's departure airport. */
+export function inboundOf(ib, into) {
+  if (!ib || (into && ib.destination?.code_iata && ib.destination.code_iata !== into)) return null;
+  const iata = ib.operator_iata || "";
+  const num = ib.flight_number || "";
+  return {
+    number: iata && num ? `${iata} ${num}` : ib.ident_iata || ib.ident || null,
+    callsign: ib.atc_ident || ib.ident_icao || null,
+    reg: ib.registration || null,
+    from: { code: ib.origin?.code_iata || ib.origin?.code || "", city: ib.origin?.city || ib.origin?.name || "" },
+    to: { code: ib.destination?.code_iata || "", city: ib.destination?.city || "" },
+    phase: ib.cancelled ? "cancelled" : ib.diverted ? "diverted" : ib.actual_on || ib.actual_in ? "landed" : ib.actual_off ? "air" : "pre",
+    landed: !!(ib.actual_on || ib.actual_in),
+    times: { out: faTimes(ib, "out"), off: faTimes(ib, "off"), on: faTimes(ib, "on"), in: faTimes(ib, "in") },
+    delayDep: faMin(ib.departure_delay),
+    delayArr: faMin(ib.arrival_delay),
+    progress: Number.isFinite(ib.progress_percent) ? ib.progress_percent : null,
+    position: null,
+    liveEta: null,
+  };
+}
+
+/** The last two weeks of this flight number, newest first: what actually happened each day. */
+export function faHistory(list, date) {
+  return list
+    .filter((x) => {
+      const d = localDay(x.scheduled_out || x.scheduled_off, x.origin?.timezone);
+      return d && d < date && (x.actual_out || x.actual_off || x.cancelled || x.actual_in);
+    })
+    .map((x) => {
+      const out = x.actual_out || x.actual_off;
+      const inn = x.actual_in || x.actual_on;
+      return {
+        date: localDay(x.scheduled_out || x.scheduled_off, x.origin?.timezone),
+        cancelled: !!x.cancelled,
+        diverted: !!x.diverted,
+        out: x.scheduled_out && out ? { sched: x.scheduled_out, actual: out } : null,
+        in: x.scheduled_in && inn ? { sched: x.scheduled_in, actual: inn } : null,
+        depDelay: x.scheduled_out && out ? Math.round((Date.parse(out) - Date.parse(x.scheduled_out)) / 60000) : null,
+        arrDelay: x.scheduled_in && inn ? Math.round((Date.parse(inn) - Date.parse(x.scheduled_in)) / 60000) : null,
+      };
+    })
+    .sort((a, b) => (a.date < b.date ? 1 : -1))
+    .slice(0, 14);
+}
+
+/** A FlightAware flight in the shape every screen already reads, plus what only FlightAware has. */
+export function normaliseFa(raw, date, f, list = [], info = {}) {
+  const air = (m, a) => ({
+    code: m?.code_iata || m?.code || "",
+    name: a?.shortName || m?.name || "",
+    city: a?.municipalityName || m?.city || m?.name || "",
+    tz: m?.timezone || a?.timeZone || null,
+    lat: a?.location?.lat ?? null,
+    lon: a?.location?.lon ?? null,
+  });
+  const iata = (f.operator_iata || raw.slice(0, 2)).toUpperCase();
+  const no = f.flight_number || raw.slice(2);
+  const t = { out: faTimes(f, "out"), off: faTimes(f, "off"), on: faTimes(f, "on"), in: faTimes(f, "in") };
+  const landed = !!(t.on.actual || t.in.actual);
+  const phase = f.cancelled ? "cancelled" : f.diverted ? "diverted" : landed ? "landed" : t.off.actual ? "air" : "pre";
+  const dep = air(f.origin, info.dep);
+  const arr = air(f.destination, info.arr);
+  const gc = [dep.lat, dep.lon, arr.lat, arr.lon].every(Number.isFinite) ? haversineKm(dep.lat, dep.lon, arr.lat, arr.lon) : null;
+  const model = aircraftName(f.aircraft_type);
+  return {
+    kind: "flight",
+    number: `${iata} ${no}`,
+    date,
+    airline: { name: airlineName(iata, f.operator), iata },
+    callsign: (f.atc_ident || f.ident_icao || (AIRLINE_ICAO[iata] ? AIRLINE_ICAO[iata] + no : raw)).replace(/\s+/g, ""),
+    status: {
+      phase,
+      raw: f.status || "",
+      source: "flightaware",
+      reported: true,
+      delayDep: faMin(f.departure_delay),
+      delayArr: faMin(f.arrival_delay),
+      lastUpdated: new Date().toISOString(),
+      leftGate: !!t.out.actual && !t.off.actual,
+    },
+    departure: {
+      ...dep,
+      sched: t.out.sched || t.off.sched,
+      revised: t.out.actual || t.out.est || null,
+      runway: t.off.actual,
+      terminal: f.terminal_origin || null,
+      gate: f.gate_origin || null,
+      checkIn: null,
+      belt: null,
+      actual: t.off.actual || t.out.actual || null,
+    },
+    arrival: {
+      ...arr,
+      sched: t.in.sched || t.on.sched,
+      revised: t.in.actual || t.in.est || null,
+      runway: t.on.actual,
+      terminal: f.terminal_destination || null,
+      gate: f.gate_destination || null,
+      checkIn: null,
+      belt: f.baggage_claim || null,
+      actual: t.on.actual || t.in.actual || null,
+    },
+    times: t,
+    distanceKm: gc ? Math.round(gc) : Number.isFinite(f.route_distance) ? Math.round(f.route_distance * 1.609) : null,
+    aircraft: { model, code: f.aircraft_type || null, reg: f.registration || null, hex: null },
+    plan: {
+      eteMin: faMin(f.filed_ete),
+      speedKmh: Number.isFinite(f.filed_airspeed) ? Math.round(f.filed_airspeed * 1.852) : null,
+      altitudeFt: Number.isFinite(f.filed_altitude) ? f.filed_altitude * 100 : null,
+      distanceKm: Number.isFinite(f.route_distance) ? Math.round(f.route_distance * 1.609) : null,
+      route: f.route || null,
+    },
+    seats: { first: f.seats_cabin_first || null, business: f.seats_cabin_business || null, economy: f.seats_cabin_coach || null },
+    codeshares: (f.codeshares_iata || []).filter(Boolean).map((c) => c.replace(/^([A-Z0-9]{2})(\d)/, "$1 $2")),
+    progress: Number.isFinite(f.progress_percent) ? f.progress_percent : null,
+    history: faHistory(list, date),
+    inbound: null,
+    position: null,
+    legs: 1,
+  };
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const r = Math.PI / 180;
+  return 6371 * 2 * Math.asin(Math.sqrt(Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2));
 }
 
 /** Store a flight the way cached() does: a copy fresh for its phase, and a 36-hour fallback. */
@@ -914,7 +1175,8 @@ function flightTtl(f) {
       if (until > 24 * 3600000) return 12 * 3600;
       if (until > 6 * 3600000) return 3 * 3600;
       if (until > 2 * 3600000) return 3600;
-      return 30 * 60;
+      // FlightAware's estimates move with the inbound plane, so they're worth checking more often.
+      return f.status.source === "flightaware" ? 15 * 60 : 30 * 60;
     }
   }
 }
@@ -930,7 +1192,9 @@ function airportOf(m) {
     lat: a.location?.lat ?? null,
     lon: a.location?.lon ?? null,
     sched: t(m?.scheduledTime),
-    revised: t(m?.revisedTime) || t(m?.predictedTime),
+    // A revised time comes from the airline or airport; a predicted one is AeroDataBox's own model.
+    revised: t(m?.revisedTime),
+    predicted: m?.revisedTime ? null : t(m?.predictedTime),
     runway: t(m?.runwayTime),
     terminal: m?.terminal || null,
     gate: m?.gate || null,
@@ -984,6 +1248,10 @@ function normaliseFlight(no, date, list) {
       raw,
       delayDep: mins(dep.sched, dep.revised || depActual),
       delayArr: mins(arr.sched, arr.revised || arrActual),
+      source: "aerodatabox",
+      // Whether anyone has reported on this flight at all. "Unknown" with no revised time, or an
+      // update older than a day, means the times shown are the schedule, not a report.
+      reported: !(raw === "Unknown" && !dep.revised && !arr.revised && !depActual) && !(f.lastUpdatedUtc && now - Date.parse(f.lastUpdatedUtc.replace(" ", "T").replace("Z", "") + "Z") > 86400000 && !dep.revised && !arr.revised),
       lastUpdated: f.lastUpdatedUtc ? new Date(f.lastUpdatedUtc.replace(" ", "T").replace("Z", "") + "Z").toISOString() : new Date(now).toISOString(),
     },
     departure: { ...dep, actual: depActual },

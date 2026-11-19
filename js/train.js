@@ -40,7 +40,8 @@ export function renderTrain(run, ctx) {
   const chips = [];
   if (phase === "not_started" && !mine.passed) chips.push({ cls: "info", text: "Not started yet" });
   const dc = delayChip(mineDelay);
-  if (mineEst && mineEst.hi >= 3) chips.push({ cls: "late", text: `Likely ${estText(mineEst)}` });
+  if (mineEst?.due) chips.push({ cls: "late", text: "Due now · not reported yet" });
+  else if (mineEst && mineEst.hi >= 3) chips.push({ cls: "late", text: `Likely ${estText(mineEst)}` });
   else if (dc) {
     const how = dc.cls === "ok" ? "on time" : dc.cls === "late" ? `${fmtMin(mineDelay)} late` : `${fmtMin(mineDelay)} early`;
     chips.push({ cls: dc.cls, text: mine.passed ? `${mineIsOrigin ? "Left" : "Arrived"} ${how}` : `Expected ${how}` });
@@ -116,11 +117,15 @@ export function renderTrain(run, ctx) {
     );
   } else {
     const where = pos.stationName ? ["Passed ", b(pos.stationName), pos.kmPast ? `, ${pos.kmPast} km beyond` : "", ". "] : ["On the move. "];
-    const next = nextStop ? ["Next stop ", b(nextStop.name), approx(nextStop, "arr") ? " around " : " at ", b(clock(bestArr(nextStop))), "."] : [];
+    const next = !nextStop
+      ? []
+      : nextStop.est?.arr?.due
+        ? ["Next stop ", b(nextStop.name), ", due now but not reported there yet."]
+        : ["Next stop ", b(nextStop.name), approx(nextStop, "arr") ? " around " : " at ", b(clock(bestArr(nextStop))), "."];
     now.append(lead("Now"), text(...where, ...next));
   }
   const staleMin = j.status.lastUpdated ? (Date.now() - Date.parse(j.status.lastUpdated)) / 60000 : 0;
-  const stale = phase === "running" && staleMin > 20;
+  const stale = phase === "running" && staleMin > 10;
   if (j.status.lastUpdated && phase !== "not_started") {
     const checked = j.status.checkedAt ? `, checked ${ago(j.status.checkedAt)}` : "";
     now.append(
@@ -132,9 +137,16 @@ export function renderTrain(run, ctx) {
     node.append(
       h(
         "div",
-        { class: "banner info", role: "note" },
+        { class: `banner ${staleMin > 20 || j.status.servedStale ? "warn" : "info"}`, role: "note" },
         svg(icons.info),
-        h("span", { text: j.status.servedStale ? "Showing the last saved update while live data catches up." : `Last report is ${fmtMin(staleMin)} old, so times ahead may shift.` })
+        h(
+          "span",
+          {},
+          h("strong", { text: j.status.servedStale ? `Couldn't reach the live source. ` : `Last report ${fmtMin(staleMin)} ago. ` }),
+          j.status.servedStale
+            ? `Showing the update from ${j.status.lastUpdated ? clock(j.status.lastUpdated) : "earlier"}. The train has moved on since; times ahead are rough until the next report.`
+            : "Nobody has reported this train since, so it may already be further along. Times ahead are rough until the next report."
+        )
       )
     );
   }
@@ -390,10 +402,12 @@ export function renderTrain(run, ctx) {
   // The island: your stop and its time, how it's running, and what's next while it moves.
   const islandDetail = [];
   if (phase === "running" && atStop && atStop !== mine) islandDetail.push(`Halting at ${atStop.name}${atStop.platform ? `, PF ${atStop.platform}` : ""}`);
-  else if (phase === "running" && nextStop && nextStop !== mine) islandDetail.push(`Next: ${nextStop.name}, ${approx(nextStop, "arr")}${clock(bestArr(nextStop))}`);
+  else if (phase === "running" && nextStop && nextStop !== mine) islandDetail.push(`Next: ${nextStop.name}, ${nextStop.est?.arr?.due ? "due now" : `${approx(nextStop, "arr")}${clock(bestArr(nextStop))}`}`);
   if (!mine.passed && mine.platform) islandDetail.push(`PF ${mine.platform} at ${mine.name}`);
   const islandChip =
-    mineEst && mineEst.hi >= 3
+    mineEst?.due
+      ? { cls: "late", text: "Due now" }
+      : mineEst && mineEst.hi >= 3
       ? { cls: "late", text: estText(mineEst).replace(/^(\d+)–(\d+)m late$/, "$1–$2m late") }
       : dc
         ? { cls: dc.cls, text: dc.cls === "ok" ? "On time" : dc.text }
@@ -442,6 +456,15 @@ function timeCell(s, which, blank, startDate) {
   let cls = "";
   if (actual && delay != null) cls = delay >= 5 ? "t-late" : "t-early";
   else if (projected) cls = "t-est";
+  // Its likely time has gone by with no report: say so, rather than show a time that's past.
+  if (est?.due)
+    return h(
+      "span",
+      { class: "tl-time", "aria-label": `Due now, not reported yet. Scheduled ${clock(sched)}, ${est.lo}–${est.hi} minutes late` },
+      h("small", {}, timeNode(sched)),
+      h("b", { class: "t-est t-due", "data-k": `${s.code}-${which}`, text: "Due now" }),
+      h("small", { class: "t-est-range", text: "not reported yet" })
+    );
   return h(
     "span",
     { class: "tl-time", "aria-label": projected ? `Around ${clock(shown)}, ${estText(est)}, scheduled ${clock(sched)}` : null },

@@ -901,3 +901,106 @@ test("dayof: bad input is refused, and runs outside the tracker's window aren't 
   assert.equal((await get("/api/dayof?no=12786&at=S B")).status, 400);
   assert.equal((await get(`/api/dayof?no=12786&at=SBC&date=${addDays(istToday(), 5)}`)).status, 400);
 });
+
+/* ---------- FlightAware AeroAPI: the airline's estimates, the inbound plane, history ---------- */
+
+// The hand-built AeroAPI answers are for 19 Nov 2026; move every timestamp so that day is `day`.
+const FA_DAY = "2026-11-19";
+function faFixture(name, day) {
+  const shift = Date.parse(`${day}T00:00:00Z`) - Date.parse(`${FA_DAY}T00:00:00Z`);
+  const text = readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8").replace(/"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"/g, (_, iso) => JSON.stringify(new Date(Date.parse(iso) + shift).toISOString().replace(".000Z", "Z")));
+  return JSON.parse(text);
+}
+const HYD_AIRPORT = { iata: "HYD", shortName: "Hyderabad", municipalityName: "Hyderabad", timeZone: "Asia/Kolkata", location: { lat: 17.24, lon: 78.43 } };
+const IXC_AIRPORT = { iata: "IXC", shortName: "Chandigarh", municipalityName: "Chandigarh", timeZone: "Asia/Kolkata", location: { lat: 30.67, lon: 76.79 } };
+function serveFa(day, { fa = true, live = null } = {}) {
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    const json = (b, status = 200) => new Response(JSON.stringify(b), { status, headers: { "Content-Type": "application/json" } });
+    if (u.includes("adsb")) return json({ ac: live ? [live] : [] });
+    if (u.includes("aeroapi.flightaware.com")) {
+      if (!fa) return json({ title: "down" }, 503);
+      if (u.includes("/flights/IGO724")) return json(faFixture("aeroapi-6e724.json", day));
+      if (u.includes("/flights/6E6254")) return json(faFixture("aeroapi-6e6254.json", day));
+      return json({ flights: [] });
+    }
+    if (u.endsWith("/airports/iata/IXC")) return json(IXC_AIRPORT);
+    if (u.endsWith("/airports/iata/HYD")) return json(HYD_AIRPORT);
+    if (u.includes("/flights/number/6E6254/")) {
+      // AeroDataBox, with nothing heard from the airline: an "Unknown" flight and a model's guess.
+      const at = (iso) => ({ utc: iso.replace("T", " ").slice(0, 16) + "Z", local: iso });
+      return json([
+        {
+          number: "6E 6254",
+          status: "Unknown",
+          lastUpdatedUtc: "2026-01-05 12:37Z",
+          airline: { name: "IndiGo", iata: "6E", icao: "IGO" },
+          departure: { airport: IXC_AIRPORT, scheduledTime: at(`${day}T17:00:00Z`) },
+          arrival: { airport: HYD_AIRPORT, scheduledTime: at(`${day}T19:30:00Z`), predictedTime: at(`${day}T19:33:00Z`) },
+          aircraft: { model: "Airbus A320 NEO" },
+        },
+      ]);
+    }
+    return new Response(null, { status: 204 });
+  };
+}
+
+test("flightaware: the airline's estimates, all four times, the inbound plane and two weeks of history", async () => {
+  const day = istToday();
+  serveFa(day);
+  const e = flightEnv({ FA_KEY: "fa-test-key" });
+  const { status, body: f } = await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+  assert.equal(status, 200);
+  assert.equal(f.status.source, "flightaware");
+  assert.equal(f.status.reported, true);
+  assert.equal(f.status.delayDep, 15);
+  assert.equal(f.status.delayArr, 10);
+  assert.equal(f.departure.revised, `${day}T17:15:00Z`, "gate departure estimate, 10:45 PM IST");
+  assert.equal(f.arrival.revised, `${addDays(day, 0)}T19:40:00Z`, "gate arrival estimate, 1:10 AM IST");
+  assert.equal(f.times.off.est, `${day}T17:25:00Z`, "take-off estimate");
+  assert.equal(f.arrival.belt, "6");
+  assert.equal(f.aircraft.model, "Airbus A320neo");
+  assert.equal(f.plan.eteMin, 130);
+  assert.equal(f.departure.lat, 30.67, "coordinates from the airport store");
+  // Inbound: 6E 724 from Goa, left 50 minutes late
+  assert.equal(f.inbound.number, "6E 724");
+  assert.equal(f.inbound.from.code, "GOI");
+  assert.equal(f.inbound.phase, "air");
+  assert.equal(f.inbound.delayDep, 50);
+  assert.equal(f.inbound.times.in.est, `${day}T16:47:00Z`, "at the Chandigarh gate 10:17 PM");
+  // History: completed days before this one, newest first
+  assert.equal(f.history.length, 11);
+  assert.equal(f.history[0].date, addDays(day, -1));
+  assert.equal(f.history[0].depDelay, -20, "left 20 minutes early the day before");
+  assert.ok(f.history.every((h) => h.date < day));
+  assert.equal(calls.filter((u) => u.includes("aeroapi")).length, 2, "the flight and its inbound");
+  assert.equal(await e.QUOTA.get(`fa/${day.slice(0, 7)}`), "2");
+  assert.ok(!calls.some((u) => u.includes("aerodatabox") && u.includes("/flights/")), "no AeroDataBox flight lookup");
+  assert.ok(!JSON.stringify(f).includes("fa-test-key"));
+});
+
+test("flightaware: down, or out of its window, falls back to AeroDataBox", async () => {
+  const day = istToday();
+  serveFa(day, { fa: false });
+  const e = flightEnv({ FA_KEY: "fa-test-key" });
+  const { status, body: f } = await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+  assert.equal(status, 200);
+  assert.equal(f.status.source, "aerodatabox");
+  calls.length = 0;
+  serveFa(addDays(day, 5));
+  const far = await get(`/api/flight?no=6E6254&date=${addDays(day, 5)}`, { with: e });
+  assert.equal(far.status, 200);
+  assert.ok(!calls.some((u) => u.includes("aeroapi")), "a flight five days off doesn't use FlightAware");
+});
+
+test("aerodatabox: no report is not 'on time', and a model's guess isn't a revised time", async () => {
+  const day = istToday();
+  serveFa(day);
+  const { body: f } = await get(`/api/flight?no=6E6254&date=${day}`, { with: flightEnv() });
+  assert.equal(f.status.reported, false);
+  assert.equal(f.status.delayDep, null);
+  assert.equal(f.status.delayArr, null, "a predicted arrival isn't a delay");
+  assert.equal(f.arrival.revised, null);
+  assert.equal(f.arrival.predicted, `${day}T19:33:00.000Z`);
+});

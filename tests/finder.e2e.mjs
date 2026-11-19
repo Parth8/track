@@ -26,6 +26,12 @@ const addDays = (iso, n) => {
   return d.toISOString().slice(0, 10);
 };
 
+// The FlightAware answers are for 19 Nov 2026: every timestamp moved so that day is today.
+function faDay(name) {
+  const shift = Date.parse(`${istToday()}T00:00:00Z`) - Date.parse("2026-11-19T00:00:00Z");
+  return JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8").replace(/"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"/g, (_, iso) => JSON.stringify(new Date(Date.parse(iso) + shift).toISOString().replace(".000Z", "Z"))));
+}
+
 // Workers runtime stand-ins
 const store = new Map();
 globalThis.caches = {
@@ -50,6 +56,21 @@ function seatAnswer(u) {
 }
 const upstream = async (url) => {
   const u = new URL(url);
+  // FlightAware: 6E 6254 and the plane flying in, hand-built from FlightAware's numbers, moved to today
+  if (u.hostname === "aeroapi.flightaware.com") return new Response(JSON.stringify(faDay(u.pathname.includes("IGO724") ? "aeroapi-6e724.json" : "aeroapi-6e6254.json")), { headers: { "Content-Type": "application/json" } });
+  if (u.hostname.includes("aerodatabox") && /\/airports\/iata\/(IXC|HYD)$/.test(u.pathname)) {
+    const ixc = u.pathname.endsWith("IXC");
+    return new Response(JSON.stringify({ iata: ixc ? "IXC" : "HYD", shortName: ixc ? "Chandigarh" : "Rajiv Gandhi Intl", municipalityName: ixc ? "Chandigarh" : "Hyderabad", timeZone: "Asia/Kolkata", location: ixc ? { lat: 30.67, lon: 76.79 } : { lat: 17.24, lon: 78.43 } }));
+  }
+  if (u.hostname.includes("adsb")) return new Response(JSON.stringify({ ac: u.pathname.includes("IGO724") ? [{ lat: 29.31, lon: 77.3, alt_baro: 20600, gs: 413, track: 11, seen_pos: 3 }] : [] }));
+  // AeroDataBox with nothing heard from the airline about 6E 6254: "Unknown", and its own model's guess
+  const unknown = /\/flights\/number\/6E6254\/(\d{4}-\d{2}-\d{2})/.exec(u.pathname);
+  if (unknown) {
+    const at = (iso) => ({ utc: iso.replace("T", " ").slice(0, 16) + "Z", local: iso });
+    const ap = (ixc) => ({ iata: ixc ? "IXC" : "HYD", shortName: ixc ? "Chandigarh" : "Rajiv Gandhi Intl", municipalityName: ixc ? "Chandigarh" : "Hyderabad", timeZone: "Asia/Kolkata", location: ixc ? { lat: 30.67, lon: 76.79 } : { lat: 17.24, lon: 78.43 } });
+    const d = unknown[1];
+    return new Response(JSON.stringify([{ number: "6E 6254", status: "Unknown", lastUpdatedUtc: "2026-01-05 12:37Z", airline: { name: "IndiGo", iata: "6E" }, departure: { airport: ap(true), scheduledTime: at(`${d}T17:00:00Z`) }, arrival: { airport: ap(false), scheduledTime: at(`${d}T19:30:00Z`), predictedTime: at(`${d}T19:33:00Z`) }, aircraft: { model: "Airbus A320 NEO" } }]));
+  }
   if (u.hostname.includes("aerodatabox")) return fidsAnswer(url) || flightAnswer(url) || new Response(null, { status: 204 });
   if (u.hostname === "sa.railyatri.in") return new Response(JSON.stringify(seatAnswer(u)), { headers: { "Content-Type": "application/json" } });
   // Recorded answers for 12786 from every source the coach guide reads
@@ -1089,7 +1110,8 @@ await test("tracker in a booking: honest times, refresh, and a stop you pick sta
   const det = p.locator("#journey-detail");
   // Not 6:10: the source's "0 min late" is more than the train could make up
   assert.equal((await det.locator(".hero-time").textContent()).replace(/\s+/g, ""), "~6:27AM");
-  assert.equal(await det.locator(".hero-card .chip").first().textContent(), "Likely 17–27m late");
+  // Up to 42: delays grow near big junctions, and it really came in 39 late
+  assert.equal(await det.locator(".hero-card .chip").first().textContent(), "Likely 17–42m late");
   // When it was checked, when it checks next, and a way to check now
   assert.match(await det.locator(".jn-live-fresh p").textContent(), /^Checked 5:49 AM · next check in \d+ min$/);
   await det.locator(".jn-live-refresh").click();
@@ -1247,6 +1269,42 @@ await test("with no choice yet, the clock follows the device", async () => {
   const q = await page({ locale: "en-US" });
   await q.goto(`${SITE}?m=train`);
   assert.equal(await q.evaluate(() => document.documentElement.dataset.clock), "12");
+});
+
+await test("flights: the airline's estimate, the plane flying in, and how this flight usually runs", async () => {
+  const p = await page({ env: { flightStatus: true, FA_KEY: "fa-test" } });
+  const day = istToday();
+  await p.clock.install({ time: new Date(`${day}T16:21:00Z`) }); // 9:51 PM in India
+  await p.goto(`${SITE}?m=flight&no=6E6254&d=${day}`);
+  await p.locator(".inbound-card").waitFor();
+  const text = (sel) => p.locator(sel).first().textContent();
+  assert.match(await text(".phase-banner .sub"), /Delayed 15m, now 10:45 PM/);
+  // 6E 724 from Goa is 154 km out: about 20 min to land, 5 to the gate, 25 to turn round. Its live
+  // landing time is worked out by the Worker on the real clock, so only the shape is checked here.
+  assert.match(await text(".inbound-card .ib-lead"), /6E 724 from Goa brings the plane/);
+  const verdict = await text(".inbound-card .ib-verdict");
+  assert.match(verdict, /^Your departure can't be before about \d{1,2}:\d{2} [AP]M$/);
+  assert.match(await text(".phase-banner"), new RegExp(`expect ${verdict.replace(/.*about /, "")} or later`));
+  // All four times, with the schedule struck through where it moved
+  const rows = await p.locator(".g2g-row .g2g-label").allTextContents();
+  assert.deepEqual(rows, ["Leaves the gate", "Takes off", "Lands", "At the gate"]);
+  assert.equal(await text(".g2g-row .g2g-time s"), "10:30 PM");
+  assert.match(await text(".hist-lead"), /Usually leaves 11 min early/);
+  assert.equal(await p.locator(".hist-col").count(), 11);
+  assert.match(await text(".data-credit"), /FlightAware/);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("flights: with nothing reported, the schedule is the schedule, not 'on time'", async () => {
+  const p = await page({ env: { flightStatus: true } });
+  const day = istToday();
+  await p.clock.install({ time: new Date(`${day}T16:21:00Z`) });
+  await p.goto(`${SITE}?m=flight&no=6E6254&d=${addDays(day, 1)}`);
+  await p.locator(".phase-banner .sub").waitFor();
+  assert.equal(await p.locator(".phase-banner .sub").textContent(), "No live update yet. Scheduled 10:30 PM");
+  assert.equal(await p.locator(".leg-note").first().textContent(), "Scheduled, no update yet");
+  assert.match(await p.locator(".leg-note").nth(1).textContent(), /A model estimates 1:03 AM/);
+  assert.deepEqual(p.errors, []);
 });
 
 await browser.close();

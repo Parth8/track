@@ -68,7 +68,7 @@ Cloudflare Worker ── validates input, checks origin, rate-limits, caches
    │            official NTES enquiry (primary for past runs, fallback, coach order)
    │            published timetable (trains between two stations)
    │            IRCTC seat availability, via the same feed's seat enquiry
-   ├── Flights: AeroDataBox (schedule, gate, belt, airport departure boards)
+   ├── Flights: FlightAware AeroAPI on the day (estimates, inbound plane, history), AeroDataBox (schedule, gate, belt, airport departure boards)
    │            adsb.lol + adsb.fi (live position, raced in parallel)
    └── Weather: Open-Meteo
    │
@@ -287,6 +287,9 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 |---|---|---|
 | `ALLOWED_ORIGINS` | Text | `https://parth8.github.io` (the domain only, no path) |
 | `ADB_KEY` | **Secret** | AeroDataBox key from RapidAPI (optional; flights stay off without it) |
+| `FA_KEY` | **Secret** | Optional. FlightAware AeroAPI key. From 12 hours before departure to 2 hours after landing, flights come from FlightAware: the airline's estimates for leaving the gate, take-off, landing and reaching the gate; the plane flying in and whether it can make the turnaround; gates, belts; and the last two weeks of the flight. AeroDataBox stays the fallback. |
+| `FA_MONTHLY_CAP` | Text | Optional. AeroAPI calls a month (default `300`). A flight check is one call, two while the inbound plane matters. |
+| `FA_PER_FLIGHT_DAILY` / `FA_VISITOR_DAILY` | Text | Optional. AeroAPI calls one flight can use a day (default `16`), and new flights one visitor can bring onto it a day (default `4`). |
 | `ADB_HOST` | Text | Optional. Defaults to `aerodatabox.p.rapidapi.com` |
 | `REQUIRE_ORIGIN` | Text | `false` only while testing in a browser tab. Remove afterwards. |
 | `FLIGHT_LOOKUP_CAP` | Text | Optional. Paid AeroDataBox calls a month for tracking and search together (default `180`, which is 360 of the free plan's 400 units). Released day by day; unused days roll over. |

@@ -1,0 +1,49 @@
+{
+ "_note": "Hand-built in AeroAPI's documented shape from FlightAware's public numbers for 6E 724 on 19 Nov 2026, 9:51 PM IST. Not a recording.",
+ "flights": [
+  {
+   "ident": "IGO724",
+   "ident_icao": "IGO724",
+   "ident_iata": "6E724",
+   "fa_flight_id": "IGO724-1794903774-airline-1540p:0",
+   "operator": "IGO",
+   "operator_iata": "6E",
+   "flight_number": "724",
+   "registration": null,
+   "atc_ident": null,
+   "cancelled": false,
+   "diverted": false,
+   "origin": {
+    "code": "VOGO",
+    "code_iata": "GOI",
+    "timezone": "Asia/Kolkata",
+    "name": "Dabolim",
+    "city": "Goa"
+   },
+   "destination": {
+    "code": "VICG",
+    "code_iata": "IXC",
+    "timezone": "Asia/Kolkata",
+    "name": "Chandigarh",
+    "city": "Chandigarh"
+   },
+   "departure_delay": 3000,
+   "arrival_delay": 2820,
+   "scheduled_out": "2026-11-19T13:20:00Z",
+   "estimated_out": "2026-11-19T13:55:00Z",
+   "actual_out": "2026-11-19T14:10:00Z",
+   "scheduled_off": "2026-11-19T13:30:00Z",
+   "estimated_off": "2026-11-19T14:22:00Z",
+   "actual_off": "2026-11-19T14:22:00Z",
+   "scheduled_on": "2026-11-19T15:50:00Z",
+   "estimated_on": "2026-11-19T16:42:00Z",
+   "actual_on": null,
+   "scheduled_in": "2026-11-19T16:00:00Z",
+   "estimated_in": "2026-11-19T16:47:00Z",
+   "actual_in": null,
+   "progress_percent": 91,
+   "status": "En Route / Delayed",
+   "aircraft_type": "A20N"
+  }
+ ]
+}
