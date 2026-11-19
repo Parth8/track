@@ -1,6 +1,7 @@
 import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, pointAtKm, timeNode, dayShift, IST } from "./util.js";
 import { icons, weatherLook } from "./icons.js";
 import { projectRun, estText } from "./projection.js";
+import { endBadge, tripFacts, signal } from "./marks.js";
 
 const bestArr = (s) => s.actual.arr || s.expected.arr || s.sched.arr;
 const bestDep = (s) => s.actual.dep || s.expected.dep || s.sched.dep;
@@ -34,7 +35,7 @@ export function renderTrain(run, ctx) {
 
   let whenText;
   if (mine.passed) whenText = mineIsOrigin ? "Departed" : "Arrived";
-  else if (until != null && until > 0) whenText = `in ${duration(until)}`;
+  else if (until != null && until > 0) whenText = `${mineIsOrigin ? "Departs" : "Arrives"} in ${duration(until)}`;
   else whenText = "Due now";
 
   const chips = [];
@@ -69,9 +70,24 @@ export function renderTrain(run, ctx) {
       "div",
       { class: "hero-time-row" },
       h("p", { class: "hero-time", "data-k": "hero-time" }, mineTime && mineEst?.hi >= 3 ? h("span", { class: "t-approx", "aria-label": "around", text: "~" }) : null, mineTime ? timeNode(mineTime) : "--:--"),
-      h("div", { class: "hero-when" }, h("span", { text: dayLabel(mineTime) }), h("strong", { class: "tn", "data-k": "hero-when", text: whenText }))
+      h(
+        "div",
+        { class: "hero-when" },
+        // The platform: the one thing you hunt for on the day, always in the same place
+        !mine.passed ? signal("PF", mine.platform, null) : null,
+        h("span", { text: dayLabel(mineTime) }),
+        h("strong", { class: "tn", "data-k": "hero-when", text: whenText })
+      )
     ),
     h("div", { class: "hero-chips" }, chips.map((c) => h("span", { class: `chip ${c.cls}`, text: c.text }))),
+    !mineIsOrigin
+      ? tripFacts({
+          lead: `From ${origin.name}`,
+          ms: mineTime && bestDep(origin) ? Date.parse(mineTime) - Date.parse(bestDep(origin)) : null,
+          km: Number.isFinite(mine.km) && Number.isFinite(origin.km) ? mine.km - origin.km : null,
+          overnight: !!(mineTime && bestDep(origin) && dateKey(mineTime) !== dateKey(bestDep(origin))),
+        })
+      : null,
     h(
       "p",
       { class: "stop-hint" },
@@ -274,7 +290,7 @@ export function renderTrain(run, ctx) {
       h(
         "div",
         { class: "tl-info" },
-        h("p", { class: "tl-name" }, s.name, h("span", { class: "tl-code", text: s.code })),
+        h("p", { class: "tl-name" }, i === 0 ? endBadge("leave") : isMine ? endBadge("arrive") : null, s.name, h("span", { class: "tl-code", text: s.code })),
         h("p", { class: "tl-meta tn", text: meta.join(", ") }),
         chip ? h("span", { class: `chip ${chip.cls}`, text: chip.text }) : null
       ),

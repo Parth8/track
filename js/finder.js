@@ -603,6 +603,7 @@ export function createResults({ root, title, sub, navigate, toast, footer, onSav
           h("span", { class: "tc-t" }, timeNode(t.arr, IST, { shift: nextDay }))
         ),
         h("span", { class: "tc-codes" }, h("span", { class: t.from.code !== r.from ? "near" : null, text: t.from.code }), h("span", { class: t.to.code !== r.to ? "near" : null, text: t.to.code })),
+        nextDay > 0 ? h("span", { class: "tc-night" }, svg(icons.moon), nextDay > 1 ? `Arrives ${nextDay} days later` : "Overnight") : null,
         near.length ? h("span", { class: "tc-near" }, near.map((n) => h("span", {}, svg(icons.pin), n))) : null,
         h("span", { class: "tc-name" }, h("span", { class: "tc-no tn", text: t.number }), h("span", { text: t.name })),
         h("span", { class: "tc-tags" }, tags)

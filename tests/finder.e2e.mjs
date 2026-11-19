@@ -1328,7 +1328,7 @@ await test("flights: with nothing reported, the schedule is the schedule, not 'o
   await p.goto(`${SITE}?m=flight&no=6E6254&d=${addDays(day, 1)}`);
   await p.locator(".phase-banner .sub").waitFor();
   assert.equal(await p.locator(".phase-banner .sub").textContent(), "No live update yet. Scheduled 10:30 PM");
-  assert.match(await p.locator(".leg-note").first().textContent(), /^Scheduled, no update yet · leaves in \d+h \d+m$/);
+  assert.match(await p.locator(".leg-note").first().textContent(), /^Scheduled, no update yet · Departs in \d+h \d+m$/);
   assert.match(await p.locator(".leg-note").nth(1).textContent(), /A model estimates 1:03 AM/);
   assert.equal(await p.locator(".leg-time .t-late, .leg-time .t-early").count(), 0, "no colour: nothing's known either way");
   // Every tile from before is still there

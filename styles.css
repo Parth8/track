@@ -6945,3 +6945,118 @@ textarea.jn-input {
     transform: translateY(-4px);
   }
 }
+
+/* ============================================================
+   Shared marks (js/marks.js): the same on every screen
+   ============================================================ */
+:root {
+  --signal: #f4c430;
+  --signal-ink: #2b2306;
+}
+.end-badge {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 17px;
+  height: 17px;
+  margin-right: 6px;
+  vertical-align: -3px;
+  color: var(--ink);
+}
+.end-badge svg {
+  width: 100%;
+  height: 100%;
+}
+.trip-facts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.trip-facts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.trip-facts svg {
+  width: 14px;
+  height: 14px;
+}
+.trip-facts > i {
+  font-style: normal;
+  opacity: 0.6;
+}
+.tf-night {
+  color: var(--lav-ink);
+  font-weight: 700;
+}
+.signal,
+.gate-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 7px 11px;
+  border-radius: 12px;
+  background: var(--signal);
+  color: var(--signal-ink);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+.signal svg,
+.gate-chip svg {
+  width: 15px;
+  height: 15px;
+  align-self: center;
+}
+.signal strong {
+  font-size: 17px;
+  font-weight: 800;
+}
+.signal small,
+.gate-chip small {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+.signal.dim {
+  background: color-mix(in srgb, var(--signal) 35%, var(--card));
+  color: color-mix(in srgb, var(--signal-ink) 70%, var(--muted));
+}
+.tc-night {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--lav-ink);
+}
+.tc-night svg {
+  width: 14px;
+  height: 14px;
+}
+.leg-place {
+  display: flex;
+  align-items: center;
+}
+.hero-when .signal {
+  margin-bottom: 8px;
+}
+.hero-card .trip-facts {
+  margin-top: 10px;
+}
+.tl-name .end-badge {
+  width: 15px;
+  height: 15px;
+  margin-right: 5px;
+}
+.hero-when span.signal {
+  display: inline-flex;
+  font-size: 15px;
+  color: var(--signal-ink);
+}
+.hero-when span.signal.dim {
+  color: color-mix(in srgb, var(--signal-ink) 70%, var(--muted));
+}

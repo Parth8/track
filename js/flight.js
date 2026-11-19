@@ -1,5 +1,6 @@
 import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing, timeNode, dayShift } from "./util.js";
 import { icons, weatherLook, bodyType } from "./icons.js";
+import { endBadge, tripFacts, signal } from "./marks.js";
 import { historySummary, turnaround, inboundAtGate, ON_TIME_MIN } from "./flight-insights.js";
 
 /**
@@ -273,7 +274,7 @@ export function renderFlight(f) {
       "button",
       {
         type: "button",
-        class: "chip quiet leg-later",
+        class: "signal dim leg-later",
         "aria-label": `${label}: not announced yet`,
         on: {
           click: () => {
@@ -283,7 +284,8 @@ export function renderFlight(f) {
           },
         },
       },
-      `${label} soon`
+      h("strong", { text: "--" }),
+      h("small", { text: label })
     );
   const legBlock = (side, m, tz, time, delay, isDep) => {
     const late = delayChip(delay);
@@ -303,7 +305,7 @@ export function renderFlight(f) {
     const inText =
       (isDep && phase === "pre") || (!isDep && (phase === "pre" || phase === "air"))
         ? Date.parse(time) > now
-          ? h("span", { class: "leg-in" }, ` · ${isDep ? "leaves" : "lands"} in `, tickText(time, (ms) => duration(Math.max(0, ms))))
+          ? h("span", { class: "leg-in" }, ` · ${isDep ? "Departs" : "Arrives"} in `, tickText(time, (ms) => duration(Math.max(0, ms))))
           : null
         : null;
     // The time itself in colour once someone has reported on it
@@ -321,7 +323,7 @@ export function renderFlight(f) {
       h(
         "div",
         {},
-        h("p", { class: "leg-place", text: `${m.code}, ${m.name}` }),
+        h("p", { class: "leg-place" }, endBadge(isDep ? "leave" : "arrive"), `${m.code}, ${m.name}`),
         h(
           "p",
           { class: "leg-time" },
@@ -342,7 +344,7 @@ export function renderFlight(f) {
     h(
       "div",
       { class: "leg-mid" },
-      h("span", { class: "tn", text: [blockMins ? duration(blockMins) : null, f.distanceKm ? `${f.distanceKm.toLocaleString("en-IN")} km` : null, overnight ? "Overnight" : null].filter(Boolean).join(" · ") }),
+      tripFacts({ ms: blockMins, km: f.distanceKm, overnight }),
       h("i")
     ),
     legBlock("arr", arr, arrTz, arrTime, f.status.delayArr, false),

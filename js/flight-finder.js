@@ -158,6 +158,7 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
           ? h("span", { class: "fc-now" }, svg(icons.clock), `Now leaves ${hm(f.dep.revisedLocal)}${f.arr.revisedLocal ? ` · lands ${hm(f.arr.revisedLocal)}` : ""}`)
           : null,
         h("span", { class: "tc-codes" }, h("span", { text: [r.from, f.dep.terminal ? `T${f.dep.terminal}` : null].filter(Boolean).join(" · ") }), h("span", { text: r.to })),
+        arrShift > 0 ? h("span", { class: "tc-night" }, svg(icons.moon), "Overnight") : null,
         h("span", { class: "tc-name" }, h("span", { class: "tc-no tn", text: f.number }), h("span", { text: f.airline.name })),
         f.aircraft ? h("span", { class: "fc-meta", text: f.aircraft }) : null
       ),
