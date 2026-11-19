@@ -1296,8 +1296,10 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   assert.equal(await p.locator(".hist-col").count(), 11);
   assert.match(await text(".data-credit"), /FlightAware/);
   // Every time on the route card says its zone; tapping one shows it around the world
-  assert.equal(await p.locator(".leg .tz-chip").first().textContent(), "IST");
+  assert.equal(await p.locator(".leg .tz-chip").first().textContent(), "IST›");
+  assert.match(await p.locator(".tz-hint").textContent(), /Tap IST beside a time to see it in another city/, "a tip says the label can be tapped");
   await p.locator(".leg .tz-chip").first().dispatchEvent("click");
+  assert.equal(await p.locator(".tz-hint").count(), 0, "and goes once it's been used");
   await p.locator(".tz-sheet[open]").waitFor();
   const places = await p.locator(".tz-row .tz-where strong").allTextContents();
   assert.equal(places[0], "Chandigarh");

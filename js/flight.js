@@ -1,7 +1,7 @@
 import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing, timeNode, dayShift } from "./util.js";
 import { icons, weatherLook, bodyType } from "./icons.js";
 import { endBadge, tripFacts, signal } from "./marks.js";
-import { zoneChip, zoneName, offsetMin } from "./tz.js";
+import { zoneChip, zoneName, offsetMin, tzHintSeen } from "./tz.js";
 import { conditions, forecastAt, rough, wxWords, skyWords } from "./airwx.js";
 import { flightTrips, addJourney, updateJourney, flightJourney } from "./journeys.js";
 import { historySummary, turnaround, inboundAtGate, ON_TIME_MIN } from "./flight-insights.js";
@@ -243,8 +243,8 @@ export function renderFlight(f) {
       h(
         "div",
         { class: "progress-legend tn" },
-        h("span", { text: [`${duration(now - Date.parse(takeoff))} flown`, kmFlown != null ? `${km(kmFlown)}` : null].filter(Boolean).join(" · ") }),
-        h("span", { text: [`${Math.round(fraction * 100)}% of the way`, kmLeft != null ? `${km(kmLeft)} to go` : null].filter(Boolean).join(" · ") })
+        h("span", {}, `${duration(now - Date.parse(takeoff))} flown`, kmFlown != null ? h("small", { text: `${km(kmFlown)} flown` }) : null),
+        h("span", {}, `${Math.round(fraction * 100)}% of the way`, kmLeft != null ? h("small", { text: `${km(kmLeft)} to go` }) : null)
       )
     );
     banner.querySelector(".progress i").style.width = `${fraction * 100}%`;
@@ -343,7 +343,8 @@ export function renderFlight(f) {
     const chips = [];
     // A gate at both ends: the number once it's known, "--" until then (tap to see why)
     if (m.gate) chips.push(h("span", { class: "gate-chip" }, svg(icons.gate), m.gate, h("small", { text: "Gate" })));
-    else if (isDep && phase === "pre") chips.push(later("Gate", `The departure gate isn't announced yet. It shows here as soon as ${f.airline.name} or the airport posts it.`));
+    else if (isDep && phase !== "cancelled")
+      chips.push(later("Gate", phase === "pre" ? `The departure gate isn't announced yet. It shows here as soon as ${f.airline.name} or the airport posts it.` : `${f.airline.name} and the airport didn't publish this flight's departure gate.`));
     else if (!isDep && ["pre", "air", "landed"].includes(phase)) chips.push(later("Gate", "The arrival gate isn't announced yet. Airports usually assign it shortly before landing; it shows here when they do."));
     if (m.terminal) chips.push(h("span", { class: "chip quiet", text: `Terminal ${m.terminal}` }));
     if (!isDep && m.belt && phase !== "landed") chips.push(h("span", { class: "gate-chip" }, svg(icons.belt), m.belt, h("small", { text: "Belt" })));
@@ -380,7 +381,8 @@ export function renderFlight(f) {
       h("i")
     ),
     legBlock("arr", arr, arrTz, arrTime, f.status.delayArr, false),
-    tip
+    tip,
+    tzHintSeen() ? null : h("p", { class: "tz-hint" }, svg(icons.globe), `Tap ${zoneName(depTime, depTz)} beside a time to see it in another city, or share it with family.`)
   );
 
   /* ---------------- yours: booking code and seat, on this device only ---------------- */

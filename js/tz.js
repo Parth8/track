@@ -69,8 +69,20 @@ export function zoneChip(iso, tz, { places = [], label = null } = {}) {
       title: zoneLong(iso, tz),
       on: { click: (e) => (e.stopPropagation(), openConverter({ iso, from: { tz, city: label || zoneCity(tz) }, places })) },
     },
-    name
+    svg(icons.globe),
+    name,
+    h("span", { class: "tz-go", "aria-hidden": "true", text: "›" })
   );
+}
+
+/** Whether the converter has been opened once; until then a tip points to it. */
+const HINT = "tzHintSeen";
+export function tzHintSeen() {
+  try {
+    return localStorage.getItem(HINT) === "1";
+  } catch {
+    return true;
+  }
 }
 
 /* ---------------- the converter ---------------- */
@@ -133,6 +145,12 @@ let dialog = null;
  * (kept on this device). Every time is worked out for that exact date, daylight saving included.
  */
 export function openConverter({ iso, from, places = [] }) {
+  try {
+    localStorage.setItem(HINT, "1");
+  } catch {
+    /* fine */
+  }
+  for (const tip of document.querySelectorAll(".tz-hint")) tip.remove();
   if (!dialog) {
     dialog = h("dialog", { class: "sheet tz-sheet", "aria-labelledby": "tz-title" });
     dialog.addEventListener("click", (e) => e.target === dialog && dialog.close());

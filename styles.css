@@ -1481,7 +1481,7 @@ sup.plus {
   font-size: 12.5px;
   color: var(--muted);
 }
-.leg-mid i {
+.leg-mid > i {
   flex: 1;
   border-top: 1.5px dashed color-mix(in srgb, var(--line) 60%, var(--hair));
 }
@@ -7254,4 +7254,45 @@ textarea.jn-input {
 .tz-pick small {
   font-size: 12.5px;
   color: var(--muted);
+}
+
+/* Under the progress bar: time and share on the first line, km beneath each */
+.progress-legend > span {
+  display: grid;
+  gap: 1px;
+}
+.progress-legend > span:last-child {
+  text-align: right;
+}
+.progress-legend small {
+  font-size: 12px;
+  opacity: 0.85;
+}
+/* The zone label looks like what it is: a button to see the time elsewhere */
+.tz-chip svg {
+  width: 12px;
+  height: 12px;
+  margin-right: 3px;
+}
+.tz-chip .tz-go {
+  margin-left: 3px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+.tz-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--lav-tint);
+  color: var(--lav-ink);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.tz-hint svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
 }
