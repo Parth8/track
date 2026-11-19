@@ -7,6 +7,7 @@ import { api, ApiError } from "./api.js";
 import { stationField, shortDay } from "./finder.js";
 import { stationSource } from "./stations.js";
 import { endBadge, tripFacts } from "./marks.js";
+import { zoneChip } from "./tz.js";
 import {
   isFlight,
   flightJourney,
@@ -772,7 +773,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
         h(
           "div",
           { class: "jn-leg-time" },
-          timeNode(actual || sched, tz, { shift }),
+          h("span", {}, timeNode(actual || sched, tz, { shift }), zoneChip(actual || sched, tz, { label: a.name, places: [{ tz: tzFrom(j), city: j.from.name, role: "Departure" }, { tz: tzTo(j), city: j.to.name, role: "Arrival" }] })),
           h("small", { class: "jn-leg-day", text: shortDay(new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(actual || sched))) }),
           actual && Number.isFinite(delay) && Math.abs(delay) >= 3 ? h("small", { text: `planned ${clock(sched, tz)}` }) : null
         )

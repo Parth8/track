@@ -7109,3 +7109,149 @@ textarea.jn-input {
 .jn-leg-dur .trip-facts {
   font-size: 13px;
 }
+
+/* ============================================================
+   Time zones: the label beside a time, and the converter
+   ============================================================ */
+.tz-chip {
+  appearance: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 7px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  vertical-align: 0.35em;
+  background: var(--lav-tint);
+  color: var(--lav-ink);
+  line-height: 1.4;
+}
+.tz-chip:active {
+  transform: scale(0.95);
+}
+.tz-rows {
+  list-style: none;
+  margin: 4px 0 14px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.tz-row {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: var(--card);
+  border: 1px solid var(--hair);
+}
+.tz-row.base {
+  background: var(--lav-tint);
+  border-color: transparent;
+}
+.tz-where strong,
+.tz-when strong {
+  display: block;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.tz-when {
+  text-align: right;
+}
+.tz-when strong {
+  font-size: 19px;
+}
+.tz-where small,
+.tz-when small {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.tz-face {
+  width: 40px;
+  height: 40px;
+}
+.tz-face-bg {
+  fill: #fff7dc;
+  stroke: var(--signal);
+  stroke-width: 2;
+}
+.tz-face.night .tz-face-bg {
+  fill: #2c2f52;
+  stroke: #6c6fa8;
+}
+.tz-hand {
+  stroke: var(--ink);
+  stroke-linecap: round;
+}
+.tz-face.night .tz-hand,
+.tz-face.night .tz-pin {
+  stroke: #f2f0ff;
+  fill: #f2f0ff;
+}
+.tz-hand.h {
+  stroke-width: 2.6;
+}
+.tz-hand.m {
+  stroke-width: 1.8;
+}
+.tz-pin {
+  fill: var(--ink);
+}
+.tz-x {
+  appearance: none;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 4px;
+}
+.tz-x svg {
+  width: 16px;
+  height: 16px;
+}
+.tz-add {
+  position: relative;
+  margin-bottom: 14px;
+}
+.tz-pick {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1px solid var(--hair);
+  box-shadow: var(--shadow);
+}
+.tz-pick button {
+  appearance: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  width: 100%;
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.tz-pick button:hover,
+.tz-pick button:focus-visible {
+  background: var(--lav-tint);
+}
+.tz-pick strong {
+  display: block;
+  font-size: 15px;
+}
+.tz-pick small {
+  font-size: 12.5px;
+  color: var(--muted);
+}

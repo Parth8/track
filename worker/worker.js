@@ -6,6 +6,9 @@
  *   /api/train?no=12786&date=2026-09-29
  *   /api/flight?no=6E6252&date=2026-09-29
  *   /api/weather?lat=17.39&lon=78.50
+ *   /api/airwx?icao=VOHS      (an airport's own weather: its latest observation, METAR, and its
+ *                              forecast, TAF, from the US National Weather Service's aviation
+ *                              weather service; worldwide, free)
  *   /api/between?from=MYS&to=KCG&date=2026-10-02
  *   /api/seats?no=12306&from=NDLS&to=HWH&date=2026-10-09&cls=3A&quota=GN
  *   /api/flights?from=DEL&to=BLR&date=2026-10-02&after=17:00
@@ -105,6 +108,8 @@ export default {
           return reply(await flightRoute(url, env, ctx, request), 200, cors, TTL.flight, env);
         case "/api/weather":
           return reply(await weatherRoute(url, ctx), 200, cors, TTL.weather, env);
+        case "/api/airwx":
+          return reply(await airWeatherRoute(url, ctx), 200, cors, 600, env);
         case "/api/between":
           return reply(await betweenRoute(url, ctx), 200, cors, TTL.between, env);
         case "/api/flights":
@@ -1116,6 +1121,7 @@ export function faHistory(list, date) {
 export function normaliseFa(raw, date, f, list = [], info = {}) {
   const air = (m, a) => ({
     code: m?.code_iata || m?.code || "",
+    icao: m?.code_icao || null,
     name: a?.shortName || m?.name || "",
     city: a?.municipalityName || m?.city || m?.name || "",
     tz: m?.timezone || a?.timeZone || null,
@@ -1308,6 +1314,7 @@ const faSet = (t) => ({ sched: faIso(t?.scheduled), est: faIso(t?.estimated), ac
 const faTz = (a) => (a?.TZ ? String(a.TZ).replace(/^:/, "") : null);
 const faAirport = (a) => ({
   code: a?.iata || a?.altIdent || a?.icao || "",
+  icao: a?.icao || null,
   name: a?.friendlyName || "",
   city: String(a?.friendlyLocation || "").split(",")[0] || a?.friendlyName || "",
   tz: faTz(a),
@@ -1647,6 +1654,7 @@ function airportOf(m) {
   const t = (x) => x?.utc ? new Date(x.utc.replace(" ", "T").replace("Z", "") + "Z").toISOString() : null;
   return {
     code: a.iata || a.icao || "",
+    icao: a.icao || null,
     name: a.shortName || a.name || "",
     city: a.municipalityName || a.name || "",
     tz: a.timeZone || null,
@@ -2342,6 +2350,70 @@ async function weatherRoute(url, ctx) {
       hourly: { time: w.hourly?.time || [], temp: w.hourly?.temperature_2m || [], code: w.hourly?.weather_code || [] },
       daily: { date: w.daily?.time || [], sunrise: w.daily?.sunrise || [], sunset: w.daily?.sunset || [] },
     };
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* /api/airwx: an airport's own weather (METAR now, TAF ahead)          */
+/* ------------------------------------------------------------------ */
+
+const miles = (v) => (v == null ? null : typeof v === "number" ? v : /^(\d+(\.\d+)?)\+?$/.test(String(v)) ? parseFloat(v) : null);
+const visKm = (v) => (miles(v) == null ? null : Math.round(miles(v) * 1.609 * 10) / 10);
+const cloudsOf = (cs) => (cs || []).filter((c) => c?.cover).map((c) => ({ cover: c.cover, baseFt: c.base ?? null, type: c.type || null }));
+
+/** METAR and TAF as the app reads them: plain fields, distances in km, times as ISO. */
+export function airWeatherOf(metar, taf) {
+  return {
+    now: metar
+      ? {
+          at: metar.reportTime || (metar.obsTime ? new Date(metar.obsTime * 1000).toISOString() : null),
+          tempC: metar.temp ?? null,
+          dewC: metar.dewp ?? null,
+          windDir: metar.wdir ?? null,
+          windKt: metar.wspd ?? null,
+          gustKt: metar.wgst ?? null,
+          visKm: visKm(metar.visib),
+          visPlus: /\+$/.test(String(metar.visib ?? "")),
+          wx: metar.wxString || null,
+          cover: metar.cover || null,
+          clouds: cloudsOf(metar.clouds),
+          category: metar.fltCat || null,
+          raw: metar.rawOb || null,
+        }
+      : null,
+    forecast: taf
+      ? {
+          issued: taf.issueTime || null,
+          periods: (taf.fcsts || []).map((f) => ({
+            from: f.timeFrom ? new Date(f.timeFrom * 1000).toISOString() : null,
+            to: f.timeTo ? new Date(f.timeTo * 1000).toISOString() : null,
+            change: f.fcstChange || null,
+            probability: f.probability ?? null,
+            windDir: f.wdir ?? null,
+            windKt: f.wspd ?? null,
+            gustKt: f.wgst ?? null,
+            visKm: visKm(f.visib),
+            wx: f.wxString || null,
+            clouds: cloudsOf(f.clouds),
+          })),
+          raw: taf.rawTAF || null,
+        }
+      : null,
+  };
+}
+
+async function airWeatherRoute(url, ctx) {
+  const icao = (url.searchParams.get("icao") || "").toUpperCase();
+  if (!/^[A-Z0-9]{4}$/.test(icao)) throw new ApiError(400, "invalid_airport", "Airport codes here are the 4-letter ICAO ones, like VOHS.");
+  return cached(ctx, `airwx/${icao}`, 600, async () => {
+    const get = (kind) =>
+      getWithRetry(`https://aviationweather.gov/api/data/${kind}?ids=${icao}&format=json`, { headers: { "User-Agent": "journey-tracker/1.0", Accept: "application/json" } }, { timeout: 6000, retries: 0 })
+        .then((r) => (r.ok && r.status !== 204 ? r.json() : []))
+        .then((x) => (Array.isArray(x) ? x[0] : null))
+        .catch(() => null);
+    const [m, t] = await Promise.all([get("metar"), get("taf")]);
+    if (!m && !t) throw new ApiError(404, "not_found", "No weather report from this airport.");
+    return { icao, ...airWeatherOf(m, t), status: {} };
   });
 }
 

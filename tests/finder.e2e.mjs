@@ -1285,7 +1285,7 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   assert.match(await text(".phase-banner .sub"), /Delayed 15m, now 10:45 PM/);
   assert.match(await text(".phase-banner"), /Your plane is in the air from Goa/);
   // 6E 724 from Goa reaches the gate 10:17 PM, as the airline estimates, for a 10:45 PM departure
-  assert.match(await text(".inbound-card .ib-lead"), /6E 724 from Goa brings the plane/);
+  assert.match(await text(".inbound-card .ib-lead"), /6E 724 from Goa \(Dabolim\) brings the plane/);
   assert.match(await text(".inbound-card .ib-verdict"), /^Tight: 28 min to turn round/);
   assert.match(await text(".phase-banner"), /reaches the gate 10:17 PM, a tight turnaround/);
   // All four times, with the schedule struck through where it moved
@@ -1295,6 +1295,18 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   assert.match(await text(".hist-lead"), /Usually leaves 11 min early/);
   assert.equal(await p.locator(".hist-col").count(), 11);
   assert.match(await text(".data-credit"), /FlightAware/);
+  // Every time on the route card says its zone; tapping one shows it around the world
+  assert.equal(await p.locator(".leg .tz-chip").first().textContent(), "IST");
+  await p.locator(".leg .tz-chip").first().dispatchEvent("click");
+  await p.locator(".tz-sheet[open]").waitFor();
+  const places = await p.locator(".tz-row .tz-where strong").allTextContents();
+  assert.equal(places[0], "Chandigarh");
+  assert.match(await p.locator(".tz-row.base .tz-when strong").textContent(), /10:45 PM/);
+  await p.locator(".tz-add-in").fill("london");
+  await p.locator(".tz-pick button").first().click();
+  assert.ok((await p.locator(".tz-row .tz-where strong").allTextContents()).includes("London"), "an added city appears");
+  assert.match(await p.locator(".tz-row", { hasText: "London" }).locator(".tz-when strong").textContent(), /5:15 PM/, "London is 5½ hours behind in November");
+  await p.locator(".tz-sheet .sheet-head .icon-btn").click();
   // Booking code and seat: typed in, checked, kept on this phone
   await p.locator(".fm-slot").nth(1).dispatchEvent("click");
   await p.locator(".fm-input").nth(1).fill("14c");
@@ -1310,7 +1322,7 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   assert.equal(await p.locator(".leg").first().locator(".leg-time .t-late").count(), 1);
   assert.match(await text(".leg-chips .gate-chip"), /^6Belt$/, "belt 6, before landing");
   await p.locator(".leg-later").first().dispatchEvent("click");
-  assert.match(await text(".leg-tip"), /The gate isn't announced yet/);
+  assert.match(await text(".leg-tip"), /The departure gate isn't announced yet/);
   // The plane's day, and a way to follow the inbound flight
   assert.deepEqual(await p.locator(".ib-chain b").allTextContents(), ["GOI", "IXC", "HYD"]);
   assert.match(await p.locator(".ib-open").getAttribute("href"), /m=flight&no=6E724/);

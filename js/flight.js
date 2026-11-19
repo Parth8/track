@@ -1,6 +1,8 @@
 import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing, timeNode, dayShift } from "./util.js";
 import { icons, weatherLook, bodyType } from "./icons.js";
 import { endBadge, tripFacts, signal } from "./marks.js";
+import { zoneChip, zoneName, offsetMin } from "./tz.js";
+import { conditions, forecastAt, rough, wxWords, skyWords } from "./airwx.js";
 import { flightTrips, addJourney, updateJourney, flightJourney } from "./journeys.js";
 import { historySummary, turnaround, inboundAtGate, ON_TIME_MIN } from "./flight-insights.js";
 
@@ -25,6 +27,15 @@ export function renderFlight(f) {
   const baseDate = dateKey(dep.sched, depTz);
   const depCity = dep.city || dep.code;
   const arrCity = arr.city || arr.code;
+  // Both airports, for the time converter behind every zone label
+  const places = [
+    { tz: depTz, city: depCity, role: "Departure" },
+    { tz: arrTz, city: arrCity, role: "Arrival" },
+  ];
+  const chip = (iso, tz) => zoneChip(iso, tz, { places, label: tz === depTz ? depCity : arrCity });
+  // When the two ends keep different clocks, every time in a sentence says whose clock it is
+  const zonesDiffer = offsetMin(dep.sched, depTz) !== offsetMin(dep.sched, arrTz);
+  const tz12 = (iso, tz) => (zonesDiffer ? `${clock(iso, tz)} ${zoneName(iso, tz)}` : clock(iso, tz));
 
   const depTime = dep.revised || dep.sched;
   // In the air, the landing time comes from the plane's live speed and distance left (free and fresh).
@@ -44,9 +55,24 @@ export function renderFlight(f) {
         ? `Your plane reaches the gate ${t12(turn.gate.at, depTz)}, a tight turnaround`
         : null;
 
+  // Distance flown and still to go: from where the plane really is when we know, else the share of time
+  const km = (n) => `${Math.round(n).toLocaleString("en-IN")} km`;
+  let kmLeft = null;
+  let kmFlown = null;
+  if (phase === "air" && f.distanceKm) {
+    const here = reported && Number.isFinite(arr.lat) ? haversine(f.position.lat, f.position.lon, arr.lat, arr.lon) : null;
+    kmLeft = here != null ? Math.min(f.distanceKm, here) : null;
+  }
   let fraction = phase === "landed" ? 1 : 0;
   if (phase === "air" && takeoff && arrTime) {
     fraction = Math.min(0.99, Math.max(0.01, (now - Date.parse(takeoff)) / (Date.parse(arrTime) - Date.parse(takeoff))));
+  }
+  if (phase === "air" && f.distanceKm) {
+    // From the plane's real position, the share of the way follows the distance, so the
+    // percentage and the kilometres always agree; without one, both follow the clock.
+    if (kmLeft == null) kmLeft = f.distanceKm * (1 - fraction);
+    else fraction = Math.min(0.99, Math.max(0.01, 1 - kmLeft / f.distanceKm));
+    kmFlown = Math.max(0, f.distanceKm - kmLeft);
   }
 
   const blocks = {};
@@ -127,7 +153,7 @@ export function renderFlight(f) {
   /* ---------------- in-air numbers ---------------- */
   if (phase === "air") {
     const stat = (label, value) => h("div", { class: "card stat" }, h("span", { text: label }), h("strong", { class: "tn", text: value }));
-    const left = f.distanceKm ? `${Math.round(f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km` : "--";
+    const left = f.distanceKm ? `${Math.round(kmLeft ?? f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km` : "--";
     blocks.stats = reported
       ? h(
           "div",
@@ -179,12 +205,12 @@ export function renderFlight(f) {
     const statusWord = f.status.leftGate ? "Left the gate" : /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
     // No report from anyone isn't "on time": say it's the schedule.
     const timing = !reported0
-      ? `No live update yet. Scheduled ${t12(depTime, depTz)}`
+      ? `No live update yet. Scheduled ${tz12(depTime, depTz)}`
       : dc && dc.cls === "late"
-        ? `Delayed ${fmtMin(d)}, now ${t12(depTime, depTz)}`
+        ? `Delayed ${fmtMin(d)}, now ${tz12(depTime, depTz)}`
         : d != null && d <= -5
-          ? `Early, now ${t12(depTime, depTz)}`
-          : `On time at ${t12(depTime, depTz)}`;
+          ? `Early, now ${tz12(depTime, depTz)}`
+          : `On time at ${tz12(depTime, depTz)}`;
     banner.append(
       lead(until > 0 ? "Departs in" : "Departure"),
       big(until > 0 ? tickText(depTime, (ms) => countdown(Math.max(0, ms))) : timeNode(depTime, depTz, { shift: dayShift(depTime, baseDate, depTz) })),
@@ -212,13 +238,13 @@ export function renderFlight(f) {
     banner.append(
       lead("Lands in"),
       big(tickText(arrTime, (ms) => duration(Math.max(0, ms)))),
-      sub(`${t12(arrTime, arrTz)} in ${arrCity}, ${dc ? dc.text.toLowerCase() : "on schedule"}`),
+      sub(`${tz12(arrTime, arrTz)} in ${arrCity}, ${dc ? dc.text.toLowerCase() : "on schedule"}`),
       h("div", { class: "progress", "aria-hidden": "true" }, h("i")),
       h(
         "div",
         { class: "progress-legend tn" },
-        h("span", { text: `${duration(now - Date.parse(takeoff))} flown` }),
-        h("span", { text: `${Math.round(fraction * 100)}% of the way` })
+        h("span", { text: [`${duration(now - Date.parse(takeoff))} flown`, kmFlown != null ? `${km(kmFlown)}` : null].filter(Boolean).join(" · ") }),
+        h("span", { text: [`${Math.round(fraction * 100)}% of the way`, kmLeft != null ? `${km(kmLeft)} to go` : null].filter(Boolean).join(" · ") })
       )
     );
     banner.querySelector(".progress i").style.width = `${fraction * 100}%`;
@@ -315,8 +341,10 @@ export function renderFlight(f) {
     const known = reported0 && delay != null;
     const tcls = !known ? "" : late?.cls === "late" ? "t-late" : "t-early";
     const chips = [];
+    // A gate at both ends: the number once it's known, "--" until then (tap to see why)
     if (m.gate) chips.push(h("span", { class: "gate-chip" }, svg(icons.gate), m.gate, h("small", { text: "Gate" })));
-    else if (isDep && phase === "pre") chips.push(later("Gate", `The gate isn't announced yet. It shows here as soon as ${f.airline.name} posts it.`));
+    else if (isDep && phase === "pre") chips.push(later("Gate", `The departure gate isn't announced yet. It shows here as soon as ${f.airline.name} or the airport posts it.`));
+    else if (!isDep && ["pre", "air", "landed"].includes(phase)) chips.push(later("Gate", "The arrival gate isn't announced yet. Airports usually assign it shortly before landing; it shows here when they do."));
     if (m.terminal) chips.push(h("span", { class: "chip quiet", text: `Terminal ${m.terminal}` }));
     if (!isDep && m.belt && phase !== "landed") chips.push(h("span", { class: "gate-chip" }, svg(icons.belt), m.belt, h("small", { text: "Belt" })));
     else if (!isDep && !m.belt && phase !== "landed" && phase !== "cancelled") chips.push(later("Belt", "The baggage belt isn't announced yet. Airports post it around landing."));
@@ -331,6 +359,7 @@ export function renderFlight(f) {
           "p",
           { class: "leg-time" },
           h("span", { class: tcls, "data-k": `${side}-t` }, time ? timeNode(time, tz, { shift: dayShift(time, baseDate, tz) }) : "--:--"),
+          time ? chip(time, tz) : null,
           changed ? h("s", { text: t12(m.sched, tz) }) : null
         ),
         h("p", { class: `leg-note ${neutral ? "neutral" : late && late.cls === "late" ? "t-late" : "t-early"}` }, note, inText)
@@ -448,6 +477,7 @@ export function renderFlight(f) {
             "span",
             { class: "g2g-time tn" },
             timeNode(shown, tz, { shift: dayShift(shown, baseDate, tz) }),
+            chip(shown, tz),
             moved ? h("s", { text: t12(t.sched, tz) }) : null
           ),
           h("small", { class: `g2g-kind ${moved && delta > 0 ? "t-late" : moved ? "t-early" : ""}`, text: t.actual ? "Actual" : t.est ? (moved ? `${fmtMin(delta)} ${delta > 0 ? "late" : "early"}` : "Expected") : "Scheduled" })
@@ -601,7 +631,7 @@ export function renderFlight(f) {
   } else if (blockMins) {
     fixed.push(tile(icons.timer, "", "Flight time", duration(blockMins), "Gate to gate"));
   }
-  if (f.distanceKm) fixed.push(tile(icons.route, "", "Distance", `${f.distanceKm.toLocaleString("en-IN")} km`, "As the crow flies"));
+  if (f.distanceKm) fixed.push(tile(icons.route, "", "Distance", `${f.distanceKm.toLocaleString("en-IN")} km`, "In a straight line, airport to airport"));
   if (phase === "pre" && dep.checkIn) fixed.push(tile(icons.desk, "lav", "Check-in", `Desks ${dep.checkIn}`, `At ${dep.code}`));
   if (dep.terminal || arr.terminal)
     fixed.push(tile(icons.terminal, "lav", "Terminals", `${dep.terminal ? `T${dep.terminal}` : dep.code} to ${arr.terminal ? `T${arr.terminal}` : arr.code}`, null));
@@ -622,9 +652,10 @@ export function renderFlight(f) {
     if (phase === "landed") wide.push(tile(icons.clock, "", "Local time now", `${t12(new Date().toISOString(), arrTz)} in ${arrCity}`, null, true));
   }
 
-  const slots = { arr: null, dep: null, sun: null };
+  const slots = { arr: null, dep: null, sun: null, arrAir: null, depAir: null };
   function paint() {
-    const all = [slots.arr, slots.dep, ...fixed].filter(Boolean);
+    // The airport's own report wins over the city forecast when there is one
+    const all = [slots.arrAir || slots.arr, phase === "pre" ? slots.depAir || slots.dep : null, ...fixed].filter(Boolean);
     // an odd tile out stretches across instead of leaving a hole
     all.forEach((el, i) => el.classList.toggle("stretch", all.length % 2 === 1 && i === all.length - 1));
     facts.replaceChildren(...all, ...wide, ...(slots.sun ? [slots.sun] : []));
@@ -705,6 +736,54 @@ export function renderFlight(f) {
     });
   }
 
+  /* The airports' own weather: what they observe now (METAR) and forecast (TAF) for the time you're there */
+  const airwx = [];
+  const ago2 = (iso) => (iso ? ago(iso) : "");
+  const tempOf = (w) => (w?.now?.tempC != null ? `${Math.round(w.now.tempC)}°C` : null);
+  if (phase === "pre" && dep.icao) {
+    airwx.push({
+      icao: dep.icao,
+      apply: (w) => {
+        if (!w?.now && !w?.forecast) return;
+        const soon = Date.parse(depTime) - Date.now() < 60 * 60000;
+        const fc = !soon ? forecastAt(w.forecast, depTime) : null;
+        const nowLine = conditions(w.now);
+        const atTakeoff = fc ? conditions(fc.main) : null;
+        const worry = rough(fc?.main) || rough(w.now) || (fc?.spells || []).map(rough).find(Boolean);
+        const value = [tempOf(w), (wxOrSky(w.now) || "").toLowerCase()].filter(Boolean).join(" · ") || "Reported";
+        const small = [
+          atTakeoff ? `At take-off: ${atTakeoff}.` : nowLine ? `${nowLine}.` : null,
+          worry ? `${worry} expected: it can slow departures.` : null,
+          w.now?.at ? `Airport report ${ago2(w.now.at)}.` : "Airport forecast.",
+        ].filter(Boolean).join(" ");
+        slots.depAir = tile(icons.plane, worry ? "warm" : "", `Weather at ${depCity} airport`, value, small);
+        paint();
+      },
+    });
+  }
+  if (arr.icao && phase !== "cancelled") {
+    airwx.push({
+      icao: arr.icao,
+      apply: (w) => {
+        if (!w?.now && !w?.forecast) return;
+        const landingAhead = phase !== "landed" && Date.parse(arrTime) - Date.now() > 45 * 60000;
+        const fc = landingAhead ? forecastAt(w.forecast, arrTime) : null;
+        const atLanding = fc ? conditions(fc.main) : null;
+        const spell = (fc?.spells || []).map((p) => conditions(p)).find(Boolean);
+        const worry = rough(fc?.main) || (fc?.spells || []).map(rough).find(Boolean) || (!landingAhead ? rough(w.now) : null);
+        const value = [tempOf(w), ((fc ? wxOrSky(fc.main) : wxOrSky(w.now)) || "").toLowerCase()].filter(Boolean).join(" · ") || "Reported";
+        const small = [
+          atLanding ? `At landing: ${atLanding}.` : conditions(w.now) ? `${conditions(w.now)}.` : null,
+          spell ? `At times: ${spell.charAt(0).toLowerCase()}${spell.slice(1)}.` : null,
+          worry ? `${worry} ${landingAhead ? "forecast: arrivals can be slowed or held." : "at the airport."}` : null,
+          w.now?.at ? `Airport report ${ago2(w.now.at)}.` : null,
+        ].filter(Boolean).join(" ");
+        slots.arrAir = tile(icons.plane, worry ? "warm" : "", `Weather at ${arrCity} airport`, value, small);
+        paint();
+      },
+    });
+  }
+
   const link = (href, text) => h("a", { href, target: "_blank", rel: "noopener noreferrer", text });
   const credit = h(
     "p",
@@ -749,7 +828,7 @@ export function renderFlight(f) {
   } else if (phase === "air") {
     if (reported && f.position.altFt) shareTiles.push({ label: "Altitude", value: `${Math.round(f.position.altFt / 1000)}k ft` });
     if (reported && f.position.speedKmh) shareTiles.push({ label: "Speed", value: `${f.position.speedKmh} km/h` });
-    if (f.distanceKm) shareTiles.push({ label: "To go", value: `${Math.round(f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km` });
+    if (f.distanceKm) shareTiles.push({ label: "To go", value: `${Math.round(kmLeft ?? f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km` });
   } else if (phase === "landed") {
     if (arr.belt) shareTiles.push({ label: "Belt", value: arr.belt });
     if (arr.terminal) shareTiles.push({ label: "Terminal", value: arr.terminal });
@@ -810,7 +889,7 @@ export function renderFlight(f) {
       detail: [
         reported && f.position.altFt ? `${Math.round(f.position.altFt).toLocaleString("en-IN")} ft` : null,
         reported && f.position.speedKmh ? `${f.position.speedKmh} km/h` : null,
-        f.distanceKm ? `${Math.round(f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km to go` : null,
+        f.distanceKm ? `${Math.round(kmLeft ?? f.distanceKm * (1 - fraction)).toLocaleString("en-IN")} km to go` : null,
       ].filter(Boolean),
       progress: fraction,
     };
@@ -844,10 +923,22 @@ export function renderFlight(f) {
       for (const t of ticks) t.el.textContent = t.fmt(Date.parse(t.target) - Date.now());
     }, 20000);
   }
-  return { node, map, currentRow: null, weather, share, island, anchor: blocks.banner };
+  return { node, map, currentRow: null, weather, airwx, share, island, anchor: blocks.banner };
 }
 
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/** The headline of a report: what's falling or hanging in the air, else the sky. */
+function wxOrSky(p) {
+  if (!p) return null;
+  return wxWords(p.wx) || skyWords(p.clouds, p.cover);
+}
+
+/** Kilometres between two points on the Earth. */
+function haversine(lat1, lon1, lat2, lon2) {
+  const r = Math.PI / 180;
+  return 6371 * 2 * Math.asin(Math.sqrt(Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2));
+}
 
 /* ---------- your booking code and seat for a flight, kept on this device only ---------- */
 const MINE_KEY = "flightMine";

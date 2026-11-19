@@ -24,7 +24,7 @@ export async function api(path, params = {}, { timeout = 20000, retries = 1 } = 
     try {
       const res = await fetch(url, { signal: ctrl.signal, credentials: "omit", referrerPolicy: "no-referrer" });
       const body = await res.json().catch(() => ({}));
-      if (res.ok) return body;
+      if (res.ok) return path === "/api/flight" ? withCities(body) : body;
       last = new ApiError(body.error || "http_error", body.message || "Something went wrong.", res.status);
       if (res.status < 500) throw last;
     } catch (err) {
@@ -41,6 +41,29 @@ export async function api(path, params = {}, { timeout = 20000, retries = 1 } = 
   throw last;
 }
 
+/**
+ * Airports by the city people know them by: "Hyderabad", not the airport's suburb (Shamshabad).
+ * The airport list is ours (OurAirports); if it isn't ready within a second, the flight's own
+ * names stay, and the next refresh has them.
+ */
+async function withCities(f) {
+  try {
+    const { loadAirports, airportByCode } = await import("./airports.js");
+    await Promise.race([loadAirports(), new Promise((r) => setTimeout(r, 1000))]);
+    const fix = (m) => {
+      const a = m?.code && airportByCode(m.code);
+      if (a) ((m.city = a.city), (m.airportName = a.airport || m.name));
+    };
+    fix(f?.departure);
+    fix(f?.arrival);
+    fix(f?.inbound?.from);
+    fix(f?.inbound?.prev?.from);
+  } catch {
+    /* the flight's own names stand */
+  }
+  return f;
+}
+
 /** Weather is fetched once per place per 15 minutes per session. */
 const weatherMemo = new Map();
 export function weatherAt(lat, lon) {
@@ -52,5 +75,18 @@ export function weatherAt(lat, lon) {
     throw e;
   });
   weatherMemo.set(key, { at: Date.now(), promise });
+  return promise;
+}
+
+/** An airport's own weather (METAR now, TAF ahead), once per airport per 10 minutes per session. */
+const airMemo = new Map();
+export function airportWeather(icao) {
+  const hit = airMemo.get(icao);
+  if (hit && Date.now() - hit.at < 10 * 60000) return hit.promise;
+  const promise = api("/api/airwx", { icao }, { timeout: 12000, retries: 0 }).catch((e) => {
+    airMemo.delete(icao);
+    throw e;
+  });
+  airMemo.set(icao, { at: Date.now(), promise });
   return promise;
 }

@@ -1,6 +1,6 @@
 import { h, svg, $, todayIn, addDays, longDate, dayLabel, relativeDay, prefersReducedMotion, isDarkTheme, ago, IST, timeNode, clock } from "./util.js";
 import { icons, art } from "./icons.js";
-import { api, weatherAt, ApiError } from "./api.js";
+import { api, weatherAt, airportWeather, ApiError } from "./api.js";
 import { createFlipDate } from "./flip.js";
 import { createLoader } from "./loader.js";
 import { renderShareImage } from "./share-card.js";
@@ -987,6 +987,7 @@ function paint() {
   document.title = (s.mode === "train" ? `${s.no} ${s.data.name || ""}` : `${s.data.number} ${s.data.departure?.code}-${s.data.arrival?.code}`).trim();
 
   for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
+    for (const w of view.airwx || []) airportWeather(w.icao).then(w.apply).catch(() => {});
 
   // Draw the share card in the background so tapping Share is instant.
   s.share = view.share;
@@ -1117,6 +1118,7 @@ function mountLive(el, j) {
     const full = h("a", { class: "jn-live-full", href: `?m=train&no=${j.no}&d=${j.startDate}&s=${s.stop}`, on: { click: (e) => (e.preventDefault(), navigate({ m: "train", no: j.no, d: j.startDate, s: s.stop })) } }, "Open full screen", svg(icons.next));
     el.replaceChildren(freshBar(), view.node, h("div", { class: "jn-live-foot" }, full));
     for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
+    for (const w of view.airwx || []) airportWeather(w.icao).then(w.apply).catch(() => {});
   };
   /** When this was last checked, when it checks next, and a way to check now. */
   function freshBar() {
@@ -1191,6 +1193,7 @@ function mountFlightLive(el, j) {
     const full = h("a", { class: "jn-live-full", href: `?m=flight&no=${j.no}&d=${j.startDate}`, on: { click: (e) => (e.preventDefault(), navigate({ m: "flight", no: j.no, d: j.startDate })) } }, "Open full screen", svg(icons.next));
     el.replaceChildren(freshBar(), view.node, h("div", { class: "jn-live-foot" }, full));
     for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
+    for (const w of view.airwx || []) airportWeather(w.icao).then(w.apply).catch(() => {});
   };
   function freshBar() {
     const next = s.nextAt ? Math.max(1, Math.round((s.nextAt - Date.now()) / 60000)) : null;
