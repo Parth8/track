@@ -7060,3 +7060,52 @@ textarea.jn-input {
 .hero-when span.signal.dim {
   color: color-mix(in srgb, var(--signal-ink) 70%, var(--muted));
 }
+.fm-private {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.fm-trip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+.fm-trip svg {
+  width: 15px;
+  height: 15px;
+}
+.jn-kind {
+  margin-bottom: 18px;
+}
+.jn-kind button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.jn-kind svg {
+  width: 17px;
+  height: 17px;
+}
+.jc-train svg {
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  vertical-align: -2px;
+  color: var(--muted);
+}
+.jcard .trip-facts {
+  margin-top: 2px;
+}
+.jn-sub b svg,
+.jn-summary-n svg {
+  width: 15px;
+  height: 15px;
+  vertical-align: -2px;
+}
+.jn-leg-dur .trip-facts {
+  font-size: 13px;
+}

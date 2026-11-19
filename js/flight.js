@@ -1,6 +1,7 @@
 import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing, timeNode, dayShift } from "./util.js";
 import { icons, weatherLook, bodyType } from "./icons.js";
 import { endBadge, tripFacts, signal } from "./marks.js";
+import { flightTrips, addJourney, updateJourney, flightJourney } from "./journeys.js";
 import { historySummary, turnaround, inboundAtGate, ON_TIME_MIN } from "./flight-insights.js";
 
 /**
@@ -856,9 +857,14 @@ function mineAll() {
   }
 }
 export function flightMine(f) {
+  // A saved trip holds them; otherwise they're kept on their own for this flight
+  const trip = flightTrips(f.number, f.date)[0];
+  if (trip) return { code: trip.bookingCode || null, seat: trip.seat || null };
   return mineAll()[`${f.number.replace(/\s+/g, "")}/${f.date}`] || {};
 }
 function saveMine(f, patch) {
+  for (const trip of flightTrips(f.number, f.date))
+    updateJourney(trip.id, { ...("code" in patch ? { bookingCode: patch.code } : {}), ...("seat" in patch ? { seat: patch.seat } : {}) });
   const all = mineAll();
   const k = `${f.number.replace(/\s+/g, "")}/${f.date}`;
   all[k] = { ...(all[k] || {}), ...patch };
@@ -944,11 +950,33 @@ function mineCard(f) {
     }
     return box;
   };
+  // In My trips: say so and open it; not yet: one tap saves it, with what's typed above.
+  const tripBtn = () => {
+    const saved = flightTrips(f.number, f.date).length > 0;
+    return saved
+      ? h("a", { class: "chip ok fm-trip", href: `?m=flight&v=journeys` }, svg(icons.check), "In My trips")
+      : h(
+          "button",
+          {
+            type: "button",
+            class: "pill-btn fm-trip",
+            on: {
+              click: (e) => {
+                const now = flightMine(f);
+                const ok = addJourney(flightJourney(f, { bookingCode: now.code || null, seat: now.seat || null }));
+                if (ok) e.currentTarget.replaceWith(tripBtn());
+              },
+            },
+          },
+          svg(icons.bookmark),
+          "Save to My trips"
+        );
+  };
   return h(
     "section",
     { class: "fmine", "aria-label": "Your booking" },
     slot("code", icons.ticket, "Booking code", "e.g. X7KQ2P"),
     slot("seat", icons.seat, "Seat", "e.g. 14C"),
-    h("p", { class: "fm-private", text: "Kept on this phone only." })
+    h("p", { class: "fm-private" }, h("span", { text: "Kept on this phone only." }), tripBtn())
   );
 }

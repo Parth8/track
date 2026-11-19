@@ -12,7 +12,7 @@ import { createRoutePanel, createResults, routeRange } from "./finder.js";
 import { createFlightResults, flightRouteRange } from "./flight-finder.js";
 import { createIsland } from "./island.js";
 import { createJourneysView, createJourneySheets, checkDueBookings } from "./journeys-ui.js";
-import { sortedJourneys, nextJourney, isTrackable, isLiveNow, isTravelDay, bookingChip, recordRun, needsRecord, onJourneysChange, journeysForRun, isPast, stopOf, updateJourney, journeyById } from "./journeys.js";
+import { sortedJourneys, nextJourney, isTrackable, isLiveNow, isTravelDay, bookingChip, recordRun, recordFlight, needsRecord, onJourneysChange, journeysForRun, isPast, stopOf, updateJourney, journeyById, isFlight } from "./journeys.js";
 
 const today = () => todayIn(IST);
 const THEME_ICON = { light: "themeLight", dark: "themeDark", auto: "themeAuto" };
@@ -131,11 +131,11 @@ for (const card of document.querySelectorAll(".mode-card")) {
   });
 }
 
-$("#jn-entry-add").addEventListener("click", () => journeySheets.openAdd());
+$("#jn-entry-add").addEventListener("click", () => journeySheets.openAdd(null, { kind: current().mode === "flight" ? "flight" : "train" }));
 $("#jn-entry").addEventListener("click", (e) => {
   if (e.metaKey || e.ctrlKey || e.shiftKey) return;
   e.preventDefault();
-  navigate({ m: "train", v: "journeys" });
+  navigate({ m: current().mode || "train", v: "journeys" });
 });
 
 $("#search-back").addEventListener("click", (e) => {
@@ -155,7 +155,7 @@ for (const btn of byToggle.querySelectorAll("button")) {
 }
 
 /* ------------------------------------------------------------------ */
-/* My journeys (trains): saved on this device                          */
+/* My trips (trains and flights): saved on this device                 */
 /* ------------------------------------------------------------------ */
 
 const journeySheets = createJourneySheets({
@@ -170,10 +170,10 @@ const journeySheets = createJourneySheets({
   },
 });
 const journeysView = createJourneysView({ root: $("#journeys-root"), navigate, toast: (m, a) => toast(m, a), sheets: journeySheets });
-$("#journeys-add").addEventListener("click", () => journeySheets.openAdd());
+$("#journeys-add").addEventListener("click", () => journeySheets.openAdd(null, { kind: current().mode === "flight" ? "flight" : "train" }));
 $("#journeys-back").addEventListener("click", (e) => {
   e.preventDefault();
-  navigate({ m: "train" });
+  navigate({ m: current().mode || "train" });
 });
 onJourneysChange(() => {
   paintHomeJourney();
@@ -187,8 +187,8 @@ function syncJourneyEntry() {
   const next = up[0];
   const day = (iso) => new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: IST }).format(new Date(iso));
   $("#jn-entry-sub").textContent = next
-    ? `${isLiveNow(next) ? "On its way now" : `Next: ${day(next.dep)}`} · ${next.from.code} → ${next.to.code}${next.coach ? ` · ${next.coach}${next.seat ? ` ${next.seat}` : ""}` : ""}`
-    : "Live status, coach and berth for your trips, in one place";
+    ? `${isLiveNow(next) ? "On its way now" : `Next: ${day(next.dep)}`} · ${isFlight(next) ? "✈ " : ""}${next.from.code} → ${next.to.code}${next.coach ? ` · ${next.coach}${next.seat ? ` ${next.seat}` : ""}` : isFlight(next) && next.seat ? ` · Seat ${next.seat}` : ""}`
+    : "Live status, seats and bookings for your trains and flights, in one place";
   const count = $("#jn-entry-count");
   count.hidden = !up.length;
   count.textContent = String(up.length);
@@ -201,6 +201,7 @@ function paintHomeJourney() {
   const j = nextJourney(7);
   if (!j) return slot.replaceChildren();
   const live = isLiveNow(j);
+  const fl = isFlight(j);
   const when = live ? "On its way" : relativeDay(new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(new Date(j.dep)), today());
   const bk = bookingChip(j.booking);
   const seat = [j.cls, j.coach, j.seat, bk && bk.cls !== "ok" ? bk.text : null].filter(Boolean).join(" · ");
@@ -209,27 +210,28 @@ function paintHomeJourney() {
       "a",
       {
         class: `home-jn${live ? " live" : ""}`,
-        href: isTrackable(j) ? `?m=train&no=${j.no}&d=${j.startDate}&s=${stopOf(j).code}` : "?m=train&v=journeys",
+        href: !isTrackable(j) ? `?m=${fl ? "flight" : "train"}&v=journeys` : fl ? `?m=flight&no=${j.no}&d=${j.startDate}` : `?m=train&no=${j.no}&d=${j.startDate}&s=${stopOf(j).code}`,
         on: {
           click: (e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey) return;
             e.preventDefault();
-            if (isTrackable(j)) navigate({ m: "train", no: j.no, d: j.startDate, s: stopOf(j).code });
-            else navigate({ m: "train", v: "journeys" });
+            if (!isTrackable(j)) navigate({ m: fl ? "flight" : "train", v: "journeys" });
+            else if (fl) navigate({ m: "flight", no: j.no, d: j.startDate });
+            else navigate({ m: "train", no: j.no, d: j.startDate, s: stopOf(j).code });
           },
         },
       },
-      h("span", { class: "home-jn-icon" }, svg(icons.trainFront), live ? h("i", { class: "live-dot", "aria-hidden": "true" }) : null),
+      h("span", { class: "home-jn-icon" }, svg(fl ? icons.plane : icons.trainFront), live ? h("i", { class: "live-dot", "aria-hidden": "true" }) : null),
       h(
         "span",
         { class: "home-jn-text" },
-        h("small", { text: `Your next train · ${when}` }),
+        h("small", { text: `Your next ${fl ? "flight" : "train"} · ${when}` }),
         h("strong", {}, timeNode(j.dep), ` ${j.from.name} to ${j.to.name}`),
         h("span", { text: [`${j.no} ${j.name}`, seat].filter(Boolean).join(" · ") })
       ),
       svg(icons.next)
     ),
-    h("a", { class: "home-jn-all", href: "?m=train&v=journeys", on: { click: (e) => (e.preventDefault(), navigate({ m: "train", v: "journeys" })) } }, "All my journeys")
+    h("a", { class: "home-jn-all", href: `?m=${fl ? "flight" : "train"}&v=journeys`, on: { click: (e) => (e.preventDefault(), navigate({ m: fl ? "flight" : "train", v: "journeys" })) } }, "All my trips")
   );
 }
 
@@ -391,15 +393,18 @@ async function autoPinToday() {
   autoPinning = true;
   autoPinTried = Date.now();
   try {
-    const data = await api("/api/train", { no: j.no, date: j.startDate }, { timeout: 25000, retries: 0 });
-    const view = renderTrain(data, { stop: stopOf(j).code, foldOpen: false, onPickStop() {}, onToggleFold() {}, onChangeStop() {} });
+    const fl = isFlight(j);
+    const data = fl
+      ? await api("/api/flight", { no: j.no, date: j.startDate }, { timeout: 25000, retries: 0 })
+      : await api("/api/train", { no: j.no, date: j.startDate }, { timeout: 25000, retries: 0 });
+    const view = fl ? renderFlight(data) : renderTrain(data, { stop: stopOf(j).code, foldOpen: false, onPickStop() {}, onToggleFold() {}, onChangeStop() {} });
     if (pinned || !view.island) return;
     lastPinData = data;
     pinFetchedAt = Date.now();
-    savePin({ mode: "train", no: j.no, date: j.startDate, stop: stopOf(j).code, island: view.island, auto: j.id });
+    savePin(fl ? { mode: "flight", no: j.no, date: j.startDate, island: view.island, auto: j.id } : { mode: "train", no: j.no, date: j.startDate, stop: stopOf(j).code, island: view.island, auto: j.id });
     syncIsland();
     refreshPinned();
-    toast(`Your ${j.no} is pinned to the top for today's trip`, { label: "Unpin", run: () => togglePin("pinned") });
+    toast(`Your ${fl ? "flight" : ""}${fl ? " " : ""}${j.no} is pinned to the top for today's trip`, { label: "Unpin", run: () => togglePin("pinned") });
   } catch {
     /* no live data yet: try again next time the app comes up */
   } finally {
@@ -641,7 +646,7 @@ function current() {
     from: code("from"),
     to: code("to"),
     time: /^\d{2}:\d{2}$/.test(p.get("t") || "") ? p.get("t") : "",
-    view: m === "train" && p.get("v") === "journeys" ? "journeys" : null,
+    view: (m === "train" || m === "flight") && p.get("v") === "journeys" ? "journeys" : null,
   };
 }
 
@@ -680,7 +685,7 @@ function route(opts = {}) {
       paintHomeJourney();
     }
     if (target === "journeys") {
-      document.title = "My journeys";
+      document.title = "My trips";
       journeysView.open();
       recordFinished();
     }
@@ -736,7 +741,7 @@ function setupSearch(r) {
 
   document.title = byRoute ? (r.mode === "flight" ? "Find flights between airports" : "Find trains between stations") : r.mode === "flight" ? "Track a flight" : "Track a train";
   byToggle.hidden = !MODES[r.mode]?.route;
-  $("#jn-entry-wrap").hidden = r.mode !== "train";
+  $("#jn-entry-wrap").hidden = !r.mode; // My trips holds trains and flights, so it's on both
   syncJourneyEntry();
   const [numberLabel, groupLabel] = BY_LABEL[r.mode] || BY_LABEL.train;
   $("#by-number-label").textContent = numberLabel;
@@ -988,6 +993,7 @@ function paint() {
   s.island = view.island;
   s.anchor = view.anchor;
   if (s.mode === "train") recordRun(s.no, s.date || today(), s.data);
+  else recordFlight(s.data);
   view.anchor?.after(freshNote(s));
   // A trip you saved on this run: its coach, berth and platform guide is one tap from here.
   const mineHere = s.mode === "train" ? journeysForRun(s.no, s.date || today()).find((x) => !isPast(x) && (x.coach || x.booking)) : null;
@@ -1064,6 +1070,7 @@ function freshNote(s) {
  * the sheet closes). Returns { stop, refresh }.
  */
 function mountLive(el, j) {
+  if (isFlight(j)) return mountFlightLive(el, j);
   const s = { mode: "train", no: j.no, date: j.startDate, stop: stopOf(j).code, inSheet: true, stopped: false, timer: null, data: null, foldOpen: false, mapEl: null, mapCtl: null, loadedAt: 0, nextAt: 0, busy: false };
   /** Your stop for this trip, kept on the journey: picked here, it stays until you pick again. */
   const pickStop = (code) => {
@@ -1156,6 +1163,82 @@ function mountLive(el, j) {
       clearTimeout(s.timer);
     },
     refresh: () => load(true),
+  };
+}
+
+/** A saved flight's live status inside its trip: the same screen as the full one, checked as it goes. */
+function mountFlightLive(el, j) {
+  const s = { stopped: false, timer: null, data: null, mapEl: null, mapCtl: null, loadedAt: 0, nextAt: 0, busy: false };
+  const draw = () => {
+    if (!s.data) return;
+    const view = renderFlight(s.data);
+    if (view.map) {
+      if (s.mapEl) {
+        view.map.el.replaceWith(s.mapEl);
+        s.mapCtl?.update(view.map.opts);
+      } else {
+        s.mapEl = view.map.el;
+        mountWhenVisible(s, view.map);
+      }
+    }
+    const full = h("a", { class: "jn-live-full", href: `?m=flight&no=${j.no}&d=${j.startDate}`, on: { click: (e) => (e.preventDefault(), navigate({ m: "flight", no: j.no, d: j.startDate })) } }, "Open full screen", svg(icons.next));
+    el.replaceChildren(freshBar(), view.node, h("div", { class: "jn-live-foot" }, full));
+    for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
+  };
+  function freshBar() {
+    const next = s.nextAt ? Math.max(1, Math.round((s.nextAt - Date.now()) / 60000)) : null;
+    const btn = h("button", { type: "button", class: `jn-live-refresh${s.busy ? " spinning" : ""}`, "aria-label": "Check now", disabled: s.busy }, svg(icons.refresh), h("span", { text: s.busy ? "Checking…" : "Refresh" }));
+    btn.addEventListener("click", () => {
+      if (Date.now() - s.loadedAt < 60000) {
+        btn.lastChild.textContent = "Just checked";
+        setTimeout(() => btn.isConnected && (btn.lastChild.textContent = "Refresh"), 2000);
+        return;
+      }
+      load();
+    });
+    const phase = s.data?.status?.phase;
+    return h(
+      "div",
+      { class: "jn-live-fresh" },
+      h("p", {}, h("b", { text: `Checked ${clockLocal(s.loadedAt)}` }), h("span", { text: next ? ` · next check in ${next} min` : phase === "landed" ? " · landed" : " · no more checks" })),
+      btn
+    );
+  }
+  async function load() {
+    clearTimeout(s.timer);
+    if (s.stopped) return;
+    s.busy = true;
+    if (s.data) draw();
+    try {
+      const data = await api("/api/flight", { no: j.no, date: j.startDate }, { timeout: 25000, retries: 1 });
+      if (s.stopped) return;
+      s.data = data;
+      s.loadedAt = Date.now();
+      recordFlight(data);
+      // In the air the position moves every half minute; before, the details change slowly.
+      const every = data.status.phase === "air" ? 60000 : data.status.phase === "pre" ? Math.max(2, Math.min(15, data.status.windowMin || 10)) * 60000 : 0;
+      s.nextAt = every ? Date.now() + every : 0;
+      if (every) s.timer = setTimeout(load, every);
+    } catch (e) {
+      if (s.stopped) return;
+      if (!s.data) el.replaceChildren(h("p", { class: "jn-fine", text: e instanceof ApiError && e.code === "not_found" ? "This flight isn't listed yet. It shows here once it is." : "Couldn't load live status just now. Trying again in a minute." }));
+      else toast("Couldn't refresh just now. Showing the last check.");
+      s.nextAt = Date.now() + 60000;
+      s.timer = setTimeout(load, 60000);
+    } finally {
+      s.busy = false;
+    }
+    if (!s.stopped && s.data) draw();
+  }
+  el.replaceChildren(h("div", { class: "jn-live-skel", "aria-hidden": "true" }, h("span", { class: "skel", vars: { width: "55%", height: "26px" } }), h("span", { class: "skel", vars: { width: "100%", height: "90px" } }), h("span", { class: "skel", vars: { width: "80%", height: "18px" } })));
+  load();
+  return {
+    stop() {
+      s.stopped = true;
+      clearTimeout(s.timer);
+      s.mapCtl?.destroy?.();
+    },
+    refresh: () => load(),
   };
 }
 

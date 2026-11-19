@@ -695,7 +695,7 @@ await test("journeys: save a train from route results with its seat and PNR", as
   await sheet.locator("#jn-notes").fill("Mum picks up at Howrah");
   await sheet.locator(".cta", { hasText: "Save journey" }).click();
   await settle(p, 300);
-  assert.match(await p.locator("#toast").textContent(), /Saved to My journeys/);
+  assert.match(await p.locator("#toast").textContent(), /Saved to My trips/);
   assert.match(await p.locator('li[data-no="12314"] .tc-save').textContent(), /Saved/);
   const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("journeys")));
   assert.equal(saved.length, 1);
@@ -757,7 +757,7 @@ await test("journeys: add one from scratch by stations and day", async () => {
   const p = await page();
   await p.goto(`${SITE}?m=train&v=journeys`);
   await settle(p, 500);
-  assert.match(await p.locator(".jn-empty h2").textContent(), /No upcoming journeys/);
+  assert.match(await p.locator(".jn-empty h2").textContent(), /No upcoming trips/);
   await p.locator("#journeys-add").click();
   const sheet = p.locator("#journey-add");
   await sheet.locator("#jn-from").focus();
@@ -1035,7 +1035,7 @@ await test("journeys: the way in shows your next trip, and adds one from a PNR",
   await settle(p, 400);
   const entry = p.locator("#jn-entry-wrap");
   assert.equal(await entry.isVisible(), true);
-  assert.match(await entry.textContent(), /Live status, coach and berth for your trips, in one place/);
+  assert.match(await entry.textContent(), /Live status, seats and bookings for your trains and flights, in one place/);
   assert.equal(await p.locator("#jn-entry-count").isHidden(), true);
   await p.locator("#jn-entry-add").click();
   await p.locator("#jn-pnr-find").waitFor();
@@ -1048,7 +1048,8 @@ await test("journeys: the way in shows your next trip, and adds one from a PNR",
   assert.match(await p.locator("#jn-entry-sub").textContent(), /^Next: \w{3},? \d+ \w{3} · SBC → KCG · B3 59 UB$/);
   await p.goto(`${SITE}?m=flight`);
   await settle(p, 300);
-  assert.equal(await entry.isHidden(), true, "trains only");
+  assert.equal(await entry.isHidden(), false, "My trips holds flights too, so it's on the flight side as well");
+  assert.match(await p.locator("#jn-entry-sub").textContent(), /SBC → KCG/, "the same next trip, whichever side you're on");
   assert.deepEqual(p.errors, []);
 });
 
@@ -1333,6 +1334,58 @@ await test("flights: with nothing reported, the schedule is the schedule, not 'o
   assert.equal(await p.locator(".leg-time .t-late, .leg-time .t-early").count(), 0, "no colour: nothing's known either way");
   // Every tile from before is still there
   assert.deepEqual(await p.locator(".facts .fact > span:not(.fact-icon)").allTextContents(), ["Narrow-body jet", "Flight time"], "no distance in this answer, so no distance tile");
+  assert.deepEqual(p.errors, []);
+});
+
+await test("my trips: a flight saved from its status, with its booking code, opens live inside the trip", async () => {
+  const p = await page({ env: { flightStatus: true, FA_KEY: "fa-test" } });
+  const day = istToday();
+  await p.clock.install({ time: new Date(`${day}T16:21:00Z`) });
+  await p.goto(`${SITE}?m=flight&no=6E6254&d=${day}`);
+  await p.locator(".fmine").waitFor();
+  // Booking code typed before saving goes with the trip
+  await p.locator(".fm-slot").first().dispatchEvent("click");
+  await p.locator(".fm-input").first().fill("x7kq2p");
+  await p.locator(".fm-input").first().press("Enter");
+  await p.locator(".fm-trip").dispatchEvent("click");
+  assert.equal(await p.locator(".fm-trip").textContent(), "In My trips");
+  const saved = await p.evaluate(() => JSON.parse(localStorage.getItem("journeys")));
+  assert.equal(saved.length, 1);
+  assert.deepEqual([saved[0].kind, saved[0].no, saved[0].from.code, saved[0].to.code, saved[0].bookingCode], ["flight", "6E6254", "IXC", "HYD", "X7KQ2P"]);
+  // The list, from the flight side: the same card as a train's, with the plane and the moon
+  await p.goto(`${SITE}?m=flight&v=journeys`);
+  await p.locator(".jcard").waitFor();
+  assert.match(await p.locator(".jc-train").textContent(), /6E 6254 IndiGo/);
+  assert.match(await p.locator(".jcard .trip-facts").textContent(), /2h 30m.*Overnight/);
+  assert.match(await p.locator(".jcard .jc-meta").textContent(), /Booking X7KQ2P/);
+  // Its details: the booking, and live status opening inside
+  await p.locator(".jcard").click();
+  await p.locator("#journey-detail[open]").waitFor();
+  assert.match(await p.locator("#journey-detail .jn-rows").textContent(), /Booking codeX7KQ2P/);
+  await p.locator("#journey-detail .jn-live-btn").click();
+  await p.locator("#journey-detail .jn-live-panel .phase-banner").waitFor();
+  assert.match(await p.locator("#journey-detail .jn-live-panel .phase-banner").textContent(), /Departs in/);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("my trips: add a flight by its number, and trains and flights sit in one list", async () => {
+  const p = await page({ env: { flightStatus: true, FA_KEY: "fa-test" } });
+  const day = istToday();
+  await p.goto(`${SITE}?m=train&v=journeys`);
+  await settle(p, 400);
+  await p.locator("#journeys-add").click();
+  await p.locator("#journey-add .jn-kind").waitFor();
+  await p.locator('#journey-add .jn-kind [role="radio"]', { hasText: "Flight" }).click();
+  await p.locator("#jn-fno").fill("6e 6254");
+  await p.locator("#jn-fdate").fill(day);
+  await p.locator("#journey-add .cta", { hasText: "Find my flight" }).click();
+  await p.locator("#jn-fseat").waitFor();
+  await p.locator("#jn-fseat").fill("14c");
+  await p.locator("#journey-add .cta", { hasText: "Save flight" }).click();
+  assert.match(await p.locator("#toast").textContent(), /Saved to My trips/);
+  await settle(p, 400);
+  assert.equal(await p.locator(".jcard").count(), 1);
+  assert.match(await p.locator(".jcard .jc-meta").textContent(), /Seat 14C/);
   assert.deepEqual(p.errors, []);
 });
 

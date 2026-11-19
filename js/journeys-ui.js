@@ -1,12 +1,15 @@
-// My journeys: the list (Upcoming, Past, All), swipe left to delete with Undo, a journey's
-// details, and the sheet for adding or editing one. Everything stays on this device.
+// My trips: the list (Upcoming, Past, All) of trains and flights, swipe left to delete with Undo,
+// a trip's details, and the sheet for adding or editing one. Everything stays on this device.
 
 import { h, svg, clock, timeNode, dayShift, duration, fmtMin, longDate, addDays, todayIn, IST, ago, prefersReducedMotion } from "./util.js";
 import { icons } from "./icons.js";
 import { api, ApiError } from "./api.js";
 import { stationField, shortDay } from "./finder.js";
 import { stationSource } from "./stations.js";
+import { endBadge, tripFacts } from "./marks.js";
 import {
+  isFlight,
+  flightJourney,
   loadJourneys,
   addJourney,
   updateJourney,
@@ -157,7 +160,7 @@ function pnrError(e) {
 
 /**
  * Upcoming journeys whose booking is due a look, checked one at a time (a few at most) when the
- * app opens or you open My journeys. Tells you only when something changed.
+ * app opens or you open My trips. Tells you only when something changed.
  */
 let sweeping = false;
 export async function checkDueBookings(toast, { max = 3 } = {}) {
@@ -186,6 +189,7 @@ export async function checkDueBookings(toast, { max = 3 } = {}) {
  * whoever's picking you up sees when you'll actually arrive.
  */
 export async function shareTrip(j, toast) {
+  if (isFlight(j)) return shareFlightTrip(j, toast);
   const stop = stopOf(j);
   const url = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${stop.code}`, location.href.split("?")[0]).href;
   const bd = boardDate(j);
@@ -199,6 +203,22 @@ export async function shareTrip(j, toast) {
   try {
     await navigator.clipboard.writeText(`${text} ${url}`);
     toast("Trip link copied. It opens live status at your stop.");
+  } catch {
+    toast("Couldn't share the trip");
+  }
+}
+
+async function shareFlightTrip(j, toast) {
+  const url = new URL(`?m=flight&no=${j.no}&d=${j.startDate}`, location.href.split("?")[0]).href;
+  const text = `I'm on flight ${flightNo(j.no)} from ${j.from.name} on ${longDate(boardDate(j))}, due in ${j.to.name} at ${clock(j.arr, tzTo(j))}. Follow it live:`;
+  try {
+    if (navigator.share) return void (await navigator.share({ title: `Flight ${flightNo(j.no)} to ${j.to.name}`, text, url }));
+  } catch (e) {
+    if (e.name === "AbortError") return;
+  }
+  try {
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    toast("Trip link copied. It opens the flight's live status.");
   } catch {
     toast("Couldn't share the trip");
   }
@@ -237,7 +257,12 @@ const dayOf = (iso) => shortDay(boardDay({ dep: iso }));
 /** The timetable's journey time, in minutes. */
 const tripMin = (j) => j.schedMin ?? Math.round((Date.parse(j.arr) - Date.parse(j.dep)) / 60000);
 
-const seatText = (j) => [j.cls, j.coach, j.seat].filter(Boolean).join(" · ");
+const seatText = (j) => (isFlight(j) ? [j.seat ? `Seat ${j.seat}` : null, j.bookingCode ? `Booking ${j.bookingCode}` : null] : [j.cls, j.coach, j.seat]).filter(Boolean).join(" · ");
+/** "6E 6254" from "6E6254". */
+const flightNo = (no) => String(no || "").replace(/^([A-Z0-9]{2})(\d)/, "$1 $2");
+/** A trip's own time zones: a flight's airports, India for trains. */
+const tzFrom = (j) => (isFlight(j) && j.depTz) || IST;
+const tzTo = (j) => (isFlight(j) && j.arrTz) || IST;
 
 /* ================================================================== */
 /* The list                                                            */
@@ -262,7 +287,8 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
     const bkChip = bk && bk.cls !== "ok" ? bk : null;
     const pax = j.booking?.passengers?.length || 0;
     const seatLine = [seatText(j), pax > 1 ? `${pax} travellers` : null].filter(Boolean).join(" · ");
-    const spoken = `${j.no} ${j.name}, ${longDate(bd)}. ${j.from.name} at ${clock(dep)} to ${j.to.name} at ${clock(arr)}.${chip ? ` ${chip.text}.` : ""}${bkChip ? ` Booking ${bkChip.text}.` : ""}${seatLine ? ` ${seatLine}.` : ""} ${isTrackable(j) && !past ? "Opens live status." : "Opens details."}`;
+    const fl = isFlight(j);
+    const spoken = `${fl ? `Flight ${flightNo(j.no)}` : j.no} ${j.name}, ${longDate(bd)}. ${j.from.name} at ${clock(dep)} to ${j.to.name} at ${clock(arr)}.${chip ? ` ${chip.text}.` : ""}${bkChip ? ` Booking ${bkChip.text}.` : ""}${seatLine ? ` ${seatLine}.` : ""} ${isTrackable(j) && !past ? "Opens live status." : "Opens details."}`;
 
     const face = h(
       "button",
@@ -274,11 +300,12 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
         h(
           "span",
           { class: "jc-top" },
-          h("span", { class: "jc-times" }, timeNode(dep), h("i", { text: "→" }), timeNode(arr, IST, { shift: Math.max(0, dayShift(arr, bd)) })),
+          h("span", { class: "jc-times" }, timeNode(dep, tzFrom(j)), h("i", { text: "→" }), timeNode(arr, tzTo(j), { shift: Math.max(0, dayShift(arr, bd, tzTo(j))) })),
           chip ? h("span", { class: `chip ${chip.cls}`, text: chip.text }) : null
         ),
         h("span", { class: "jc-route" }, h("b", { text: j.from.name }), h("span", { class: "jc-arrow", text: " to " }), h("b", { text: j.to.name })),
-        h("span", { class: "jc-train" }, h("span", { class: "tn", text: j.no }), ` ${j.name}`),
+        h("span", { class: "jc-train" }, fl ? svg(icons.plane) : svg(icons.trainFront), h("span", { class: "tn", text: fl ? flightNo(j.no) : j.no }), ` ${j.name}`),
+        tripFacts({ ms: tripMin(j) > 0 ? tripMin(j) * 60000 : null, overnight: dayShift(arr, bd, tzTo(j)) > 0 }),
         seatLine || bkChip || j.notes
           ? h(
               "span",
@@ -328,7 +355,7 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
     const list = sortedJourneys(filter);
     const tabs = h(
       "div",
-      { class: "segmented three jn-tabs", role: "radiogroup", "aria-label": "Show journeys" },
+      { class: "segmented three jn-tabs", role: "radiogroup", "aria-label": "Show trips" },
       [
         ["upcoming", "Upcoming"],
         ["past", "Past"],
@@ -349,6 +376,7 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
       const bits = [
         `${st.count} trip${st.count > 1 ? "s" : ""}`,
         st.km ? `${st.km.toLocaleString("en-IN")} km on rails` : null,
+        st.kmAir ? `${st.kmAir.toLocaleString("en-IN")} km in the air` : null,
         st.recorded ? `${st.onTime} of ${st.recorded} on time` : null,
         st.medianDelay != null && st.recorded >= 3 ? (st.medianDelay >= 10 ? `usually ${fmtMin(st.medianDelay)} late` : "usually on time") : null,
       ].filter(Boolean);
@@ -357,9 +385,9 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
 
     if (!list.length) {
       const msg = {
-        upcoming: ["No upcoming journeys", "Add your next train to keep its date, seat and PNR in one place, a tap away from live status."],
-        past: ["No past journeys yet", "Once a trip is over it moves here, with how it actually ran: when you left, when you arrived, and the delay."],
-        all: ["No journeys yet", "Add a train trip to keep its date, seat and PNR in one place."],
+        upcoming: ["No upcoming trips", "Add your next train or flight to keep its date, seat and booking in one place, a tap away from live status."],
+        past: ["No past trips yet", "Once a trip is over it moves here, with how it actually went: when you left, when you arrived, and the delay."],
+        all: ["No trips yet", "Add a train or a flight to keep its date, seat and booking in one place."],
       }[filter];
       nodes.push(
         h(
@@ -368,7 +396,7 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
           h("span", { class: "err-icon" }, svg(icons.calendar)),
           h("h2", { class: "display", text: msg[0] }),
           h("p", { text: msg[1] }),
-          filter !== "past" ? h("button", { type: "button", class: "cta", on: { click: () => sheets.openAdd() } }, svg(icons.plus), "Add a journey") : null
+          filter !== "past" ? h("button", { type: "button", class: "cta", on: { click: () => sheets.openAdd() } }, svg(icons.plus), "Add a trip") : null
         )
       );
     } else {
@@ -383,7 +411,7 @@ export function createJourneysView({ root, navigate, toast, sheets }) {
       for (const [month, items] of groups) {
         nodes.push(h("h2", { class: "jn-month", text: month }), h("ol", { class: "jn-list", "aria-label": month }, items.map((j) => card(j, i++))));
       }
-      nodes.push(h("p", { class: "jn-hint", text: "Swipe a journey left to delete it, or open it for more." }));
+      nodes.push(h("p", { class: "jn-hint", text: "Swipe a trip left to delete it, or open it for more." }));
     }
     const kb = Math.max(1, Math.round(journeysSize() / 1024));
     nodes.push(
@@ -511,6 +539,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
   function openDetail(jid, { focus = null } = {}) {
     const j = journeyById(jid);
     if (!j) return;
+    if (isFlight(j)) return openFlightDetail(j);
     const past = isPast(j);
     const r = j.result;
     const bd = boardDate(j);
@@ -714,6 +743,247 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
   }
   const checking = new Set();
 
+  /* ---------------- a flight trip ---------------- */
+
+  function openFlightDetail(j) {
+    const past = isPast(j);
+    const r = j.result;
+    const bd = boardDate(j);
+    detail.title.textContent = `${j.from.code} to ${j.to.code}`;
+    const row = (label, value, sub) => h("div", { class: "jn-row" }, h("span", { text: label }), h("span", {}, value, sub ? h("small", { text: sub }) : null));
+    const none = () => h("span", { class: "jn-none", text: "Not added" });
+    const leg = (side) => {
+      const a = side === "from" ? j.from : j.to;
+      const tz = side === "from" ? tzFrom(j) : tzTo(j);
+      const sched = side === "from" ? j.dep : j.arr;
+      const actual = past && r ? (side === "from" ? r.depActual : r.arrActual) : null;
+      const delay = r ? (side === "from" ? r.depDelay : r.arrDelay) : null;
+      const shift = Math.max(0, dayShift(actual || sched, bd, tz));
+      return h(
+        "div",
+        { class: "jn-leg" },
+        h("span", { class: "jn-leg-dot", "aria-hidden": "true" }),
+        h(
+          "div",
+          {},
+          h("p", { class: "jn-leg-place" }, endBadge(side === "from" ? "leave" : "arrive"), h("b", { text: a.name }), h("span", { class: "tc-code", text: a.code })),
+          h("p", { class: "jn-leg-sub", text: [side === "from" ? "Leaves the gate" : "Reaches the gate", side === "to" && r?.belt ? `Belt ${r.belt}` : null].filter(Boolean).join(" · ") })
+        ),
+        h(
+          "div",
+          { class: "jn-leg-time" },
+          timeNode(actual || sched, tz, { shift }),
+          h("small", { class: "jn-leg-day", text: shortDay(new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(actual || sched))) }),
+          actual && Number.isFinite(delay) && Math.abs(delay) >= 3 ? h("small", { text: `planned ${clock(sched, tz)}` }) : null
+        )
+      );
+    };
+    const overnight = dayShift(j.arr, bd, tzTo(j)) > 0;
+    const nodes = [
+      h("p", { class: "jn-sub" }, h("b", {}, svg(icons.plane), ` ${flightNo(j.no)} ${j.name}`), h("span", { text: longDate(bd) })),
+      h(
+        "div",
+        { class: "jn-legs" },
+        leg("from"),
+        h("p", { class: "jn-leg-dur" }, tripFacts({ ms: tripMin(j) > 0 ? tripMin(j) * 60000 : null, km: j.km, overnight })),
+        leg("to")
+      ),
+    ];
+    if (past) {
+      if (r && (r.depActual || r.arrActual)) {
+        const chip = resultChip(r);
+        const tiles = [
+          chip ? ["Arrived", chip.text, r.arrActual ? `at ${clock(r.arrActual, tzTo(j))}` : null, chip.cls] : null,
+          r.travelMin != null ? ["Gate to gate", duration(r.travelMin * 60000), r.schedMin ? `planned ${duration(r.schedMin * 60000)}` : null] : null,
+          Number.isFinite(r.depDelay) ? ["Left", Math.abs(r.depDelay) < 3 ? "On time" : `${fmtMin(Math.abs(r.depDelay))} ${r.depDelay > 0 ? "late" : "early"}`, r.depActual ? `at ${clock(r.depActual, tzFrom(j))}` : null] : null,
+          r.km ? ["Distance", `${r.km.toLocaleString("en-IN")} km`, null] : null,
+        ].filter(Boolean);
+        nodes.push(
+          h("p", { class: "sheet-label", text: "How it went" }),
+          h("div", { class: "jn-tiles" }, tiles.map(([l, v, sub, cls]) => h("div", { class: `jn-tile${cls ? ` ${cls}` : ""}` }, h("span", { text: l }), h("strong", { text: v }), sub ? h("small", { text: sub }) : null)))
+        );
+      } else nodes.push(h("p", { class: "jn-fine", text: "We couldn't record how this flight went. Open it in the app during or soon after the flight next time." }));
+    } else {
+      const d = daysUntil(bd);
+      nodes.push(h("p", { class: "jn-when" }, svg(icons.clock), isLiveNow(j) ? "On its way now." : isTrackable(j) ? "Live status is ready." : "Live status opens a week before.", d > 0 ? ` That's ${d === 1 ? "tomorrow" : `in ${d} days`}.` : ""));
+    }
+    const copy = (text, what) =>
+      h(
+        "button",
+        {
+          type: "button",
+          class: "jn-copy",
+          "aria-label": `Copy ${what} ${text.split("").join(" ")}`,
+          on: {
+            click: async () => {
+              try {
+                await navigator.clipboard.writeText(text);
+                toast(`${what} copied`);
+              } catch {
+                toast(`Couldn't copy the ${what.toLowerCase()}`);
+              }
+            },
+          },
+        },
+        h("span", { class: "tn", text }),
+        svg(icons.copy)
+      );
+    nodes.push(
+      h("p", { class: "sheet-label", text: "Your booking" }),
+      h(
+        "div",
+        { class: "jn-rows" },
+        row("Booking code", j.bookingCode ? copy(j.bookingCode, "Booking code") : none()),
+        row("Seat", j.seat || none()),
+        j.aircraft ? row("Aircraft", j.aircraft) : null,
+        j.notes ? row("Notes", j.notes) : null
+      )
+    );
+    if (!past && isTrackable(j) && mountLive) nodes.push(liveSection(j));
+    const actions = [];
+    if (!past) actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => shareTrip(j, toast) } }, svg(icons.share), "Share trip"));
+    if (!past) actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => downloadIcs(j) } }, svg(icons.calendar), "Add to calendar"));
+    actions.push(h("button", { type: "button", class: "cta secondary", on: { click: () => (detail.d.close(), openEdit(j.id)) } }, "Edit details"));
+    actions.push(
+      h(
+        "button",
+        {
+          type: "button",
+          class: "jn-delete",
+          on: {
+            click: () => {
+              const undo = removeJourney(j.id);
+              detail.d.close();
+              toast(`Deleted ${flightNo(j.no)} on ${shortDay(bd)}`, { label: "Undo", run: () => (undo(), onSaved?.()) });
+              onSaved?.();
+            },
+          },
+        },
+        svg(icons.trash),
+        "Delete trip"
+      )
+    );
+    nodes.push(h("div", { class: "jn-actions" }, actions));
+    fill(detail.body, nodes);
+    detail.d.dataset.id = j.id;
+    if (!detail.d.open) detail.d.showModal();
+  }
+
+  /**
+   * Add a flight: its number and day, looked up so the airports and times are right, then your
+   * booking code and seat. Editing a saved one skips the look-up.
+   */
+  function stepFlight(pre = {}) {
+    const editingJ = editing ? journeyById(editing) : null;
+    add.title.textContent = editingJ ? "Edit flight" : "Add a flight";
+    const noIn = h("input", { class: "jn-input", id: "jn-fno", autocomplete: "off", autocapitalize: "characters", spellcheck: "false", maxLength: 8, placeholder: "e.g. 6E 6254", value: pre.no ? flightNo(pre.no) : "" });
+    const date = h("input", { type: "date", class: "jn-input", id: "jn-fdate", value: pre.date || today(), min: addDays(today(), -2), max: addDays(today(), 7) });
+    const err = h("p", { class: "field-error", role: "alert", hidden: true });
+    const out = h("div", { class: "jn-flight-found", "aria-live": "polite" });
+    const find = h("button", { type: "button", class: "cta", on: { click: () => look() } }, "Find my flight", svg(icons.next));
+    noIn.addEventListener("keydown", (e) => e.key === "Enter" && look());
+
+    const details = (base) => {
+      const code = h("input", { class: "jn-input", id: "jn-fcode", autocomplete: "off", autocapitalize: "characters", spellcheck: "false", maxLength: 8, placeholder: "e.g. X7KQ2P", value: base.bookingCode || "" });
+      const seat = h("input", { class: "jn-input", id: "jn-fseat", autocomplete: "off", autocapitalize: "characters", spellcheck: "false", maxLength: 4, placeholder: "e.g. 14C", value: base.seat || "" });
+      const notes = h("textarea", { class: "jn-input", id: "jn-fnotes", rows: 2, maxLength: 200, placeholder: "Anything to remember", value: base.notes || "" });
+      const ferr = h("p", { class: "field-error", role: "alert", hidden: true });
+      code.addEventListener("input", () => (code.value = code.value.toUpperCase().replace(/[^A-Z0-9]/g, "")));
+      seat.addEventListener("input", () => (seat.value = seat.value.toUpperCase().replace(/[^A-Z0-9]/g, "")));
+      const bd = boardDate(base);
+      const save = h(
+        "button",
+        {
+          type: "button",
+          class: "cta",
+          on: {
+            click: () => {
+              ferr.hidden = true;
+              if (code.value && !/^[A-Z0-9]{5,8}$/.test(code.value)) return void ((ferr.textContent = "Booking codes have 5 to 8 letters and numbers."), (ferr.hidden = false));
+              if (seat.value && !/^\d{1,2}[A-K]$/.test(seat.value)) return void ((ferr.textContent = "Seats look like 14C."), (ferr.hidden = false));
+              const fields = { bookingCode: code.value || null, seat: seat.value || null, notes: notes.value.trim() || null };
+              const saved = editingJ ? (updateJourney(editingJ.id, fields), journeyById(editingJ.id)) : addJourney({ ...base, ...fields });
+              if (!saved) return void ((ferr.textContent = "Couldn't save on this device. Storage may be full or blocked."), (ferr.hidden = false));
+              add.d.close();
+              toast(editingJ ? "Trip updated" : "Saved to My trips");
+              onSaved?.();
+            },
+          },
+        },
+        svg(icons.bookmark),
+        editingJ ? "Save changes" : "Save flight"
+      );
+      return [
+        h(
+          "div",
+          { class: "jn-summary" },
+          h(
+            "div",
+            { class: "jn-summary-t" },
+            h("span", { class: "jn-end" }, timeNode(base.dep, tzFrom(base)), h("small", { class: "jn-end-day", text: shortDay(bd) })),
+            h("i", { "aria-hidden": "true", text: "→" }),
+            h("span", { class: "jn-end" }, timeNode(base.arr, tzTo(base), { shift: Math.max(0, dayShift(base.arr, bd, tzTo(base))) })),
+            tripFacts({ ms: tripMin(base) > 0 ? tripMin(base) * 60000 : null, overnight: dayShift(base.arr, bd, tzTo(base)) > 0 })
+          ),
+          h("p", { class: "jn-summary-r" }, endBadge("leave"), `${base.from.name} to ${base.to.name}`),
+          h("p", { class: "jn-summary-n" }, svg(icons.plane), h("b", { class: "tn", text: ` ${flightNo(base.no)}` }), ` ${base.name}`)
+        ),
+        h("div", { class: "jn-two" }, h("div", {}, h("label", { class: "field-label", for: "jn-fcode", text: "Booking code" }), code), h("div", {}, h("label", { class: "field-label", for: "jn-fseat", text: "Seat" }), seat)),
+        h("label", { class: "field-label", for: "jn-fnotes", text: "Notes" }),
+        notes,
+        ferr,
+        save,
+        h("p", { class: "jn-device" }, svg(icons.info), "Kept only on this device. Your booking code never leaves it."),
+      ];
+    };
+
+    async function look() {
+      const raw = noIn.value.toUpperCase().replace(/\s+/g, "");
+      err.hidden = true;
+      if (!/^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(raw)) return void ((err.textContent = "Flight numbers look like 6E 6254 or AI 101."), (err.hidden = false), noIn.focus());
+      find.disabled = true;
+      out.replaceChildren(h("div", { class: "seat-loading" }, h("span", { class: "skel", vars: { width: "80%", height: "18px" } }), h("span", { class: "skel", vars: { width: "60%", height: "18px" } })));
+      try {
+        const f = await api("/api/flight", { no: raw, date: date.value }, { timeout: 25000, retries: 1 });
+        out.replaceChildren(...details(flightJourney(f)));
+      } catch (e) {
+        out.replaceChildren();
+        err.textContent = e instanceof ApiError && e.code === "not_found" ? `No flight ${flightNo(raw)} on that day. Check the number and the date.` : e instanceof ApiError && e.message ? e.message : "Couldn't look the flight up just now. Try again in a moment.";
+        err.hidden = false;
+      } finally {
+        find.disabled = false;
+      }
+    }
+
+    if (editingJ) return void fill(add.body, ...details(editingJ));
+    fill(
+      add.body,
+      kindTabs("flight"),
+      h("label", { class: "field-label", for: "jn-fno", text: "Flight number" }),
+      noIn,
+      h("label", { class: "field-label", for: "jn-fdate", text: "Day it leaves" }),
+      date,
+      err,
+      find,
+      out
+    );
+    requestAnimationFrame(() => noIn.focus({ preventScroll: true }));
+  }
+
+  /** Train or flight: what you're adding. */
+  function kindTabs(kind) {
+    return h(
+      "div",
+      { class: "segmented jn-kind", role: "radiogroup", "aria-label": "What are you adding?" },
+      [
+        ["train", "Train", icons.trainFront],
+        ["flight", "Flight", icons.plane],
+      ].map(([k, label, icon]) =>
+        h("button", { type: "button", role: "radio", "aria-checked": String(kind === k), on: { click: () => kind !== k && (k === "flight" ? stepFlight() : stepFind()) } }, svg(icon), label)
+      )
+    );
+  }
+
   /* ---------------- live status, inside the booking ---------------- */
 
   let liveCtl = null; // the tracker drawn in the open sheet, if any
@@ -728,11 +998,11 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
     liveCtl?.stop();
     liveCtl = null;
     const panel = h("div", { class: "jn-live-panel", id: `jn-live-${j.id}`, hidden: true });
-    const sub = isLiveNow(j) ? `On its way now · your stop: ${stopOf(j).name}` : `Your stop: ${stopOf(j).name}`;
+    const sub = isFlight(j) ? (isLiveNow(j) ? "On its way now · gate, delays and your plane" : "Gate, delays and your plane") : isLiveNow(j) ? `On its way now · your stop: ${stopOf(j).name}` : `Your stop: ${stopOf(j).name}`;
     const btn = h(
       "button",
       { type: "button", class: "jn-live-btn", "aria-expanded": "false", "aria-controls": panel.id },
-      h("span", { class: "jn-live-ico", "aria-hidden": "true" }, svg(icons.trainFront), isLiveNow(j) ? h("i", { class: "live-dot" }) : null),
+      h("span", { class: "jn-live-ico", "aria-hidden": "true" }, svg(isFlight(j) ? icons.plane : icons.trainFront), isLiveNow(j) ? h("i", { class: "live-dot" }) : null),
       h("span", { class: "jn-live-text" }, h("b", { text: "Live status" }), h("small", { text: sub })),
       h("span", { class: "jn-live-chev", "aria-hidden": "true" })
     );
@@ -1111,9 +1381,9 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
   }
 
   function downloadIcs(j) {
-    const link = new URL(`?m=train&no=${j.no}&d=${j.startDate}&s=${stopOf(j).code}`, location.href).href;
+    const link = new URL(isFlight(j) ? `?m=flight&no=${j.no}&d=${j.startDate}` : `?m=train&no=${j.no}&d=${j.startDate}&s=${stopOf(j).code}`, location.href).href;
     const blob = new Blob([journeyIcs(j, link)], { type: "text/calendar" });
-    const a = h("a", { href: URL.createObjectURL(blob), download: `train-${j.no}-${boardDate(j)}.ics` });
+    const a = h("a", { href: URL.createObjectURL(blob), download: `${isFlight(j) ? "flight" : "train"}-${j.no}-${boardDate(j)}.ics` });
     document.body.append(a);
     a.click();
     a.remove();
@@ -1128,7 +1398,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
   let chosen = null; // the train picked in step 1
 
   function stepFind(pre = {}) {
-    add.title.textContent = "Add a journey";
+    add.title.textContent = "Add a train";
     const status = h("span", { class: "sr-only", role: "status", "aria-live": "polite" });
     const field = (end, label) => {
       const input = h("input", { class: "jf-input", id: `jn-${end}`, type: "text", placeholder: "Station name or code", autocomplete: "off", spellcheck: "false", role: "combobox", "aria-autocomplete": "list", "aria-expanded": "false", "aria-controls": `jn-${end}-list` });
@@ -1242,6 +1512,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
     }
 
     fill(add.body, 
+      kindTabs("train"),
       h("label", { class: "field-label", for: "jn-pnr-find", text: "Your PNR" }),
       h("div", { class: "jn-pnr-row" }, pnrIn),
       pnrErr,
@@ -1363,7 +1634,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
             const ok = editing ? updateJourney(editing, details) : addJourney({ ...chosen, ...details });
             if (!ok) return void ((err.textContent = "Couldn't save on this device. Its storage may be full or switched off."), (err.hidden = false));
             add.d.close();
-            toast(editing ? "Journey updated" : "Saved to My journeys");
+            toast(editing ? "Journey updated" : "Saved to My trips");
             onSaved?.(editing ? null : ok);
           },
         },
@@ -1411,7 +1682,7 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
   }
 
   /** Add: from scratch, or from a train picked in route search. */
-  function openAdd(train = null) {
+  function openAdd(train = null, { kind = "train" } = {}) {
     editing = null;
     fieldsMade = { fromResults: !!train };
     if (train) {
@@ -1419,7 +1690,8 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
       stepDetails();
     } else {
       chosen = null;
-      stepFind();
+      if (kind === "flight") stepFlight();
+      else stepFind();
     }
     add.d.showModal();
   }
@@ -1427,7 +1699,8 @@ export function createJourneySheets({ navigate, toast, onSaved, mountLive }) {
   function openEdit(jid) {
     editing = jid;
     fieldsMade = { fromResults: true };
-    stepDetails();
+    if (isFlight(journeyById(jid))) stepFlight();
+    else stepDetails();
     add.d.showModal();
   }
 

@@ -624,7 +624,7 @@ export function createResults({ root, title, sub, navigate, toast, footer, onSav
       {
         type: "button",
         class: `tc-save${saved ? " on" : ""}`,
-        "aria-label": saved ? `${t.number} is in My journeys. Open it` : `Save ${t.number} to My journeys`,
+        "aria-label": saved ? `${t.number} is in My trips. Open it` : `Save ${t.number} to My trips`,
         on: {
           click: () =>
             saved

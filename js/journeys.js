@@ -1,5 +1,6 @@
-// My journeys: train trips you save (train, date, your stations, seat, PNR, notes), kept only on
-// this device. Past ones keep a small record of how the run actually went, taken from the live
+// My trips: train and flight trips you save, kept only on this device. A train trip has its
+// train, date, your stations, seat, PNR and notes; a flight trip (kind: "flight") its flight
+// number, date, airports, times, booking code, seat and notes. Past ones keep a small record of how the run actually went, taken from the live
 // tracker while it can still see that run (the tracker covers the last 4 days).
 
 import { addDays, todayIn, IST } from "./util.js";
@@ -91,8 +92,15 @@ export function journeysSize() {
 const endOf = (j) => Date.parse(j.result?.arrActual || j.arr);
 /** "past" once you've arrived (an hour after, to be safe), otherwise "upcoming". */
 export const isPast = (j, now = Date.now()) => endOf(j) + 60 * 60000 < now;
-/** The live tracker can show runs that started in the last 4 days, up to today. */
-export const isTrackable = (j) => j.startDate >= addDays(todayIn(IST), -3) && j.startDate <= todayIn(IST);
+export const isFlight = (j) => j?.kind === "flight";
+/**
+ * The live tracker can show runs that started in the last 4 days, up to today. Flights can be
+ * followed from two days back to a week ahead (before the day, with their schedule).
+ */
+export const isTrackable = (j) =>
+  isFlight(j)
+    ? j.startDate >= addDays(todayIn(IST), -2) && j.startDate <= addDays(todayIn(IST), 7)
+    : j.startDate >= addDays(todayIn(IST), -3) && j.startDate <= todayIn(IST);
 /** On its way right now: boarding was under 3 hours ago or soon, and it hasn't arrived. */
 export const isLiveNow = (j, now = Date.now()) => isTrackable(j) && !isPast(j, now) && Date.parse(j.dep) - now < 3 * 3600000;
 
@@ -111,7 +119,7 @@ export function sortedJourneys(filter = "upcoming") {
 export const stopOf = (j) => (j.stopOverride?.code && j.stopOverride.code !== j.to.code ? j.stopOverride : j.to);
 
 /** The day you board, in India. */
-export const boardDay = (j) => new Intl.DateTimeFormat("en-CA", { timeZone: IST }).format(new Date(j.dep));
+export const boardDay = (j) => new Intl.DateTimeFormat("en-CA", { timeZone: (j.kind === "flight" && j.depTz) || IST }).format(new Date(j.dep));
 
 /** Travel day: you board today, or within 6 hours (a trip just after midnight), or it's on its way. */
 export const isTravelDay = (j, now = Date.now()) => isTrackable(j) && !isPast(j, now) && (boardDay(j) === todayIn(IST) || Date.parse(j.dep) - now < 6 * 3600000);
@@ -121,7 +129,7 @@ export const isTravelDay = (j, now = Date.now()) => isTrackable(j) && !isPast(j,
  * your station. Then today's run is checked against the railway's own enquiry system.
  */
 export const DAYOF_HOURS = 8;
-export const inDayOf = (j, now = Date.now()) => isTrackable(j) && !isPast(j, now) && Date.parse(j.dep) - now <= DAYOF_HOURS * 3600000 && Date.parse(j.dep) - now > -30 * 60000;
+export const inDayOf = (j, now = Date.now()) => !isFlight(j) && isTrackable(j) && !isPast(j, now) && Date.parse(j.dep) - now <= DAYOF_HOURS * 3600000 && Date.parse(j.dep) - now > -30 * 60000;
 
 /** The next journey within a week, for the home screen. */
 export function nextJourney(days = 7) {
@@ -176,17 +184,74 @@ export function recordRun(no, startDate, data) {
 
 /** Journeys that have (or should have) finished and can still be read from the tracker. */
 export const needsRecord = (now = Date.now()) =>
-  loadJourneys().filter((j) => isTrackable(j) && !j.result?.complete && Date.parse(j.dep) < now);
+  loadJourneys().filter((j) => !isFlight(j) && isTrackable(j) && !j.result?.complete && Date.parse(j.dep) < now);
+
+/** A saved flight trip from a flight's status. */
+export function flightJourney(f, extra = {}) {
+  const no = f.number.replace(/\s+/g, "");
+  const dep = f.departure;
+  const arr = f.arrival;
+  return {
+    kind: "flight",
+    no,
+    name: f.airline?.name || "",
+    startDate: f.date,
+    from: { code: dep.code, name: dep.city || dep.name || dep.code },
+    to: { code: arr.code, name: arr.city || arr.name || arr.code },
+    dep: dep.sched,
+    arr: arr.sched,
+    depTz: dep.tz || null,
+    arrTz: arr.tz || null,
+    schedMin: dep.sched && arr.sched ? Math.round((Date.parse(arr.sched) - Date.parse(dep.sched)) / 60000) : null,
+    km: f.distanceKm ?? null,
+    aircraft: f.aircraft?.model || null,
+    ...extra,
+  };
+}
+
+/** Saved flight trips for this flight on this day. */
+export const flightTrips = (number, date) => loadJourneys().filter((j) => isFlight(j) && j.no === number.replace(/\s+/g, "") && j.startDate === date);
+
+/** Keep how a saved flight went, once it has left: gate and landing times against the plan. */
+export function recordFlight(f) {
+  if (!f?.number || !["air", "landed"].includes(f.status?.phase)) return;
+  for (const j of flightTrips(f.number, f.date)) {
+    if (j.result?.complete) continue;
+    const out = f.times?.out?.actual || (f.status.source === "flightaware" ? null : f.departure.actual);
+    const inn = f.times?.in?.actual || f.arrival.actual || null;
+    const mins = (a, b) => (a && b ? Math.round((Date.parse(b) - Date.parse(a)) / 60000) : null);
+    updateJourney(j.id, {
+      result: {
+        depSched: f.departure.sched,
+        depActual: out || null,
+        arrSched: f.arrival.sched,
+        arrActual: inn,
+        depDelay: f.status.delayDep ?? mins(f.departure.sched, out),
+        arrDelay: inn ? (f.status.delayArr ?? mins(f.arrival.sched, inn)) : null,
+        travelMin: mins(out, inn),
+        schedMin: mins(f.departure.sched, f.arrival.sched),
+        km: f.distanceKm ?? j.km ?? null,
+        belt: f.arrival.belt || null,
+        complete: !!(out && inn),
+        recordedAt: new Date().toISOString(),
+      },
+    });
+  }
+}
 
 /** A few totals for the Past tab. */
 export function pastStats() {
   const past = sortedJourneys("past");
-  const km = past.reduce((n, j) => n + (j.result?.km ?? j.km ?? 0), 0);
+  const kmOf = (j) => j.result?.km ?? j.km ?? 0;
+  const km = past.filter((j) => !isFlight(j)).reduce((n, j) => n + kmOf(j), 0);
+  const kmAir = past.filter(isFlight).reduce((n, j) => n + kmOf(j), 0);
   const delays = past.map((j) => j.result?.arrDelay).filter((d) => Number.isFinite(d));
   const onTime = delays.filter((d) => d < 10).length;
   return {
     count: past.length,
     km: Math.round(km),
+    kmAir: Math.round(kmAir),
+    flights: past.filter(isFlight).length,
     recorded: delays.length,
     onTime,
     medianDelay: delays.length ? delays.sort((a, b) => a - b)[Math.floor(delays.length / 2)] : null,
@@ -355,12 +420,14 @@ const icsText = (s) => String(s || "").replace(/\\/g, "\\\\").replace(/;/g, "\\;
 
 /** A calendar event for the trip, with a reminder 3 hours before, to open in any calendar app. */
 export function journeyIcs(j, link) {
+  const fl = isFlight(j);
   const seat = [j.cls, j.coach, j.seat].filter(Boolean).join(" · ");
   const lines = [
-    `Train ${j.no} ${j.name || ""}`.trim(),
+    fl ? `Flight ${j.no.replace(/^([A-Z0-9]{2})(\d)/, "$1 $2")} ${j.name || ""}`.trim() : `Train ${j.no} ${j.name || ""}`.trim(),
     `${j.from.name} (${j.from.code}) to ${j.to.name} (${j.to.code})`,
     seat ? `Seat: ${seat}` : null,
     j.pnr ? `PNR: ${j.pnr}` : null,
+    j.bookingCode ? `Booking code: ${j.bookingCode}` : null,
     j.notes ? `Notes: ${j.notes}` : null,
     link ? `Live status: ${link}` : null,
   ].filter(Boolean);
@@ -373,13 +440,13 @@ export function journeyIcs(j, link) {
     `DTSTAMP:${icsTime(new Date().toISOString())}`,
     `DTSTART:${icsTime(j.dep)}`,
     `DTEND:${icsTime(j.arr)}`,
-    `SUMMARY:${icsText(`🚆 ${j.no} ${j.from.code} → ${j.to.code}`)}`,
-    `LOCATION:${icsText(`${j.from.name} railway station`)}`,
+    `SUMMARY:${icsText(`${fl ? "✈️" : "🚆"} ${j.no} ${j.from.code} → ${j.to.code}`)}`,
+    `LOCATION:${icsText(fl ? `${j.from.name} airport (${j.from.code})` : `${j.from.name} railway station`)}`,
     `DESCRIPTION:${icsText(lines.join("\n"))}`,
     "BEGIN:VALARM",
     "TRIGGER:-PT3H",
     "ACTION:DISPLAY",
-    `DESCRIPTION:${icsText(`Train ${j.no} leaves ${j.from.name} in 3 hours`)}`,
+    `DESCRIPTION:${icsText(`${fl ? "Flight" : "Train"} ${j.no} leaves ${j.from.name} in 3 hours`)}`,
     "END:VALARM",
     "END:VEVENT",
     "END:VCALENDAR",
