@@ -4,7 +4,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import worker, { extractPnr, trackOf, airportDelaysOf } from "../worker/worker.js";
+import worker, { extractPnr, trackOf, airportDelaysOf, faPageData, faPageFlight, faPageInbound } from "../worker/worker.js";
 import { fidsAnswer, flightAnswer, MemoryKV } from "./fids.mjs";
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -1039,4 +1039,88 @@ test("budget: a flight with no copy anywhere gets a lookup past its daily share,
   const d = addDays(istToday(), 4);
   const first = await get(`/api/flight?no=6E2131&date=${d}`, { with: e });
   assert.equal(first.status, 200, "nothing to show otherwise, so it looks it up");
+});
+
+/* ---------- FlightAware's public page: what its own screen draws from ---------- */
+
+const faPageFix = (n) => faPageData(readFileSync(new URL(`./fixtures/fa-page-${n}.html`, import.meta.url), "utf8"));
+
+test("flightaware page: before departure, the airline's estimates, the plane flying in, and two weeks", () => {
+  const f = faPageFlight(faPageFix("pre"), "6E6254", "2026-11-19");
+  assert.equal(f.status.source, "flightaware-page");
+  assert.equal(f.status.phase, "pre");
+  assert.equal(f.status.delayDep, 15);
+  assert.equal(f.status.delayArr, 10);
+  assert.equal(f.departure.revised, "2026-11-19T17:15:00.000Z", "10:45 PM, as the airline estimates");
+  assert.equal(f.times.off.est, "2026-11-19T17:25:00.000Z");
+  assert.deepEqual([f.departure.code, f.departure.city, f.departure.tz, f.arrival.code, f.arrival.city], ["IXC", "Chandigarh", "Asia/Kolkata", "HYD", "Shamshabad"]);
+  assert.ok(Number.isFinite(f.departure.lat) && Number.isFinite(f.arrival.lon), "airport positions from the page itself");
+  assert.equal(f.inboundRef, "IGO724-1794903774-airline-1540p:0");
+  assert.equal(f.history.length, 11);
+  assert.equal(f.history[0].date, "2026-11-18");
+  assert.equal(f.plan.eteMin, 130);
+  // Tomorrow's flight is on the same page, from its recent list
+  const next = faPageFlight(faPageFix("pre"), "6E6254", "2026-11-20");
+  assert.equal(next.status.phase, "pre");
+  assert.equal(next.departure.sched, "2026-11-20T17:00:00.000Z");
+  assert.equal(faPageFlight(faPageFix("pre"), "6E6254", "2026-12-25"), null, "a day the page doesn't have");
+});
+
+test("flightaware page: in the air, real gate and runway times, position and the path flown", () => {
+  const f = faPageFlight(faPageFix("air"), "6E6254", "2026-11-19");
+  assert.equal(f.status.phase, "air");
+  assert.equal(f.times.out.actual, "2026-11-19T17:37:00.000Z", "left the gate 11:07 PM");
+  assert.equal(f.times.off.actual, "2026-11-19T17:55:00.000Z", "took off 11:25 PM");
+  assert.equal(f.status.delayDep, 37);
+  assert.equal(f.status.delayArr, 40, "at the gate about 1:40 AM");
+  assert.equal(f.position.altFt, 35000);
+  assert.ok(f.track.length > 10 && f.track.at(-1)[2] > 30000);
+});
+
+test("flightaware page: the inbound plane, from its own page", () => {
+  const ib = faPageInbound(faPageFix("inbound"), "IGO724-1794903774-airline-1540p:0", "IXC", "2026-11-19T17:15:00Z");
+  assert.equal(ib.number, "6E 724");
+  assert.deepEqual([ib.from.code, ib.to.code, ib.phase], ["GOI", "IXC", "air"]);
+  assert.equal(ib.delayDep, 50);
+  assert.equal(ib.times.in.est, "2026-11-19T16:47:00.000Z");
+});
+
+test("flights: FlightAware's page comes first, free, and Refresh asks it again", async () => {
+  const day = istToday();
+  const shift = (html) => html.replace(/"(scheduled|estimated|actual|timestamp)":(\d{10})/g, (_, k, v) => `"${k}":${Number(v) + (Date.parse(`${day}T00:00:00Z`) - Date.parse("2026-11-19T00:00:00Z")) / 1000}`);
+  const page = (n) => shift(readFileSync(new URL(`./fixtures/fa-page-${n}.html`, import.meta.url), "utf8"));
+  let pageCalls = 0;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.includes("flightaware.com/live/flight/IGO6254")) return (pageCalls++, new Response(page("pre")));
+    if (u.includes("flightaware.com/live/flight/IGO724")) return new Response(page("inbound"));
+    if (u.includes("adsb")) return new Response(JSON.stringify({ ac: [] }));
+    throw new Error(`unexpected ${u}`);
+  };
+  const e = flightEnv();
+  const a = await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+  assert.equal(a.status, 200);
+  assert.equal(a.body.status.source, "flightaware-page");
+  assert.equal(a.body.inbound.number, "6E 724");
+  assert.ok(!calls.some((u) => u.includes("aerodatabox")), "nothing paid");
+  await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+  assert.equal(pageCalls, 1, "a minute's copy is shared");
+  await get(`/api/flight?no=6E6254&date=${day}&fresh=1`, { with: e });
+  assert.equal(pageCalls, 1, "Refresh within 15 s keeps the copy");
+  // The page stops answering: its last copy is shown, labelled, and AeroDataBox isn't paid
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).includes("flightaware.com")) return new Response("busy", { status: 503 });
+    if (String(url).includes("adsb")) return new Response(JSON.stringify({ ac: [] }));
+    throw new Error(`unexpected ${url}`);
+  };
+  caches.default.expire(`fapage/IGO6254`);
+  caches.default.expire(`flight/6E6254/${day}`);
+  calls.length = 0;
+  const c = await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+  assert.equal(c.status, 200);
+  assert.equal(c.body.status.servedStale, true);
+  assert.ok(!calls.some((u) => u.includes("aerodatabox")), "still nothing paid");
+  assert.equal(await e.QUOTA.get(`adb/${day.slice(0, 7)}`), null);
 });

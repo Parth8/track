@@ -201,6 +201,8 @@ export function renderFlight(f) {
       target = "inbound";
       banner.append(sub(context));
     }
+    // Past its time and nobody has said it left: say exactly that, not a countdown at zero
+    if (until <= -10 * 60000 && !f.status.leftGate) banner.append(sub(`It's past ${t12(depTime, depTz)} and there's no report of it leaving the gate yet.`));
     const ad = dep.delays;
     if (ad && ad.minutes >= 15) banner.append(sub(`Delays at ${dep.code}: about ${fmtMin(ad.minutes)}${ad.reasons[0] ? `, ${ad.reasons[0].toLowerCase()}` : ""}.`));
   } else if (phase === "air") {
@@ -708,7 +710,7 @@ export function renderFlight(f) {
     "p",
     { class: "data-credit" },
     "Flight data by ",
-    f.status.source === "flightaware" ? link("https://www.flightaware.com", "FlightAware") : link("https://aerodatabox.com", "AeroDataBox"),
+    String(f.status.source || "").startsWith("flightaware") ? link("https://www.flightaware.com", "FlightAware") : link("https://aerodatabox.com", "AeroDataBox"),
     ". Live positions from ",
     link("https://adsb.lol", "adsb.lol"),
     " and ",

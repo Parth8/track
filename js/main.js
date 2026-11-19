@@ -75,7 +75,16 @@ const MODES = {
     // live position is free, so refresh often while airborne; schedules change slowly
     // Positions are free, so in the air the map moves every 30 s. Before take-off the details
     // themselves only change every 30 to 60 minutes (see the Worker), so checking every 2 is plenty.
-    refreshMs: (data) => (data?.status?.phase === "air" ? 30000 : ["landed", "cancelled"].includes(data?.status?.phase) ? 0 : 120000),
+    // In the air every 30 s; before take-off every 2 min (every minute in the last hour); after
+    // landing every 5 min for an hour and a half, for the belt; then it's done.
+    refreshMs: (data) => {
+      const ph = data?.status?.phase;
+      if (ph === "air") return 30000;
+      if (ph === "cancelled") return 0;
+      if (ph === "landed") return Date.now() - Date.parse(data.arrival?.actual || data.arrival?.revised || data.arrival?.sched || 0) < 90 * 60000 ? 300000 : 0;
+      const dep = Date.parse(data?.departure?.revised || data?.departure?.sched || 0);
+      return dep && dep - Date.now() < 3600000 ? 60000 : 120000;
+    },
     route: {
       dateQ: "When do you fly?",
       dateHelp: "Local date at the airport you leave from.",
@@ -859,7 +868,8 @@ async function load({ silent = false, manual = false } = {}) {
 
   try {
     if (!navigator.onLine) throw new ApiError("offline", "You're offline.");
-    const params = { no: s.no, date: s.date || today(), fresh: manual && s.mode === "train" ? "1" : null };
+    // A tap on Refresh asks the source again (trains and flights), not just our shared copy
+    const params = { no: s.no, date: s.date || today(), fresh: manual ? "1" : null };
     const data = await api(`/api/${s.mode}`, params, { timeout: s.mode === "train" ? 25000 : 20000, retries: 1 });
     if (session !== s) return;
     if (s.loader) {

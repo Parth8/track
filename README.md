@@ -287,6 +287,7 @@ Current conditions, hourly forecast and sunrise and sunset for the next few days
 |---|---|---|
 | `ALLOWED_ORIGINS` | Text | `https://parth8.github.io` (the domain only, no path) |
 | `ADB_KEY` | **Secret** | AeroDataBox key from RapidAPI (optional; flights stay off without it) |
+| `FA_PAGE` | Text | Optional. `off` stops reading FlightAware's public flight page, which is otherwise the first source for flights from two days back to two days ahead: free, read when someone asks, one copy a minute shared by everyone, and Refresh can ask again after 15 seconds. |
 | `FA_KEY` | **Secret** | Optional. FlightAware AeroAPI key. From 12 hours before departure to 2 hours after landing, flights come from FlightAware: the airline's estimates for leaving the gate, take-off, landing and reaching the gate; the plane flying in and whether it can make the turnaround; gates, belts; and the last two weeks of the flight. AeroDataBox stays the fallback. |
 | `FA_MONTHLY_CAP` | Text | Optional. AeroAPI calls a month (default `300`). A flight check is one call, two while the inbound plane matters. |
 | `FA_PER_FLIGHT_DAILY` / `FA_VISITOR_DAILY` | Text | Optional. AeroAPI calls one flight can use a day (default `16`), and new flights one visitor can bring onto it a day (default `4`). |

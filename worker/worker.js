@@ -672,8 +672,30 @@ async function flightRoute(url, env, ctx, request) {
   const key = `flight/${raw}/${date}`;
   const item = `${raw}/${date}`;
 
-  let flight = (await cacheGet(key))?.data || null;
+  const fresh = url.searchParams.get("fresh") === "1";
+  let flight = null;
   let liveDone = false;
+  // First, free and fresh: FlightAware's public page, read on demand (a minute's cache shared by
+  // everyone, Refresh can ask again after 15 s). Paid sources are only for when it can't answer.
+  if (env.FA_PAGE !== "off" && Math.abs(daysBetween(today, date)) <= 2) {
+    try {
+      flight = await fromFaPage(ctx, raw, date, fresh);
+    } catch (err) {
+      log("warn", "flightaware page", err.code || String(err.message || err).slice(0, 80));
+    }
+    if (flight) putFlight(ctx, key, flight); // the fallback copy, should the page stop answering
+    else {
+      // AeroDataBox costs us; the page doesn't. A hiccup on the page shows its last copy (up to
+      // half an hour old, and labelled) rather than spend a paid lookup.
+      const last = await cacheGet(`${key}/stale`);
+      if (last?.data?.status?.source === "flightaware-page" && last.age < 30 * 60000) {
+        flight = last.data;
+        flight.status.servedStale = true;
+        flight.status.note = "FlightAware didn't answer just now.";
+      }
+    }
+  }
+  if (!flight) flight = (await cacheGet(key))?.data || null;
   if (!flight) {
     const old = (await cacheGet(`${key}/stale`))?.data || null;
     const now = Date.now();
@@ -746,6 +768,9 @@ async function flightRoute(url, env, ctx, request) {
     const live = await livePosition(ctx, flight).catch(() => null);
     if (live) {
       flight.position = live;
+      // The transponder knows the actual plane: its registration, and its exact type
+      if (live.reg && !flight.aircraft?.reg) flight.aircraft = { ...(flight.aircraft || {}), reg: live.reg };
+      if (live.typeCode) flight.aircraft = { ...(flight.aircraft || {}), code: live.typeCode, model: aircraftName(live.typeCode) };
       if (flight.status.phase === "pre" && ((live.altFt ?? 0) > 1500 || (live.speedKmh ?? 0) > 220)) {
         flight.status.phase = "air";
         flight.status.inferred = true;
@@ -1150,6 +1175,219 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return 6371 * 2 * Math.asin(Math.sqrt(Math.sin(((lat2 - lat1) * r) / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(((lon2 - lon1) * r) / 2) ** 2));
 }
 
+/* ---------- FlightAware's public flight page: free, fresh, read on demand ---------- */
+
+// The page carries the same data its own screen draws from, as one JSON object. It's read only
+// when someone asks for the flight, at most once a minute per flight for everyone together, and a
+// tap on Refresh can ask again after 15 seconds. Nothing else is taken from the page.
+const FA_PAGE_TTL_S = 60;
+const FA_PAGE_FLOOR_MS = 15000;
+
+/** The JSON a FlightAware flight page embeds, or null. */
+export function faPageData(html) {
+  const m = /trackpollBootstrap\s*=\s*(\{[\s\S]*?\});\s*<\/script>/.exec(html || "");
+  if (!m) return null;
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchFaPage(ident) {
+  let res;
+  try {
+    res = await getWithRetry(`https://www.flightaware.com/live/flight/${encodeURIComponent(ident)}`, { headers: { "User-Agent": UA, Accept: "text/html" } }, { timeout: 7000, retries: 0 });
+  } catch {
+    throw new ApiError(502, "upstream_unavailable", "FlightAware is slow right now.");
+  }
+  if (!res.ok) throw new ApiError(502, "upstream_unavailable", `FlightAware answered ${res.status}.`);
+  const data = faPageData(await res.text());
+  if (!data?.flights) throw new ApiError(502, "upstream_changed", "FlightAware's page didn't carry its flight data.");
+  return data;
+}
+
+/** One page's data, shared by everyone for a minute; Refresh asks again after 15 seconds. */
+function faPage(ctx, ident, fresh) {
+  return cached(ctx, `fapage/${ident}`, FA_PAGE_TTL_S, () => fetchFaPage(ident).then((d) => ({ ...d, status: {} })), { fresh, floorMs: FA_PAGE_FLOOR_MS });
+}
+
+const faIso = (sec) => (Number.isFinite(sec) && sec > 0 ? new Date(sec * 1000).toISOString() : null);
+const faSet = (t) => ({ sched: faIso(t?.scheduled), est: faIso(t?.estimated), actual: faIso(t?.actual) });
+const faTz = (a) => (a?.TZ ? String(a.TZ).replace(/^:/, "") : null);
+const faAirport = (a) => ({
+  code: a?.iata || a?.altIdent || a?.icao || "",
+  name: a?.friendlyName || "",
+  city: String(a?.friendlyLocation || "").split(",")[0] || a?.friendlyName || "",
+  tz: faTz(a),
+  lat: Array.isArray(a?.coord) ? a.coord[1] : null,
+  lon: Array.isArray(a?.coord) ? a.coord[0] : null,
+});
+/** The local day a FlightAware entry is scheduled to leave on. */
+const faDay = (e) => localDay(faIso(e?.gateDepartureTimes?.scheduled || e?.takeoffTimes?.scheduled), faTz(e?.origin));
+
+function faPhase(e) {
+  if (e?.cancelled || /cancel/i.test(e?.flightStatus || "")) return "cancelled";
+  if (e?.diverted || /divert/i.test(e?.flightStatus || "")) return "diverted";
+  if (e?.landingTimes?.actual || e?.gateArrivalTimes?.actual || /arrived|landed/i.test(e?.flightStatus || "")) return "landed";
+  if (e?.takeoffTimes?.actual || /airborne|en ?route/i.test(e?.flightStatus || "")) return "air";
+  return "pre";
+}
+
+/** What happened on each recent day, newest first (the same shape as AeroAPI's history). */
+export function faPageHistory(rows, date) {
+  return (rows || [])
+    .map((r) => ({ r, d: faDay(r) }))
+    .filter(({ r, d }) => d && d < date && (r.gateDepartureTimes?.actual || r.takeoffTimes?.actual || r.cancelled))
+    .map(({ r, d }) => {
+      const out = faIso(r.gateDepartureTimes?.actual || r.takeoffTimes?.actual);
+      const inn = faIso(r.gateArrivalTimes?.actual || r.landingTimes?.actual);
+      const so = faIso(r.gateDepartureTimes?.scheduled);
+      const si = faIso(r.gateArrivalTimes?.scheduled);
+      return {
+        date: d,
+        cancelled: !!r.cancelled,
+        diverted: !!r.diverted,
+        out: so && out ? { sched: so, actual: out } : null,
+        in: si && inn ? { sched: si, actual: inn } : null,
+        depDelay: so && out ? Math.round((Date.parse(out) - Date.parse(so)) / 60000) : null,
+        arrDelay: si && inn ? Math.round((Date.parse(inn) - Date.parse(si)) / 60000) : null,
+      };
+    })
+    .sort((a, b) => (a.date < b.date ? 1 : -1))
+    .slice(0, 14);
+}
+
+/** The flight for a day from a page's data: the full entry when it's the page's own flight, else its row in the recent list. */
+export function faPageFlight(data, raw, date) {
+  const main = Object.values(data?.flights || {})[0];
+  if (!main || main.unknown) return null;
+  const rows = main.activityLog?.flights || [];
+  const e = faDay(main) === date ? main : rows.find((r) => faDay(r) === date);
+  if (!e) return null;
+  const full = e === main;
+  const t = { out: faSet(e.gateDepartureTimes), off: faSet(e.takeoffTimes), on: faSet(e.landingTimes), in: faSet(e.gateArrivalTimes) };
+  const phase = faPhase(e);
+  const dep = faAirport(e.origin || main.origin);
+  const arr = faAirport(e.destination || main.destination);
+  const iata = (main.codeShare?.airline?.iata || main.airline?.iata || raw.slice(0, 2)).toUpperCase();
+  const no = raw.slice(2);
+  const mins = (a, b) => (a && b ? Math.round((Date.parse(b) - Date.parse(a)) / 60000) : null);
+  const outBest = t.out.actual || t.out.est;
+  const inBest = t.in.actual || t.in.est;
+  // Where it is, from the page's own track: FlightAware's latest fix, about a minute old
+  let position = null;
+  const last = full && Array.isArray(main.track) ? main.track.at(-1) : null;
+  if (phase === "air" && last?.coord) {
+    position = {
+      lat: last.coord[1],
+      lon: last.coord[0],
+      altFt: Number.isFinite(main.altitude) ? main.altitude * 100 : Number.isFinite(last.alt) ? last.alt * 100 : null,
+      speedKmh: Number.isFinite(main.groundspeed) ? Math.round(main.groundspeed * 1.852) : Number.isFinite(last.gs) ? Math.round(last.gs * 1.852) : null,
+      trackDeg: Number.isFinite(main.heading) ? main.heading : null,
+      at: faIso(last.timestamp),
+      ageSec: last.timestamp ? Math.max(0, Math.round(Date.now() / 1000 - last.timestamp)) : null,
+      source: "reported",
+    };
+  }
+  const gc = [dep.lat, dep.lon, arr.lat, arr.lon].every(Number.isFinite) ? Math.round(haversineKm(dep.lat, dep.lon, arr.lat, arr.lon)) : null;
+  const typeCode = (full ? main.aircraft?.type : e.aircraft?.type) || main.aircraft?.type || null;
+  return {
+    kind: "flight",
+    number: `${iata} ${no}`,
+    date,
+    airline: { name: airlineName(iata, main.airline?.shortName), iata },
+    callsign: (main.atcIdent || main.ident || (AIRLINE_ICAO[iata] ? AIRLINE_ICAO[iata] + no : raw)).replace(/\s+/g, ""),
+    status: {
+      phase,
+      raw: e.flightStatus || "",
+      source: "flightaware-page",
+      reported: true,
+      delayDep: mins(t.out.sched, outBest),
+      delayArr: mins(t.in.sched, inBest),
+      lastUpdated: new Date().toISOString(),
+      leftGate: !!t.out.actual && !t.off.actual,
+    },
+    departure: { ...dep, sched: t.out.sched || t.off.sched, revised: outBest || null, runway: t.off.actual, terminal: e.origin?.terminal || null, gate: e.origin?.gate || null, checkIn: null, belt: null, actual: t.off.actual || t.out.actual || null },
+    arrival: { ...arr, sched: t.in.sched || t.on.sched, revised: inBest || null, runway: t.on.actual, terminal: e.destination?.terminal || null, gate: e.destination?.gate || null, checkIn: null, belt: null, actual: t.on.actual || t.in.actual || null },
+    times: t,
+    distanceKm: gc ?? (Number.isFinite(main.flightPlan?.directDistance) ? Math.round(main.flightPlan.directDistance * 1.609) : null),
+    aircraft: { model: aircraftName(typeCode), code: typeCode, reg: null, hex: null },
+    plan: full
+      ? {
+          eteMin: Number.isFinite(main.flightPlan?.ete) ? Math.round(main.flightPlan.ete / 60) : null,
+          speedKmh: Number.isFinite(main.flightPlan?.speed) ? Math.round(main.flightPlan.speed * 1.852) : null,
+          altitudeFt: Number.isFinite(main.flightPlan?.altitude) ? main.flightPlan.altitude * 100 : null,
+          distanceKm: Number.isFinite(main.flightPlan?.directDistance) ? Math.round(main.flightPlan.directDistance * 1.609) : null,
+          route: main.flightPlan?.route || null,
+        }
+      : null,
+    track: full && Array.isArray(main.track) && phase !== "pre" ? main.track.filter((p) => p?.coord).filter((_, i, a) => a.length <= 160 || i % Math.ceil(a.length / 160) === 0 || i === a.length - 1).map((p) => [p.coord[0], p.coord[1], Number.isFinite(p.alt) ? p.alt * 100 : null, Number.isFinite(p.gs) ? Math.round(p.gs * 1.852) : null, faIso(p.timestamp)]) : null,
+    progress: full && main.distance?.elapsed != null && main.distance?.remaining != null ? Math.round((main.distance.elapsed / Math.max(1, main.distance.elapsed + main.distance.remaining)) * 100) : null,
+    history: faPageHistory(rows, date),
+    inboundRef: full && main.inboundFlight?.flightId ? main.inboundFlight.flightId : null,
+    inbound: null,
+    position,
+    legs: 1,
+  };
+}
+
+/** The plane flying in, from its own page: found by its id there, or as the leg landing here before we leave. */
+export function faPageInbound(data, ref, into, beforeIso) {
+  const all = Object.entries(data?.flights || {});
+  let e = all.find(([id]) => id === ref)?.[1];
+  if (!e) {
+    const main = all[0]?.[1];
+    const cands = [main, ...(main?.activityLog?.flights || [])].filter((x) => x && (x.destination?.iata || x.destination?.altIdent) === into);
+    const before = Date.parse(beforeIso || 0);
+    e = cands
+      .filter((x) => Number.isFinite(x.gateArrivalTimes?.scheduled) && x.gateArrivalTimes.scheduled * 1000 <= before && before - x.gateArrivalTimes.scheduled * 1000 < 8 * 3600000)
+      .sort((a, b) => b.gateArrivalTimes.scheduled - a.gateArrivalTimes.scheduled)[0];
+  }
+  if (!e) return null;
+  const t = { out: faSet(e.gateDepartureTimes), off: faSet(e.takeoffTimes), on: faSet(e.landingTimes), in: faSet(e.gateArrivalTimes) };
+  const phase = faPhase(e);
+  const ident = String(ref || e.ident || "").split("-")[0];
+  const iata = e.codeShare?.airline?.iata || e.airline?.iata || "";
+  const num = (e.iataIdent || "").replace(/^[A-Z0-9]{2}/, "") || ident.replace(/^[A-Z]{3}/, "");
+  const last = Array.isArray(e.track) ? e.track.at(-1) : null;
+  return {
+    id: ref || null,
+    number: iata && num ? `${iata} ${num}` : e.iataIdent || ident || null,
+    callsign: ident || null,
+    reg: null,
+    from: { code: e.origin?.iata || e.origin?.altIdent || "", city: String(e.origin?.friendlyLocation || "").split(",")[0] || e.origin?.friendlyName || "" },
+    to: { code: e.destination?.iata || e.destination?.altIdent || "", city: String(e.destination?.friendlyLocation || "").split(",")[0] || "" },
+    phase,
+    landed: phase === "landed",
+    times: t,
+    delayDep: t.out.sched && (t.out.actual || t.out.est) ? Math.round((Date.parse(t.out.actual || t.out.est) - Date.parse(t.out.sched)) / 60000) : null,
+    delayArr: t.in.sched && (t.in.actual || t.in.est) ? Math.round((Date.parse(t.in.actual || t.in.est) - Date.parse(t.in.sched)) / 60000) : null,
+    progress: e.distance?.elapsed != null && e.distance?.remaining != null ? Math.round((e.distance.elapsed / Math.max(1, e.distance.elapsed + e.distance.remaining)) * 100) : null,
+    position: phase === "air" && last?.coord ? { lat: last.coord[1], lon: last.coord[0], altFt: Number.isFinite(e.altitude) ? e.altitude * 100 : null, speedKmh: Number.isFinite(e.groundspeed) ? Math.round(e.groundspeed * 1.852) : null, trackDeg: e.heading ?? null, at: faIso(last.timestamp), source: "reported" } : null,
+    liveEta: null,
+  };
+}
+
+/** A flight from FlightAware's public pages: its own, and its inbound plane's before it leaves. */
+async function fromFaPage(ctx, raw, date, fresh) {
+  const icao = AIRLINE_ICAO[raw.slice(0, 2)];
+  if (!icao) return null;
+  const ident = icao + raw.slice(2);
+  const data = await faPage(ctx, ident, fresh);
+  const flight = faPageFlight(data, raw, date);
+  if (!flight) return null;
+  if (flight.inboundRef && flight.status.phase === "pre") {
+    const ibIdent = flight.inboundRef.split("-")[0];
+    const ibData = await faPage(ctx, ibIdent, false).catch(() => null);
+    flight.inbound = ibData ? faPageInbound(ibData, flight.inboundRef, flight.departure.code, flight.departure.revised || flight.departure.sched) : null;
+  }
+  delete flight.inboundRef;
+  flight.status.checkedAt = data.status?.checkedAt || new Date().toISOString();
+  if (data.status?.servedStale) flight.status.servedStale = true;
+  return flight;
+}
+
 /** Store a flight the way cached() does: a copy fresh for its phase, and a 36-hour fallback. */
 function putFlight(ctx, key, data) {
   const fetchedAt = Date.parse(data.status?.checkedAt || "") || Date.now();
@@ -1251,6 +1489,8 @@ async function rememberAirports(env, list) {
  */
 function flightTtl(f) {
   const now = Date.now();
+  // Read free from FlightAware's page: a minute, like the page itself (ten after landing)
+  if (f.status?.source === "flightaware-page") return f.status.phase === "landed" ? 600 : FA_PAGE_TTL_S;
   const dep = Date.parse(f.departure.revised || f.departure.sched || 0);
   switch (f.status.phase) {
     case "landed":
@@ -1619,7 +1859,11 @@ async function livePosition(ctx, flight) {
     else if (reg) attempts.push(lookup(p, p.reg, reg));
     if (cs) attempts.push(lookup(p, p.cs, cs));
   }
-  const pos = await Promise.any(attempts).catch(() => null);
+  const pos = await Promise.any(attempts).catch((e) => {
+    // Why nobody had it, kept for the logs: "adsb.lol no fix; adsb.fi 403"
+    log("info", "no live fix", id, (e?.errors || []).map((x) => String(x?.message || x)).join("; ").slice(0, 160));
+    return null;
+  });
   ctx.waitUntil(cache.put(key, new Response(JSON.stringify({ pos }), { headers: { "Cache-Control": "max-age=20" } })));
   return pos;
 }
@@ -1647,6 +1891,9 @@ async function lookup(provider, path, value) {
     ageSec: age,
     source: "live",
     via: provider.name,
+    // The plane itself, as its transponder says: registration and type
+    reg: typeof ac.r === "string" && ac.r.trim() ? ac.r.trim().toUpperCase() : null,
+    typeCode: typeof ac.t === "string" && ac.t.trim() ? ac.t.trim().toUpperCase() : null,
   };
 }
 
