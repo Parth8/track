@@ -4,7 +4,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import worker, { extractPnr } from "../worker/worker.js";
+import worker, { extractPnr, trackOf, airportDelaysOf } from "../worker/worker.js";
 import { fidsAnswer, flightAnswer, MemoryKV } from "./fids.mjs";
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -922,6 +922,9 @@ function serveFa(day, { fa = true, live = null } = {}) {
     if (u.includes("aeroapi.flightaware.com")) {
       if (!fa) return json({ title: "down" }, 503);
       if (u.includes("/flights/IGO724")) return json(faFixture("aeroapi-6e724.json", day));
+      // AeroAPI's documented delay shape, hand-built: fog at Chandigarh, nothing at Hyderabad
+      if (u.includes("/airports/VICG/delays")) return json({ airport: "VICG", category: "departure", color: "yellow", delay_secs: 1500, reasons: [{ category: "weather", color: "yellow", delay_secs: 1500, reason: "Low visibility" }] });
+      if (u.includes("/airports/VOHS/delays")) return json({ title: "no delays" }, 404);
       if (u.includes("/flights/6E6254")) return json(faFixture("aeroapi-6e6254.json", day));
       return json({ flights: [] });
     }
@@ -974,8 +977,17 @@ test("flightaware: the airline's estimates, all four times, the inbound plane an
   assert.equal(f.history[0].date, addDays(day, -1));
   assert.equal(f.history[0].depDelay, -20, "left 20 minutes early the day before");
   assert.ok(f.history.every((h) => h.date < day));
-  assert.equal(calls.filter((u) => u.includes("aeroapi")).length, 2, "the flight and its inbound");
-  assert.equal(await e.QUOTA.get(`fa/${day.slice(0, 7)}`), "2");
+  assert.equal(calls.filter((u) => u.includes("aeroapi")).length, 4, "the flight, its inbound, and delays at both airports");
+  assert.deepEqual(f.departure.delays, { minutes: 25, reasons: ["Low visibility"] });
+  assert.equal(f.arrival.delays, null);
+  assert.equal(f.faId, "IGO6254-1795107600-airline-0");
+  assert.equal(f.inbound.prev, undefined, "its own earlier leg only matters before it leaves");
+  assert.equal(await e.QUOTA.get(`fa/${day.slice(0, 7)}`), "4");
+  // Airport delays are shared: another look within half an hour doesn't ask again
+  calls.length = 0;
+  caches.default.expire(`flight/6E6254/${day}`);
+  await get(`/api/flight?no=6E6254&date=${day}`, { with: e });
+  assert.equal(calls.filter((u) => u.includes("/delays")).length, 0);
   assert.ok(!calls.some((u) => u.includes("aerodatabox") && u.includes("/flights/")), "no AeroDataBox flight lookup");
   assert.ok(!JSON.stringify(f).includes("fa-test-key"));
 });
@@ -1003,4 +1015,28 @@ test("aerodatabox: no report is not 'on time', and a model's guess isn't a revis
   assert.equal(f.status.delayArr, null, "a predicted arrival isn't a delay");
   assert.equal(f.arrival.revised, null);
   assert.equal(f.arrival.predicted, `${day}T19:33:00.000Z`);
+});
+
+test("flightaware: a flown path is thinned to 160 points, heights in feet and speeds in km/h", () => {
+  const positions = Array.from({ length: 400 }, (_, i) => ({ latitude: 30 - i * 0.03, longitude: 76.8 + i * 0.004, altitude: Math.min(370, i * 4), groundspeed: 420, timestamp: new Date(1795109100000 + i * 20000).toISOString() }));
+  const t = trackOf({ positions });
+  assert.ok(t.length <= 161 && t.length >= 130);
+  assert.deepEqual(t[0], [76.8, 30, 0, 778, "2026-11-19T17:25:00.000Z"]);
+  assert.equal(t.at(-1)[2], 37000, "the last point is always kept");
+  assert.deepEqual(trackOf({}), []);
+});
+
+test("flightaware: airport delays read defensively, and small ones are no news", () => {
+  assert.deepEqual(airportDelaysOf({ delay_secs: 2400, reasons: [{ reason: "Low visibility" }, { reason: "Low visibility" }] }), { minutes: 40, reasons: ["Low visibility"] });
+  assert.deepEqual(airportDelaysOf({ delays: [{ delay_secs: 600, reasons: [] }, { delay_secs: 1200, reasons: [{ reason: "Runway works" }] }] }), { minutes: 20, reasons: ["Runway works"] });
+  assert.equal(airportDelaysOf({ delay_secs: 120, reasons: [] }), null);
+  assert.equal(airportDelaysOf(null), null);
+});
+
+test("budget: a flight with no copy anywhere gets a lookup past its daily share, not an error", async () => {
+  serveAll();
+  const e = flightEnv({ FLIGHT_PER_FLIGHT_DAILY: "0" });
+  const d = addDays(istToday(), 4);
+  const first = await get(`/api/flight?no=6E2131&date=${d}`, { with: e });
+  assert.equal(first.status, 200, "nothing to show otherwise, so it looks it up");
 });

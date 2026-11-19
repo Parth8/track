@@ -9,6 +9,9 @@ import { historySummary, turnaround, inboundAtGate, ON_TIME_MIN } from "./flight
 /** "2h 05m" for today; "2d 13h" when departure is more than a day away. */
 const countdown = (ms) => (ms >= 86400000 ? `${Math.floor(ms / 86400000)}d ${Math.floor((ms % 86400000) / 3600000)}h` : duration(ms));
 
+// Which sections someone opened or closed, kept across refreshes.
+const openState = {};
+
 export function renderFlight(f) {
   const dep = f.departure;
   const arr = f.arrival;
@@ -77,6 +80,13 @@ export function renderFlight(f) {
         note = `${f.inbound.number || "The inbound flight"} on its way to ${dep.code}. It flies your route once it has turned round.`;
       }
     } else if (phase === "air") {
+      // The path it has really flown, then the great circle on from where it is
+      const flown = (f.track || []).map((p) => [p[0], p[1]]);
+      if (flown.length > 1) {
+        const here = reported ? [f.position.lon, f.position.lat] : flown.at(-1);
+        opts.done = [...flown, here];
+        opts.ahead = greatCircle(here, [arr.lon, arr.lat], 48);
+      }
       if (reported) {
         badge = live ? { text: "Live position", cls: "" } : { text: "Reported position", cls: "" };
         opts.position = [f.position.lon, f.position.lat];
@@ -87,6 +97,12 @@ export function renderFlight(f) {
       }
     } else if (phase === "landed") {
       badge = { text: `Landed at ${arr.code}`, cls: "" };
+      const flown = (f.track || []).map((p) => [p[0], p[1]]);
+      if (flown.length > 1) {
+        opts.done = flown;
+        opts.ahead = [flown.at(-1), flown.at(-1)];
+        note = "The path it really flew.";
+      }
       opts.position = line.at(-1);
       opts.trackDeg = endBearing;
     } else {
@@ -127,12 +143,21 @@ export function renderFlight(f) {
         );
   }
 
-  /* ---------------- phase banner ---------------- */
-  const banner = h("section", { class: "phase-banner", "aria-live": "polite" });
+  /* ---------------- the flight board: status, both ends, the tiles ---------------- */
+  // Live countdowns tick on their own between refreshes.
+  const ticks = [];
+  const tickText = (target, fmt) => {
+    const el = h("span", { class: "tn" }, fmt(Date.parse(target) - Date.now()));
+    ticks.push({ el, target, fmt });
+    return el;
+  };
+
+  const banner = h("div", { class: "phase-banner fb-band", "aria-live": "polite" });
   const tone = (d) => banner.classList.add(d == null ? "tone" : d >= 15 ? "warn" : d <= 5 ? "good" : "tone");
   const lead = (t) => h("p", { class: "lead", text: t });
   const big = (t) => h("p", { class: "big", "data-k": "banner" }, t);
   const sub = (t) => h("p", { class: "sub", text: t });
+  const statusWord = f.status.leftGate ? "Left the gate" : /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
 
   if (phase === "cancelled") {
     banner.classList.add("bad");
@@ -146,8 +171,7 @@ export function renderFlight(f) {
     if (turn?.verdict === "late") banner.classList.replace("good", "warn") || banner.classList.replace("tone", "warn");
     const until = Date.parse(depTime) - now;
     const dc = delayChip(d);
-    const statusWord = f.status.leftGate ? "Left the gate" : /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
-    // No report from anyone isn't "on time": say it's the schedule, and how old the last word is.
+    // No report from anyone isn't "on time": say it's the schedule.
     const timing = !reported0
       ? `No live update yet. Scheduled ${t12(depTime, depTz)}`
       : dc && dc.cls === "late"
@@ -156,29 +180,22 @@ export function renderFlight(f) {
           ? `Early, now ${t12(depTime, depTz)}`
           : `On time at ${t12(depTime, depTz)}`;
     banner.append(
-      lead(until > 0 ? "Departs in" : "Departure"),
-      big(until > 0 ? countdown(until) : timeNode(depTime, depTz, { shift: dayShift(depTime, baseDate, depTz) })),
-      sub([statusWord, timing].filter(Boolean).join(". "))
+      lead(statusWord || (until > 0 ? "Leaves the gate in" : "Departure")),
+      big(until > 0 ? tickText(depTime, (ms) => countdown(Math.max(0, ms))) : timeNode(depTime, depTz, { shift: dayShift(depTime, baseDate, depTz) })),
+      sub(timing)
     );
     if (tight) banner.append(sub(tight));
+    const ad = dep.delays;
+    if (ad && ad.minutes >= 15) banner.append(sub(`Delays at ${dep.code} too: about ${fmtMin(ad.minutes)}${ad.reasons[0] ? `, ${ad.reasons[0].toLowerCase()}` : ""}.`));
   } else if (phase === "air") {
     const d = f.status.delayArr;
     tone(d);
     const dc = delayChip(d);
-    const left = Math.max(0, Date.parse(arrTime) - now);
     banner.append(
       lead("Lands in"),
-      big(duration(left)),
-      sub(`${t12(arrTime, arrTz)} in ${arrCity}, ${dc ? dc.text.toLowerCase() : "on schedule"}`),
-      h("div", { class: "progress", "aria-hidden": "true" }, h("i")),
-      h(
-        "div",
-        { class: "progress-legend tn" },
-        h("span", { text: `${duration(now - Date.parse(takeoff))} flown` }),
-        h("span", { text: `${Math.round(fraction * 100)}% of the way` })
-      )
+      big(tickText(arrTime, (ms) => duration(Math.max(0, ms)))),
+      sub(`${t12(arrTime, arrTz)} in ${arrCity}, ${dc ? dc.text.toLowerCase() : "on schedule"}`)
     );
-    banner.querySelector(".progress i").style.width = `${fraction * 100}%`;
     if (f.status.inferred) banner.append(sub("Spotted in the air before the airline updated its status."));
   } else {
     const d = f.status.delayArr;
@@ -186,7 +203,96 @@ export function renderFlight(f) {
     const dc = delayChip(d);
     banner.append(lead(`Landed in ${arrCity}`), big(timeNode(arrTime, arrTz, { shift: dayShift(arrTime, baseDate, arrTz) })), sub(`${dc ? dc.text : "On time"}, ${ago(arrTime)}.`));
   }
-  blocks.banner = banner;
+
+  // One end of the trip: place, the time in colour, the old time crossed out, and its tiles.
+  const tip = h("p", { class: "fb-tip", hidden: true, role: "status" });
+  let tipFor = null;
+  const tileBtn = (label, value, explain) =>
+    h(
+      "button",
+      {
+        type: "button",
+        class: `fb-tile${value ? "" : " empty"}`,
+        "aria-label": `${label}: ${value || "not announced yet"}`,
+        on: {
+          click: () => {
+            const same = tipFor === label && !tip.hidden;
+            tipFor = label;
+            tip.hidden = same;
+            tip.textContent = explain;
+          },
+        },
+      },
+      h("small", { text: label }),
+      h("strong", { class: "tn", text: value || "--" })
+    );
+  const airline = f.airline.name;
+  const endRow = (side, m, tz, time, delay, isDep) => {
+    const moved = m.sched && time && Math.abs(Date.parse(time) - Date.parse(m.sched)) >= 60000;
+    const dc = delayChip(delay);
+    const known = reported0 && delay != null;
+    const cls = !known ? "" : dc?.cls === "late" ? "t-late" : "t-early";
+    let meta = [];
+    if (!known && phase === "pre") meta.push(isDep ? "Scheduled, no update yet" : m.predicted ? `Scheduled. A model estimates ${t12(m.predicted, tz)}` : "Scheduled");
+    else if (dc) meta.push(dc.cls === "ok" ? "On time" : dc.text);
+    if (isDep && phase === "pre" && Date.parse(time) > now) meta.push(h("span", {}, "in ", tickText(time, (ms) => duration(Math.max(0, ms)))));
+    if (isDep && phase !== "pre") meta = [dep.runway ? `Took off ${t12(dep.runway, tz)}` : "Departed"];
+    if (!isDep && phase === "air") meta.push(h("span", {}, "in ", tickText(time, (ms) => duration(Math.max(0, ms)))));
+    if (!isDep && phase === "landed") meta = [dc && dc.cls !== "ok" ? `Landed ${dc.text.toLowerCase()}` : "Landed", ago(time)];
+    const tiles = isDep
+      ? [
+          tileBtn("Terminal", m.terminal, m.terminal ? `Terminal ${m.terminal} at ${m.code}.` : `Terminal: not announced yet. It shows here as soon as ${airline} or the airport posts it.`),
+          tileBtn("Gate", m.gate, m.gate ? `Gate ${m.gate}. Gates can change: we check again before boarding.` : `Gate: not announced yet. It shows here as soon as ${airline} posts it.`),
+        ]
+      : [
+          tileBtn("Terminal", m.terminal, m.terminal ? `Terminal ${m.terminal} at ${m.code}.` : "Terminal: not announced yet."),
+          tileBtn("Belt", m.belt, m.belt ? `Your bags come out on belt ${m.belt}.` : "Baggage belt: not announced yet. Airports post it around landing."),
+        ];
+    const parts = meta.flatMap((x, i) => (i ? [" · ", x] : [x]));
+    return h(
+      "div",
+      { class: `fb-end ${side}` },
+      h("p", { class: "fb-place" }, h("b", { text: m.code }), ` · ${m.city || m.name}`),
+      h(
+        "div",
+        { class: "fb-row" },
+        h(
+          "div",
+          { class: "fb-when" },
+          h(
+            "p",
+            { class: "fb-time" },
+            h("span", { class: cls, "data-k": `${side}-t` }, time ? timeNode(time, tz, { shift: dayShift(time, baseDate, tz) }) : "--:--"),
+            moved ? h("s", { text: t12(m.sched, tz) }) : null
+          ),
+          h("p", { class: `fb-meta ${cls}` }, parts)
+        ),
+        h("div", { class: "fb-tiles" }, tiles)
+      )
+    );
+  };
+  const blockMins = depTime && arrTime ? Date.parse(arrTime) - Date.parse(depTime) : null;
+  const overnight = arrTime && dateKey(arrTime, arrTz) !== baseDate;
+  const mid = h(
+    "div",
+    { class: "fb-mid" },
+    h("span", { class: "tn", text: [blockMins ? duration(blockMins) : null, f.distanceKm ? `${f.distanceKm.toLocaleString("en-IN")} km` : null, overnight ? "Overnight" : null].filter(Boolean).join(" · ") }),
+    h("div", { class: `fb-line${phase === "air" ? " live" : ""}`, "aria-hidden": "true" }, h("i"), h("b", {}, svg(icons.plane)))
+  );
+  mid.querySelector(".fb-line i").style.width = `${fraction * 100}%`;
+  mid.querySelector(".fb-line b").style.left = `${fraction * 100}%`;
+  if (phase === "air")
+    mid.append(h("p", { class: "fb-progress tn", text: `${duration(now - Date.parse(takeoff))} flown · ${Math.round(fraction * 100)}% of the way` }));
+
+  blocks.banner = h(
+    "section",
+    { class: "card fboard" },
+    banner,
+    endRow("dep", dep, depTz, depTime, f.status.delayDep, true),
+    mid,
+    endRow("arr", arr, arrTz, arrTime, f.status.delayArr, false),
+    tip
+  );
 
   /* ---------------- after landing ---------------- */
   if (phase === "landed" && arr.belt) {
@@ -210,57 +316,69 @@ export function renderFlight(f) {
     );
   }
 
-  /* ---------------- route card ---------------- */
-  const legBlock = (side, m, tz, time, delay, isDep) => {
-    const late = delayChip(delay);
-    const changed = m.sched && time && Math.abs(Date.parse(time) - Date.parse(m.sched)) >= 60000;
-    let note = late ? late.text : "Scheduled";
-    let neutral = false;
-    if (isDep && phase !== "pre") {
-      note = dep.runway ? `Took off ${t12(dep.runway, tz)}` : "Departed";
-      neutral = true;
-    }
-    if (!isDep && phase === "landed") note = late ? `Landed ${late.text.toLowerCase()}` : "Landed";
-    // A model's guess at the arrival, kept apart from anything the airline said
-    if (!late && phase === "pre") neutral = true; // "Scheduled" isn't good news, just the plan
-    if (!isDep && !late && m.predicted && phase === "pre") note = `Scheduled. A model estimates ${t12(m.predicted, tz)}`;
-    if (isDep && !reported0 && phase === "pre") note = "Scheduled, no update yet";
-    const chips = [];
-    if (m.gate) chips.push(h("span", { class: "gate-chip" }, svg(icons.gate), m.gate, h("small", { text: "Gate" })));
-    if (m.terminal) chips.push(h("span", { class: "chip quiet", text: `Terminal ${m.terminal}` }));
-    if (!isDep && m.belt && phase !== "landed") chips.push(h("span", { class: "gate-chip" }, svg(icons.belt), m.belt, h("small", { text: "Belt" })));
-    return h(
-      "div",
-      { class: "leg" },
-      h(
-        "div",
-        {},
-        h("p", { class: "leg-place", text: `${m.code}, ${m.name}` }),
-        h(
-          "p",
-          { class: "leg-time" },
-          h("span", { "data-k": `${side}-t` }, time ? timeNode(time, tz, { shift: dayShift(time, baseDate, tz) }) : "--:--"),
-          changed ? h("s", { text: t12(m.sched, tz) }) : null
-        ),
-        h("p", { class: `leg-note ${neutral ? "neutral" : late && late.cls === "late" ? "t-late" : "t-early"}`, text: note })
-      ),
-      h("div", { class: "leg-chips" }, chips)
-    );
+  /** A section that folds, with what it would say shown on the closed line. */
+  const fold = (key, title, preview, body, open = false) => {
+    const d = h("details", { class: "card fsec", open: (openState[key] ?? open) || null, on: { toggle: () => (openState[key] = d.open) } }, h("summary", {}, h("span", { class: "fsec-title", text: title }), preview ? h("span", { class: "fsec-preview", text: preview }) : null, h("i", { class: "fsec-chev", "aria-hidden": "true" })), body);
+    return d;
   };
-  const blockMins = depTime && arrTime ? Date.parse(arrTime) - Date.parse(depTime) : null;
-  const overnight = arrTime && dateKey(arrTime, arrTz) !== baseDate;
-  blocks.route = h(
-    "section",
-    { class: "card" },
-    legBlock("dep", dep, depTz, depTime, f.status.delayDep, true),
-    h(
-      "div",
-      { class: "leg-mid" },
-      h("span", { class: "tn", text: [blockMins ? duration(blockMins) : null, f.distanceKm ? `${f.distanceKm.toLocaleString("en-IN")} km` : null, overnight ? "Overnight" : null].filter(Boolean).join(" · ") }),
-      h("i")
-    ),
-    legBlock("arr", arr, arrTz, arrTime, f.status.delayArr, false)
-  );
+
+  /* ---------------- height profile: climb, cruise, descent, from the flown path ---------------- */
+  function profile() {
+    const pts = (f.track || []).filter((p) => Number.isFinite(p[2]) && p[4]);
+    if (pts.length < 5 || (phase !== "air" && phase !== "landed")) return null;
+    const t0 = Date.parse(pts[0][4]);
+    const t1 = phase === "air" ? Math.max(Date.parse(pts.at(-1)[4]), Date.parse(arrTime) || 0) : Date.parse(pts.at(-1)[4]);
+    const top = Math.max(...pts.map((p) => p[2]), 10000);
+    const W = 300;
+    const H = 72;
+    const x = (iso) => ((Date.parse(iso) - t0) / Math.max(1, t1 - t0)) * W;
+    const y = (ft) => H - 4 - (ft / top) * (H - 12);
+    const line = pts.map((p, i) => `${i ? "L" : "M"}${x(p[4]).toFixed(1)} ${y(p[2]).toFixed(1)}`).join(" ");
+    const last = pts.at(-1);
+    const NS = "http://www.w3.org/2000/svg";
+    const el = (tag, attrs) => {
+      const n = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+      return n;
+    };
+    const chart = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "prof-svg", preserveAspectRatio: "none", "aria-hidden": "true" });
+    chart.append(
+      el("path", { d: `${line} L${x(last[4]).toFixed(1)} ${H} L0 ${H} Z`, class: "prof-area" }),
+      el("path", { d: line, class: "prof-line" }),
+      el("line", { x1: 0, x2: W, y1: H - 0.5, y2: H - 0.5, class: "prof-base" })
+    );
+    const cursor = el("line", { x1: 0, x2: 0, y1: 0, y2: H, class: "prof-cursor" });
+    chart.append(cursor);
+    // An HTML dot, so it stays round however wide the chart is drawn
+    const dot = h("i", { class: "prof-dot" });
+    const place = (p) => {
+      dot.style.left = `${(x(p[4]) / W) * 100}%`;
+      dot.style.top = `${(y(p[2]) / H) * 100}%`;
+    };
+    place(last);
+    const fmt = (p) => [t12(p[4], depTz), `${Math.round(p[2]).toLocaleString("en-IN")} ft`, p[3] ? `${p[3].toLocaleString("en-IN")} km/h` : null].filter(Boolean).join(" · ");
+    const read = h("p", { class: "prof-read tn", text: phase === "air" ? `Now ${fmt(last)}` : `Cruised at ${Math.round(top).toLocaleString("en-IN")} ft` });
+    const box = h("div", { class: "prof", role: "img", "aria-label": `Height through the flight, up to ${Math.round(top).toLocaleString("en-IN")} feet` }, h("div", { class: "prof-plot" }, chart, dot), read);
+    const show = (clientX) => {
+      const r = chart.getBoundingClientRect();
+      const t = t0 + ((clientX - r.left) / r.width) * (t1 - t0);
+      let best = pts[0];
+      for (const p of pts) if (Math.abs(Date.parse(p[4]) - t) < Math.abs(Date.parse(best[4]) - t)) best = p;
+      cursor.setAttribute("x1", x(best[4]));
+      cursor.setAttribute("x2", x(best[4]));
+      cursor.classList.add("on");
+      place(best);
+      read.textContent = fmt(best);
+    };
+    box.addEventListener("pointermove", (e) => show(e.clientX));
+    box.addEventListener("pointerdown", (e) => show(e.clientX));
+    box.addEventListener("pointerleave", () => {
+      cursor.classList.remove("on");
+      place(last);
+      read.textContent = phase === "air" ? `Now ${fmt(last)}` : `Cruised at ${Math.round(top).toLocaleString("en-IN")} ft`;
+    });
+    return h("div", {}, h("p", { class: "fsec-sub", text: phase === "air" ? "Height so far" : "Climb, cruise and descent" }), box);
+  }
 
   /* ---------------- gate to gate: the four times ---------------- */
   if (f.times) {
@@ -298,8 +416,14 @@ export function renderFlight(f) {
     const taxiIn = f.times.on?.actual && f.times.in?.actual ? Date.parse(f.times.in.actual) - Date.parse(f.times.on.actual) : null;
     const air = (f.times.off?.actual || f.times.off?.est) && (f.times.on?.actual || f.times.on?.est) ? Date.parse(f.times.on.actual || f.times.on.est) - Date.parse(f.times.off.actual || f.times.off.est) : null;
     const notes = [air ? `${duration(air)} in the air` : null, taxiOut ? `${duration(taxiOut)} taxiing out` : null, taxiIn ? `${duration(taxiIn)} taxiing in` : null].filter(Boolean);
-    if (list.childElementCount)
-      blocks.times = h("section", { class: "card g2g-card" }, h("h3", { class: "card-title", text: "Gate to gate" }), list, notes.length ? h("p", { class: "g2g-note tn", text: notes.join(" · ") }) : null);
+    const offT = f.times.off?.actual || f.times.off?.est || f.times.off?.sched;
+    const onT = f.times.on?.actual || f.times.on?.est || f.times.on?.sched;
+    const preview = offT && onT ? `${f.times.off?.actual ? "Took off" : "Takes off"} ${t12(offT, depTz)} · ${f.times.on?.actual ? "landed" : "lands"} ${t12(onT, arrTz)}` : null;
+    if (list.childElementCount) blocks.times = fold("times", "Gate to gate", preview, [list, notes.length ? h("p", { class: "g2g-note tn", text: notes.join(" · ") }) : null, phase === "landed" ? profile() : null]);
+  }
+  if (phase === "air") {
+    const pf = profile();
+    if (pf) blocks.profile = h("section", { class: "card prof-card" }, pf);
   }
 
   /* ---------------- where's your plane: the flight flying in ---------------- */
@@ -328,16 +452,35 @@ export function renderFlight(f) {
     const bar = h("div", { class: "ib-track", "aria-hidden": "true" }, h("span", { class: "ib-end", text: ib.from.code }), h("div", { class: "ib-line" }, h("i"), h("b", {}, svg(icons.plane))), h("span", { class: "ib-end", text: dep.code }));
     bar.querySelector(".ib-line i").style.width = `${pct}%`;
     bar.querySelector(".ib-line b").style.left = `${pct}%`;
-    blocks.inbound = h(
-      "section",
-      { class: "card inbound-card" },
-      h("h3", { class: "card-title", text: "Where's your plane" }),
+    // Its own earlier leg, when the plane hasn't even left yet
+    const pv = ib.prev;
+    const prevLine =
+      pv && pv.phase !== "landed"
+        ? `Before that, it flies ${pv.number || "another flight"} from ${pv.from.city || pv.from.code}, ${pv.phase === "air" ? `landing ${t12(pv.times.in.est || pv.times.in.sched, depTz)}` : `due to leave ${t12(pv.times.out.est || pv.times.out.sched, depTz)}`}${pv.delayDep >= 5 ? `, ${fmtMin(pv.delayDep)} late` : ""}.`
+        : null;
+    const ibNo = (ib.number || "").replace(/\s+/g, "");
+    const ibDate = ib.times.out.sched ? dateKey(ib.times.out.sched, depTz) : baseDate;
+    const chain = h(
+      "ol",
+      { class: "ib-chain", "aria-label": "The plane's day" },
+      pv ? h("li", { class: pv.phase }, h("b", { text: pv.from.code }), h("small", { text: pv.number || "" })) : null,
+      h("li", { class: ib.phase }, h("b", { text: ib.from.code }), h("small", { text: ib.number || "" })),
+      h("li", { class: "you" }, h("b", { text: dep.code }), h("small", { text: f.number })),
+      h("li", { class: "you" }, h("b", { text: arr.code }), h("small", { text: "You land" }))
+    );
+    const body = [
       h("p", { class: "ib-lead" }, h("strong", { text: ib.number || "The inbound flight" }), ` from ${from} brings the plane for this flight.`),
       bar,
       h("p", { class: "ib-now", text: now1 }),
       gate && !ib.landed ? h("p", { class: "ib-gate tn", text: `At the gate about ${t12(gate.at, depTz)}${gate.how === "schedule" ? " (schedule)" : ""}` }) : null,
-      verdict ? h("p", { class: `ib-verdict ${cls}`, text: verdict }) : null
-    );
+      verdict ? h("p", { class: `ib-verdict ${cls}`, text: verdict }) : null,
+      prevLine ? h("p", { class: "ib-now ib-prev", text: prevLine }) : null,
+      h("p", { class: "fsec-sub", text: "The plane's day" }),
+      chain,
+      /^[A-Z0-9]{2}\d+$/.test(ibNo) ? h("a", { class: "link-quiet ib-open", href: `?m=flight&no=${ibNo}&d=${ibDate}`, text: `Track ${ib.number} →` }) : null,
+    ];
+    blocks.inbound = fold("inbound", "Where's your plane", verdict || now1, body, true);
+    blocks.inbound.classList.add("inbound-card");
   }
 
   /* ---------------- the last two weeks of this flight ---------------- */
@@ -345,24 +488,43 @@ export function renderFlight(f) {
   if (hist && phase !== "air") {
     const max = Math.max(30, ...hist.bars.map((b) => Math.abs(b.delay ?? 0)));
     const strip = h("div", { class: "hist-strip", role: "img", "aria-label": `Departure delay over the last ${hist.days} days. ${hist.text.join(". ")}.` });
+    const said = h("p", { class: "hist-said tn", role: "status", text: "Tap a day to see it." });
     for (const b of hist.bars) {
       const late = b.delay != null && b.delay > ON_TIME_MIN;
       const label = b.cancelled ? `${dayLabel(`${b.date}T12:00:00Z`, depTz)}: cancelled` : `${dayLabel(`${b.date}T12:00:00Z`, depTz)}: ${b.delay > 0 ? `${b.delay} min late` : b.delay < 0 ? `${-b.delay} min early` : "on time"}`;
-      const col = h("div", { class: `hist-col${b.cancelled ? " x" : late ? " late" : b.delay > 0 ? " slow" : " early"}`, title: label, tabindex: "0", "aria-label": label }, h("i"));
+      const col = h(
+        "button",
+        {
+          type: "button",
+          class: `hist-col${b.cancelled ? " x" : late ? " late" : b.delay > 0 ? " slow" : " early"}`,
+          title: label,
+          "aria-label": label,
+          on: {
+            click: (e) => {
+              strip.querySelectorAll(".hist-col.on").forEach((x) => x.classList.remove("on"));
+              e.currentTarget.classList.add("on");
+              const row = f.history.find((r) => r.date === b.date);
+              const left = row?.out ? `left ${t12(row.out.actual, depTz)}` : null;
+              const got = row?.in ? `in ${t12(row.in.actual, arrTz)}` : null;
+              said.textContent = [label, left, got].filter(Boolean).join(" · ");
+            },
+          },
+        },
+        h("i")
+      );
       const hgt = b.cancelled ? 100 : Math.max(4, (Math.abs(b.delay) / max) * 100);
       col.querySelector("i").style.height = `${hgt / 2}%`;
       col.classList.add(b.delay > 0 || b.cancelled ? "up" : "down");
       strip.append(col);
     }
-    blocks.history = h(
-      "section",
-      { class: "card hist-card" },
-      h("h3", { class: "card-title", text: "Recent days" }),
+    blocks.history = fold("history", "Recent days", hist.text[0], [
       h("p", { class: "hist-lead", text: hist.text[0] }),
       h("p", { class: "hist-sub", text: hist.text.slice(1).join(" · ") }),
       strip,
-      h("div", { class: "hist-axis" }, h("span", { text: "Earlier" }), h("span", { text: "Above the line: late · below: early" }), h("span", { text: "Yesterday" }))
-    );
+      h("div", { class: "hist-axis" }, h("span", { text: hist.bars[0] ? dayLabel(`${hist.bars[0].date}T12:00:00Z`, depTz) : "Earlier" }), h("span", { text: "Up: late · down: early" }), h("span", { text: hist.bars.at(-1) ? dayLabel(`${hist.bars.at(-1).date}T12:00:00Z`, depTz) : "" })),
+      said,
+    ]);
+    blocks.history.classList.add("hist-card");
   }
 
   /* ---------------- good to know: icon tiles ---------------- */
@@ -403,6 +565,10 @@ export function renderFlight(f) {
     fixed.push(tile(icons.terminal, "lav", "Terminals", `${dep.terminal ? `T${dep.terminal}` : dep.code} to ${arr.terminal ? `T${arr.terminal}` : arr.code}`, null));
 
   const wide = [];
+  for (const [m, when] of [[dep, "departures"], [arr, "arrivals"]]) {
+    if (m.delays && (phase === "pre" || (phase === "air" && m === arr)))
+      wide.unshift(tile(icons.clock, "warm", `Delays at ${m.code}`, m.delays.minutes ? `About ${fmtMin(m.delays.minutes)} on ${when}` : `Some ${when} delayed`, m.delays.reasons.join(". ") || null, true));
+  }
   if (f.codeshares?.length) wide.push(tile(icons.route, "lav", "Also sold as", f.codeshares.join(", "), "The same plane under partner airlines' numbers", true));
   const refTime = new Date(arrTime || now);
   const diff = tzOffset(arrTz, refTime) - tzOffset(depTz, refTime);
@@ -513,12 +679,12 @@ export function renderFlight(f) {
   /* ---------------- order by phase ---------------- */
   const order =
     {
-      pre: ["head", "banner", "inbound", "route", "times", "map", "history"],
-      air: ["head", "map", "stats", "banner", "route", "times"],
-      landed: ["head", "banner", "belt", "share", "route", "times", "map", "history"],
-      cancelled: ["head", "banner", "route", "map"],
-      diverted: ["head", "banner", "map", "route"],
-    }[phase] || ["head", "banner", "route", "map"];
+      pre: ["head", "banner", "inbound", "times", "map", "history"],
+      air: ["head", "map", "stats", "profile", "banner", "inbound", "times"],
+      landed: ["head", "banner", "belt", "share", "times", "map", "history"],
+      cancelled: ["head", "banner", "times", "map"],
+      diverted: ["head", "banner", "map", "times"],
+    }[phase] || ["head", "banner", "times", "map"];
 
   // Shown when the budget kept us from a fresh lookup: honest about how old this is.
   if (f.status.servedStale) {
@@ -624,6 +790,18 @@ export function renderFlight(f) {
   if (island.chip && mainText === island.chip.text) island.chip = null;
   island.updatedAt = f.status.checkedAt || f.status.lastUpdated || new Date().toISOString();
 
+  // Countdowns tick every 20 s until the next refresh replaces this screen.
+  if (ticks.length) {
+    let seen = false;
+    const timer = setInterval(() => {
+      if (!node.isConnected) {
+        if (seen) clearInterval(timer);
+        return;
+      }
+      seen = true;
+      for (const t of ticks) t.el.textContent = t.fmt(Date.parse(t.target) - Date.now());
+    }, 20000);
+  }
   return { node, map, currentRow: null, weather, share, island, anchor: blocks.banner };
 }
 

@@ -1292,6 +1292,19 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   assert.match(await text(".hist-lead"), /Usually leaves 11 min early/);
   assert.equal(await p.locator(".hist-col").count(), 11);
   assert.match(await text(".data-credit"), /FlightAware/);
+  // The board: late in colour, tiles that say what isn't announced yet
+  assert.equal(await p.locator(".fb-end.dep .fb-time .t-late").count(), 1);
+  assert.equal(await text(".fb-end.arr .fb-tile:not(.empty) strong"), "6", "belt 6, before landing");
+  await p.locator(".fb-end.dep .fb-tile.empty").last().dispatchEvent("click");
+  assert.match(await text(".fb-tip"), /Gate: not announced yet/);
+  // The plane's day, and a way to follow the inbound flight
+  assert.deepEqual(await p.locator(".ib-chain b").allTextContents(), ["GOI", "IXC", "HYD"]);
+  assert.match(await p.locator(".ib-open").getAttribute("href"), /m=flight&no=6E724/);
+  // Recent days fold; a day tapped says what happened
+  // (dispatched: the floating island may sit over them on a small screen)
+  await p.locator(".hist-card summary").dispatchEvent("click");
+  await p.locator(".hist-col.late").first().dispatchEvent("click");
+  assert.match(await text(".hist-said"), /19 min late · left 10:49 PM · in 1:08 AM/);
   assert.deepEqual(p.errors, []);
 });
 
@@ -1302,8 +1315,9 @@ await test("flights: with nothing reported, the schedule is the schedule, not 'o
   await p.goto(`${SITE}?m=flight&no=6E6254&d=${addDays(day, 1)}`);
   await p.locator(".phase-banner .sub").waitFor();
   assert.equal(await p.locator(".phase-banner .sub").textContent(), "No live update yet. Scheduled 10:30 PM");
-  assert.equal(await p.locator(".leg-note").first().textContent(), "Scheduled, no update yet");
-  assert.match(await p.locator(".leg-note").nth(1).textContent(), /A model estimates 1:03 AM/);
+  assert.match(await p.locator(".fb-meta").first().textContent(), /^Scheduled, no update yet · in \d+h \d+m$/);
+  assert.match(await p.locator(".fb-meta").nth(1).textContent(), /A model estimates 1:03 AM/);
+  assert.equal(await p.locator(".fb-time .t-late, .fb-time .t-early").count(), 0, "no colour: nothing's known either way");
   assert.deepEqual(p.errors, []);
 });
 

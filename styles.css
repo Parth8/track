@@ -6548,6 +6548,7 @@ textarea.jn-input {
 }
 .hist-strip::after {
   content: "";
+  pointer-events: none;
   position: absolute;
   left: 0;
   right: 0;
@@ -6620,4 +6621,395 @@ textarea.jn-input {
 .tl-time .t-due {
   font-size: 0.9em;
   letter-spacing: 0;
+}
+
+/* ============================================================
+   Flight board: status band, both ends, tiles (one card)
+   ============================================================ */
+.fboard {
+  padding: 6px 6px 16px;
+  overflow: hidden;
+}
+.fboard .fb-band {
+  border-radius: calc(var(--radius-lg) - 6px);
+  margin-bottom: 4px;
+}
+.fb-end {
+  padding: 14px 14px 4px;
+}
+.fb-place {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--ink-soft);
+}
+.fb-place b {
+  font-weight: 800;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+.fb-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fb-when {
+  min-width: 0;
+}
+.fb-time {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 10px;
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.fb-time > span.t-late {
+  color: var(--late);
+}
+.fb-time > span.t-early {
+  color: var(--early);
+}
+.fb-time s {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.fb-meta {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+.fb-meta.t-late {
+  color: var(--late);
+}
+.fb-meta.t-early {
+  color: var(--early);
+}
+.fb-meta span {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.fb-tiles {
+  display: flex;
+  gap: 6px;
+  flex: none;
+  margin-top: 4px;
+}
+.fb-tile {
+  appearance: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+  min-width: 58px;
+  padding: 7px 8px 8px;
+  border-radius: 14px;
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  transition: transform 0.15s var(--ease-out);
+}
+.fb-tile:active {
+  transform: scale(0.96);
+}
+.fb-tile small {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.fb-tile strong {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.15;
+}
+.fb-tile.empty {
+  background: color-mix(in srgb, var(--hair) 70%, var(--card));
+  color: var(--muted);
+}
+.fb-tip {
+  margin: 10px 14px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--lav-tint);
+  color: var(--lav-ink);
+  font-size: 13.5px;
+  line-height: 1.45;
+  animation: fb-in 0.25s var(--ease-out);
+}
+@keyframes fb-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.fb-mid {
+  padding: 12px 14px 0;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.fb-line {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(90deg, var(--line) 0 4px, transparent 4px 9px);
+  margin: 6px 12px;
+}
+.fb-line i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.fb-line b {
+  position: absolute;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow: 0 0 0 1.5px var(--line);
+  color: var(--deep);
+}
+.fb-line b svg {
+  width: 15px;
+  height: 15px;
+  transform: rotate(90deg);
+}
+.fb-line.live b {
+  animation: fb-pulse 2.4s ease-in-out infinite;
+}
+@keyframes fb-pulse {
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+}
+.fb-progress {
+  margin: 0;
+  text-align: center;
+}
+
+/* Folding sections */
+.fsec {
+  padding: 0 18px;
+}
+.fsec[open] {
+  padding-bottom: 18px;
+}
+.fsec > summary {
+  list-style: none;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  margin: 0 -18px;
+  padding: 16px 18px;
+}
+.fsec > summary::-webkit-details-marker {
+  display: none;
+}
+.fsec-title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.fsec-preview {
+  grid-row: 2;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fsec[open] .fsec-preview {
+  display: none;
+}
+.fsec-chev {
+  grid-row: 1 / 3;
+  grid-column: 2;
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.25s var(--ease-out);
+  margin-top: -4px;
+}
+.fsec[open] .fsec-chev {
+  transform: rotate(-135deg);
+  margin-top: 4px;
+}
+.fsec[open] > :not(summary) {
+  animation: fb-in 0.25s var(--ease-out);
+}
+.fsec-sub {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The plane's day */
+.ib-chain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: flex-start;
+}
+.ib-chain li {
+  flex: 1;
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding-top: 18px;
+  text-align: center;
+}
+.ib-chain li::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 2.5px solid var(--line);
+  z-index: 1;
+}
+.ib-chain li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  left: 50%;
+  right: -50%;
+  border-top: 2px dashed var(--line);
+}
+.ib-chain li.landed::before,
+.ib-chain li.air::before {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.ib-chain li.you::before {
+  border-color: var(--deep);
+}
+.ib-chain b {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.ib-chain small {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.ib-prev {
+  margin-top: 8px;
+}
+.ib-open {
+  display: inline-block;
+  margin-top: 14px;
+  font-weight: 700;
+}
+
+/* History strip: each day a button */
+.hist-col {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+.hist-col.on {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.hist-said {
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--ink-soft);
+  min-height: 1.4em;
+}
+
+/* Height profile */
+.prof {
+  position: relative;
+  touch-action: pan-y;
+  cursor: crosshair;
+}
+.prof-svg {
+  display: block;
+  width: 100%;
+  height: 84px;
+}
+.prof-area {
+  fill: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.prof-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.prof-base {
+  stroke: var(--hair);
+  vector-effect: non-scaling-stroke;
+}
+.prof-cursor {
+  stroke: var(--muted);
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+  opacity: 0;
+}
+.prof-cursor.on {
+  opacity: 1;
+}
+.prof-plot {
+  position: relative;
+}
+.prof-dot {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 2.5px solid var(--deep);
+  pointer-events: none;
+}
+.prof-read {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.prof-card .fsec-sub {
+  margin-top: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fb-line.live b,
+  .fb-tip,
+  .fsec[open] > :not(summary) {
+    animation: none;
+  }
 }

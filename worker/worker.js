@@ -701,7 +701,7 @@ async function flightRoute(url, env, ctx, request) {
     // the plane flying in, and the last two weeks of this flight. Used around the flight only.
     if (!flight && env.FA_KEY && faWindow(old, date, now)) {
       try {
-        flight = await fromFlightAware(env, ctx, request, raw, date);
+        flight = await fromFlightAware(env, ctx, request, raw, date, old);
         if (flight) putFlight(ctx, key, flight);
       } catch (err) {
         log("warn", "flightaware", err.code || String(err.message || err).slice(0, 80));
@@ -727,7 +727,7 @@ async function flightRoute(url, env, ctx, request) {
     }
     if (!flight) {
       try {
-        await spend(env, request, "track", item);
+        await spend(env, request, "track", item, { noCopy: !old });
         flight = await fetchFlight(env, ctx, raw, date);
         putFlight(ctx, key, flight);
       } catch (err) {
@@ -761,6 +761,10 @@ async function flightRoute(url, env, ctx, request) {
       ib.phase = "air";
       ib.liveEta = liveEta({ position: live, arrival: { lat: flight.departure.lat, lon: flight.departure.lon } });
     }
+  }
+  // The path it has really flown (FlightAware), for the map and the height profile
+  if (env.FA_KEY && flight.faId && (flight.status.phase === "air" || flight.status.phase === "landed")) {
+    flight.track = await faTrack(env, ctx, request, flight, item).catch(() => flight.track || null);
   }
   // While it flies, a landing time worked out from its live speed and the distance left (free).
   flight.arrival.liveEta = flight.status.phase === "air" ? liveEta(flight) : null;
@@ -836,7 +840,7 @@ async function fetchFlight(env, ctx, raw, date) {
 
 const FA_BASE = "https://aeroapi.flightaware.com/aeroapi";
 const FA_CAP_DEFAULT = 300; // AeroAPI calls a month (each flight check is one, two with an inbound plane)
-const FA_PER_FLIGHT_DEFAULT = 16; // calls one flight can use in a day
+const FA_PER_FLIGHT_DEFAULT = 16; // calls one flight can use in a day, for each of: the flight, its inbound plane, its track
 const FA_VISITOR_DEFAULT = 4; // new flights one visitor can bring onto FlightAware in a day
 
 // ICAO type codes as people know them.
@@ -865,7 +869,15 @@ export function faWindow(old, date, now = Date.now()) {
 }
 
 /** FlightAware's own budget, separate from AeroDataBox's: a month cap, a per-flight cap, a per-visitor cap. */
-async function spendFa(env, request, item) {
+let faQueue = Promise.resolve();
+/** One at a time within this Worker, so two calls made together both get counted. */
+function spendFa(env, request, item) {
+  const turn = faQueue.then(() => spendFaOne(env, request, item));
+  faQueue = turn.catch(() => {});
+  return turn;
+}
+
+async function spendFaOne(env, request, item) {
   const kv = env.QUOTA;
   if (!kv || typeof kv.get !== "function") return;
   const mk = `fa/${istToday().slice(0, 7)}`;
@@ -875,7 +887,7 @@ async function spendFa(env, request, item) {
   const n = Number(await kv.get(fk)) || 0;
   if (n >= intEnv(env.FA_PER_FLIGHT_DAILY, FA_PER_FLIGHT_DEFAULT)) throw new ApiError(503, "fa_flight_rest", "This flight has had its FlightAware checks for today.");
   const vk = await visitorKey(request);
-  if (vk && !item.startsWith("inbound/")) {
+  if (vk && !/^(inbound|airport|track)\//.test(item)) {
     const key = `fa-${vk}`;
     let seen = [];
     try {
@@ -911,7 +923,7 @@ const faMin = (sec) => (Number.isFinite(sec) ? Math.round(sec / 60) : null);
 const faTimes = (f, k) => ({ sched: f[`scheduled_${k}`] || null, est: f[`estimated_${k}`] || null, actual: f[`actual_${k}`] || null });
 
 /** One flight looked up on FlightAware, with its inbound plane. Null when FlightAware has no such flight that day. */
-async function fromFlightAware(env, ctx, request, raw, date) {
+async function fromFlightAware(env, ctx, request, raw, date, old = null) {
   await spendFa(env, request, `${raw}/${date}`);
   const data = await faGet(env, `/flights/${encodeURIComponent(raw)}?ident_type=designator&max_pages=1`);
   const list = Array.isArray(data?.flights) ? data.flights : [];
@@ -919,17 +931,94 @@ async function fromFlightAware(env, ctx, request, raw, date) {
   if (!f) return null;
   const [depInfo, arrInfo] = await Promise.all([f.origin?.code_iata, f.destination?.code_iata].map((c) => (c ? airportInfo(env, c).catch(() => null) : null)));
   const flight = normaliseFa(raw, date, f, list, { dep: depInfo, arr: arrInfo });
-  // The plane flying in to operate this flight: worth a second call only before it leaves.
+  flight.faId = f.fa_flight_id || null;
+  // The plane flying in to operate this flight: worth a call only before it leaves, and only
+  // until it's on the ground here (after that, nothing about it changes).
   if (f.inbound_fa_flight_id && flight.status.phase === "pre") {
-    try {
-      await spendFa(env, request, `inbound/${raw}/${date}`);
-      const ib = (await faGet(env, `/flights/${encodeURIComponent(f.inbound_fa_flight_id)}`))?.flights?.[0];
-      flight.inbound = ib ? inboundOf(ib, f.origin?.code_iata) : null;
-    } catch {
-      flight.inbound = null;
+    if (old?.inbound?.landed && old.inbound.id === f.inbound_fa_flight_id) flight.inbound = old.inbound;
+    else {
+      try {
+        await spendFa(env, request, `inbound/${raw}/${date}`);
+        const ib = (await faGet(env, `/flights/${encodeURIComponent(f.inbound_fa_flight_id)}`))?.flights?.[0];
+        flight.inbound = ib ? inboundOf(ib, f.origin?.code_iata) : null;
+        // Still to leave on its own earlier leg: where that leg's plane is matters too.
+        if (flight.inbound && flight.inbound.phase === "pre" && ib.inbound_fa_flight_id) {
+          const prev = await spendFa(env, request, `inbound/${raw}/${date}`)
+            .then(() => faGet(env, `/flights/${encodeURIComponent(ib.inbound_fa_flight_id)}`))
+            .then((d) => d?.flights?.[0])
+            .catch(() => null);
+          flight.inbound.prev = prev ? inboundOf(prev, ib.origin?.code_iata) : null;
+        }
+      } catch {
+        flight.inbound = null;
+      }
     }
   }
+  // Delays at the airports, shared by every flight from them (cached half an hour)
+  if (flight.status.phase === "pre" || flight.status.phase === "air") {
+    const [d1, d2] = await Promise.all([f.origin?.code_icao || f.origin?.code, f.destination?.code_icao || f.destination?.code].map((c) => (c ? faAirportDelays(env, ctx, request, c).catch(() => null) : null)));
+    flight.departure.delays = d1;
+    flight.arrival.delays = d2;
+  }
   return flight;
+}
+
+/**
+ * An airport's delays as FlightAware reports them: { minutes, reasons: [text] }, or null when
+ * there are none. Shared by every flight, so one call serves everyone for half an hour.
+ */
+async function faAirportDelays(env, ctx, request, code) {
+  const key = `fa-delays/${code}`;
+  const hit = await cacheGet(key);
+  if (hit) return hit.data.delays;
+  let delays = null;
+  try {
+    await spendFa(env, request, `airport/${code}`);
+    delays = airportDelaysOf(await faGet(env, `/airports/${encodeURIComponent(code)}/delays`));
+  } catch (err) {
+    if (err?.code !== "not_found") return null; // don't remember a failure
+  }
+  ctx.waitUntil(caches.default.put(cacheKey(key), new Response(JSON.stringify({ delays }), { headers: { "Cache-Control": "max-age=1800", "X-Fetched-At": String(Date.now()) } })).catch(() => {}));
+  return delays;
+}
+
+/** AeroAPI's airport delay answer, read defensively: one entry or a list of them. */
+export function airportDelaysOf(data) {
+  const list = Array.isArray(data?.delays) ? data.delays : data && (data.delay_secs != null || data.reasons) ? [data] : [];
+  const reasons = [];
+  let secs = 0;
+  for (const d of list) {
+    secs = Math.max(secs, Number(d.delay_secs) || 0);
+    for (const r of d.reasons || []) if (r?.reason && !reasons.includes(r.reason)) reasons.push(String(r.reason).slice(0, 120));
+  }
+  const minutes = Math.round(secs / 60);
+  return minutes >= 5 || reasons.length ? { minutes, reasons: reasons.slice(0, 3) } : null;
+}
+
+/** The path a flight has actually flown, from FlightAware: [[lon, lat, feet, km/h, iso], ...], at most 160 points. */
+async function faTrack(env, ctx, request, f, item) {
+  const key = `fa-track/${f.faId}`;
+  const hit = await cacheGet(key);
+  if (hit) return hit.data.track;
+  await spendFa(env, request, `track/${item}`);
+  const data = await faGet(env, `/flights/${encodeURIComponent(f.faId)}/track`);
+  const track = trackOf(data);
+  const ttl = f.status.phase === "landed" ? 86400 : 600;
+  ctx.waitUntil(caches.default.put(cacheKey(key), new Response(JSON.stringify({ track }), { headers: { "Cache-Control": `max-age=${ttl}`, "X-Fetched-At": String(Date.now()) } })).catch(() => {}));
+  return track;
+}
+
+export function trackOf(data) {
+  const pts = (data?.positions || []).filter((p) => Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
+  const step = Math.max(1, Math.ceil(pts.length / 160));
+  const out = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+  return out.map((p) => [
+    Math.round(p.longitude * 1e4) / 1e4,
+    Math.round(p.latitude * 1e4) / 1e4,
+    Number.isFinite(p.altitude) ? p.altitude * 100 : null,
+    Number.isFinite(p.groundspeed) ? Math.round(p.groundspeed * 1.852) : null,
+    p.timestamp || null,
+  ]);
 }
 
 /** The inbound flight, kept only if it really flies into this flight's departure airport. */
@@ -938,6 +1027,7 @@ export function inboundOf(ib, into) {
   const iata = ib.operator_iata || "";
   const num = ib.flight_number || "";
   return {
+    id: ib.fa_flight_id || null,
     number: iata && num ? `${iata} ${num}` : ib.ident_iata || ib.ident || null,
     callsign: ib.atc_ident || ib.ident_icao || null,
     reg: ib.registration || null,
@@ -1379,13 +1469,13 @@ let spendQueue = Promise.resolve();
  * Count one paid call, or refuse with a clear reason. kind: "track", "search" or "airport".
  * One at a time within this Worker, so two calls made together both get counted.
  */
-function spend(env, request, kind, item = null) {
-  const turn = spendQueue.then(() => spendOne(env, request, kind, item));
+function spend(env, request, kind, item = null, opts = {}) {
+  const turn = spendQueue.then(() => spendOne(env, request, kind, item, opts));
   spendQueue = turn.catch(() => {});
   return turn;
 }
 
-async function spendOne(env, request, kind, item) {
+async function spendOne(env, request, kind, item, { noCopy = false } = {}) {
   const kv = env.QUOTA;
   if (!kv || typeof kv.get !== "function") {
     if (kind === "search") throw new ApiError(503, "search_not_configured", "Flight search isn't switched on yet. Track by flight number for now.");
@@ -1405,7 +1495,8 @@ async function spendOne(env, request, kind, item) {
   if (kind === "track" && item) {
     const fk = `calls/${istToday()}/${item}`;
     const n = Number(await kv.get(fk)) || 0;
-    if (n >= intEnv(env.FLIGHT_PER_FLIGHT_DAILY, PER_FLIGHT_DAILY_DEFAULT))
+    // With no copy of it anywhere to fall back on, one more lookup beats an error.
+    if (n >= intEnv(env.FLIGHT_PER_FLIGHT_DAILY, PER_FLIGHT_DAILY_DEFAULT) + (noCopy ? 2 : 0))
       throw new ApiError(503, "flight_rest", "This flight has had its updates for today, so we're showing the latest we have.");
     await kv.put(fk, String(n + 1), { expirationTtl: 2 * 86400 });
   }
