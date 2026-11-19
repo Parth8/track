@@ -1278,8 +1278,9 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   await p.goto(`${SITE}?m=flight&no=6E6254&d=${day}`);
   await p.locator(".inbound-card").waitFor();
   const text = (sel) => p.locator(sel).first().textContent();
-  assert.match(await text(".phase-banner .fb-head"), /^Gate departure in \d+ min$/);
-  assert.match(await text(".phase-banner .sub"), /^Your plane is in the air from Goa/);
+  assert.equal(await text(".phase-banner .lead"), "Departs in");
+  assert.match(await text(".phase-banner .sub"), /Delayed 15m, now 10:45 PM/);
+  assert.match(await text(".phase-banner"), /Your plane is in the air from Goa/);
   // 6E 724 from Goa is 154 km out: about 20 min to land, 5 to the gate, 25 to turn round. Its live
   // landing time is worked out by the Worker on the real clock, so only the shape is checked here.
   assert.match(await text(".inbound-card .ib-lead"), /6E 724 from Goa brings the plane/);
@@ -1299,14 +1300,16 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   await p.locator(".fm-input").nth(1).press("Enter");
   assert.equal(await text(".fm-slot.set .fm-value"), "14C");
   assert.match(await p.evaluate(() => localStorage.getItem("flightMine")), /"seat":"14C"/);
-  // The status line opens the section behind it
+  // The banner opens the section its last line is about
+  await p.locator(".inbound-card summary").dispatchEvent("click");
+  assert.equal(await p.locator(".inbound-card").getAttribute("open"), null);
   await p.locator(".phase-banner").dispatchEvent("click");
   assert.equal(await p.locator(".inbound-card").getAttribute("open"), "");
   // The board: late in colour, tiles that say what isn't announced yet
-  assert.equal(await p.locator(".fb-end.dep .fb-time .t-late").count(), 1);
-  assert.equal(await text(".fb-end.arr .fb-tile:not(.empty) strong"), "6", "belt 6, before landing");
-  await p.locator(".fb-end.dep .fb-tile.empty").last().dispatchEvent("click");
-  assert.match(await text(".fb-tip"), /Gate: not announced yet/);
+  assert.equal(await p.locator(".leg").first().locator(".leg-time .t-late").count(), 1);
+  assert.match(await text(".leg-chips .gate-chip"), /^6Belt$/, "belt 6, before landing");
+  await p.locator(".leg-later").first().dispatchEvent("click");
+  assert.match(await text(".leg-tip"), /The gate isn't announced yet/);
   // The plane's day, and a way to follow the inbound flight
   assert.deepEqual(await p.locator(".ib-chain b").allTextContents(), ["GOI", "IXC", "HYD"]);
   assert.match(await p.locator(".ib-open").getAttribute("href"), /m=flight&no=6E724/);
@@ -1324,10 +1327,12 @@ await test("flights: with nothing reported, the schedule is the schedule, not 'o
   await p.clock.install({ time: new Date(`${day}T16:21:00Z`) });
   await p.goto(`${SITE}?m=flight&no=6E6254&d=${addDays(day, 1)}`);
   await p.locator(".phase-banner .sub").waitFor();
-  assert.equal(await p.locator(".phase-banner .sub").textContent(), "No live update from IndiGo yet. Times are the schedule.");
-  assert.match(await p.locator(".fb-meta").first().textContent(), /^Scheduled, no update yet · Departs in \d+h \d+m$/);
-  assert.match(await p.locator(".fb-meta").nth(1).textContent(), /A model estimates 1:03 AM/);
-  assert.equal(await p.locator(".fb-time .t-late, .fb-time .t-early").count(), 0, "no colour: nothing's known either way");
+  assert.equal(await p.locator(".phase-banner .sub").textContent(), "No live update yet. Scheduled 10:30 PM");
+  assert.match(await p.locator(".leg-note").first().textContent(), /^Scheduled, no update yet · leaves in \d+h \d+m$/);
+  assert.match(await p.locator(".leg-note").nth(1).textContent(), /A model estimates 1:03 AM/);
+  assert.equal(await p.locator(".leg-time .t-late, .leg-time .t-early").count(), 0, "no colour: nothing's known either way");
+  // Every tile from before is still there
+  assert.deepEqual(await p.locator(".facts .fact > span:not(.fact-icon)").allTextContents(), ["Narrow-body jet", "Flight time"], "no distance in this answer, so no distance tile");
   assert.deepEqual(p.errors, []);
 });
 

@@ -152,64 +152,86 @@ export function renderFlight(f) {
     return el;
   };
 
-  // The status line: one headline with the countdown in status colour, then one sentence of
-  // context, chosen for what matters most right now. Tapping it opens the section behind it.
-  const banner = h("div", { class: "phase-banner fb-band", "aria-live": "polite" });
+  /* ---------------- phase banner ---------------- */
+  const banner = h("section", { class: "phase-banner", "aria-live": "polite" });
   const tone = (d) => banner.classList.add(d == null ? "tone" : d >= 15 ? "warn" : d <= 5 ? "good" : "tone");
-  const head = (leadText, bigNode) => h("p", { class: "fb-head" }, h("span", { class: "lead", text: leadText }), " ", h("span", { class: "big", "data-k": "banner" }, bigNode));
+  const lead = (t) => h("p", { class: "lead", text: t });
+  const big = (t) => h("p", { class: "big", "data-k": "banner" }, t);
   const sub = (t) => h("p", { class: "sub", text: t });
-  let target = null; // the section the status line opens
-  const statusWord = f.status.leftGate ? "Left the gate" : /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
+  let target = null; // a section the banner can open, when its last line is about it
   const ibFrom = ib ? ib.from.city || ib.from.code : "";
   const ibWhere = ib ? (ib.landed ? `has landed in ${dep.code}` : ib.phase === "air" ? `is in the air from ${ibFrom}` : `hasn't left ${ibFrom} yet`) : "";
 
   if (phase === "cancelled") {
     banner.classList.add("bad");
-    banner.append(head("Flight", "cancelled"), sub(`Check with ${f.airline.name} about rebooking or a refund.`));
+    banner.append(lead("Flight status"), big("Cancelled"), sub(`Check with ${f.airline.name} about rebooking or a refund.`));
   } else if (phase === "diverted") {
     banner.classList.add("warn");
-    banner.append(head("Flight", "diverted"), sub(`${f.airline.name} will share the new plan. We'll keep checking.`));
+    banner.append(lead("Flight status"), big("Diverted"), sub(`${f.airline.name} will share the new plan. We'll keep checking.`));
   } else if (phase === "pre") {
     const d = f.status.delayDep;
     tone(d);
     if (turn?.verdict === "late") banner.classList.replace("good", "warn") || banner.classList.replace("tone", "warn");
     const until = Date.parse(depTime) - now;
+    const dc = delayChip(d);
+    const statusWord = f.status.leftGate ? "Left the gate" : /Boarding/.test(f.status.raw) ? "Boarding now" : /GateClosed/.test(f.status.raw) ? "Gate closed" : null;
+    // No report from anyone isn't "on time": say it's the schedule.
+    const timing = !reported0
+      ? `No live update yet. Scheduled ${t12(depTime, depTz)}`
+      : dc && dc.cls === "late"
+        ? `Delayed ${fmtMin(d)}, now ${t12(depTime, depTz)}`
+        : d != null && d <= -5
+          ? `Early, now ${t12(depTime, depTz)}`
+          : `On time at ${t12(depTime, depTz)}`;
     banner.append(
-      until > 0
-        ? head(statusWord ? `${statusWord}. Gate departure in` : "Gate departure in", tickText(depTime, (ms) => countdown(Math.max(0, ms))))
-        : head(statusWord || "Gate departure", timeNode(depTime, depTz, { shift: dayShift(depTime, baseDate, depTz) }))
+      lead(until > 0 ? "Departs in" : "Departure"),
+      big(until > 0 ? tickText(depTime, (ms) => countdown(Math.max(0, ms))) : timeNode(depTime, depTz, { shift: dayShift(depTime, baseDate, depTz) })),
+      sub([statusWord, timing].filter(Boolean).join(". "))
     );
+    // The one thing that most affects this departure, in a sentence
     const at = t12(depTime, depTz);
+    let context = null;
+    if (turn?.verdict === "late") context = `Your plane ${ibWhere}, so expect ${t12(turn.earliest, depTz)} or later.`;
+    else if (turn?.verdict === "tight") context = `Your plane ${ibWhere} and reaches the gate ${t12(turn.gate.at, depTz)}, a tight turnaround.`;
+    else if (turn?.verdict === "here") context = `Your plane is already here.`;
+    else if (turn) context = `Your plane ${ibWhere}, with enough time for ${at}.`;
+    if (context) {
+      target = "inbound";
+      banner.append(sub(context));
+    }
     const ad = dep.delays;
-    let context;
-    if (!reported0) context = `No live update from ${f.airline.name} yet. Times are the schedule.`;
-    else if (turn?.verdict === "late") ((context = `Your plane ${ibWhere}, so expect ${t12(turn.earliest, depTz)} or later, not ${at}.`), (target = "inbound"));
-    else if (turn?.verdict === "tight") ((context = `Your plane ${ibWhere}. It reaches the gate ${t12(turn.gate.at, depTz)}, a tight turnaround for ${at}.`), (target = "inbound"));
-    else if (turn?.verdict === "here") ((context = `Your plane is already here, ready for the ${at} departure.`), (target = "inbound"));
-    else if (turn) ((context = `Your plane ${ibWhere}, with enough time for the ${at} departure.`), (target = "inbound"));
-    else if (ad && ad.minutes >= 15) context = `Delays at ${dep.code}: about ${fmtMin(ad.minutes)}${ad.reasons[0] ? `, ${ad.reasons[0].toLowerCase()}` : ""}.`;
-    else if (d != null && d >= 5) context = `Delayed ${fmtMin(d)}. Now leaving the gate at ${at}.`;
-    else context = `On time for ${at}.`;
-    banner.append(sub(context));
-    if (target && ad && ad.minutes >= 15) banner.append(sub(`Delays at ${dep.code} too: about ${fmtMin(ad.minutes)}.`));
+    if (ad && ad.minutes >= 15) banner.append(sub(`Delays at ${dep.code}: about ${fmtMin(ad.minutes)}${ad.reasons[0] ? `, ${ad.reasons[0].toLowerCase()}` : ""}.`));
   } else if (phase === "air") {
     const d = f.status.delayArr;
     tone(d);
     const dc = delayChip(d);
-    banner.append(head("Lands in", tickText(arrTime, (ms) => duration(Math.max(0, ms)))), sub(`${t12(arrTime, arrTz)} in ${arrCity}, ${dc ? dc.text.toLowerCase() : "on schedule"}.`));
+    banner.append(
+      lead("Lands in"),
+      big(tickText(arrTime, (ms) => duration(Math.max(0, ms)))),
+      sub(`${t12(arrTime, arrTz)} in ${arrCity}, ${dc ? dc.text.toLowerCase() : "on schedule"}`),
+      h("div", { class: "progress", "aria-hidden": "true" }, h("i")),
+      h(
+        "div",
+        { class: "progress-legend tn" },
+        h("span", { text: `${duration(now - Date.parse(takeoff))} flown` }),
+        h("span", { text: `${Math.round(fraction * 100)}% of the way` })
+      )
+    );
+    banner.querySelector(".progress i").style.width = `${fraction * 100}%`;
     if (f.status.inferred) banner.append(sub("Spotted in the air before the airline updated its status."));
-    if (arr.delays?.minutes >= 15) banner.append(sub(`Delays at ${arr.code}: about ${fmtMin(arr.delays.minutes)}, so it may circle or wait for a gate.`));
+    if (arr.delays?.minutes >= 15) banner.append(sub(`Delays at ${arr.code}: about ${fmtMin(arr.delays.minutes)}, so it may wait for a gate.`));
   } else {
     const d = f.status.delayArr;
     tone(d);
     const dc = delayChip(d);
-    banner.append(head(`Landed in ${arrCity}`, ago(arrTime)), sub([dc ? dc.text : "On time", arr.belt ? `bags on belt ${arr.belt}` : null].filter(Boolean).join(", ") + "."));
+    banner.append(lead(`Landed in ${arrCity}`), big(timeNode(arrTime, arrTz, { shift: dayShift(arrTime, baseDate, arrTz) })), sub(`${dc ? dc.text : "On time"}, ${ago(arrTime)}.`));
   }
   if (target) {
     banner.classList.add("go");
     banner.setAttribute("role", "button");
+    banner.setAttribute("aria-label", `${banner.textContent}. Opens where's your plane.`);
     banner.tabIndex = 0;
-    banner.append(h("i", { class: "fb-go", "aria-hidden": "true" }));
+    banner.append(h("i", { class: "pb-go", "aria-hidden": "true" }));
     const open = () => {
       const sec = blocks[target];
       if (!sec) return;
@@ -219,105 +241,7 @@ export function renderFlight(f) {
     banner.addEventListener("click", open);
     banner.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open()));
   }
-
-  // One end of the trip, grouped as you'd scan it: where, when (in colour, with the old time
-  // struck through), how that compares, and the one detail you need there, always on the right.
-  const tip = h("p", { class: "fb-tip", hidden: true, role: "status" });
-  let tipFor = null;
-  const tileBtn = (label, value, explain, arrow) =>
-    h(
-      "button",
-      {
-        type: "button",
-        class: `fb-tile${value ? "" : " empty"}`,
-        "aria-label": `${label}: ${value || "not announced yet"}`,
-        on: {
-          click: () => {
-            const same = tipFor === label && !tip.hidden;
-            tipFor = label;
-            tip.hidden = same;
-            tip.textContent = explain;
-          },
-        },
-      },
-      value && arrow ? svg(arrow) : null,
-      h("strong", { class: "tn", text: value || "--" })
-    );
-  const airline = f.airline.name;
-  const ARROW_UP = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M8.5 15.5l7-7M10 8.5h5.5V14" fill="none" stroke="var(--card)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  const ARROW_DOWN = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path d="M8.5 8.5l7 7M15.5 10v5.5H10" fill="none" stroke="var(--card)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  const BELT_ARROW = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 9v8H9" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  const endRow = (side, m, tz, time, delay, isDep) => {
-    const moved = m.sched && time && Math.abs(Date.parse(time) - Date.parse(m.sched)) >= 60000;
-    const dc = delayChip(delay);
-    const known = reported0 && delay != null;
-    const cls = !known ? "" : dc?.cls === "late" ? "t-late" : "t-early";
-    let meta = [];
-    if (!known && phase === "pre") meta.push(isDep ? "Scheduled, no update yet" : m.predicted ? `Scheduled. A model estimates ${t12(m.predicted, tz)}` : "Scheduled");
-    else if (dc) meta.push(h("b", { class: cls, text: dc.cls === "ok" ? "On time" : dc.text }));
-    if (isDep && phase === "pre" && Date.parse(time) > now) meta.push(h("span", {}, "Departs in ", tickText(time, (ms) => duration(Math.max(0, ms)))));
-    if (isDep && phase !== "pre") meta = [dep.runway ? `Took off ${t12(dep.runway, tz)}` : "Departed"];
-    if (!isDep && (phase === "pre" || phase === "air") && Date.parse(time) > now) meta.push(h("span", {}, "Arrives in ", tickText(time, (ms) => duration(Math.max(0, ms)))));
-    if (!isDep && phase === "landed") meta = [h("b", { class: cls, text: dc && dc.cls !== "ok" ? `Landed ${dc.text.toLowerCase()}` : "Landed" }), ago(time)];
-    const tile = isDep
-      ? tileBtn("Gate", m.gate, m.gate ? `Gate ${m.gate}. Gates can change: we check again before boarding.` : `Gate: not announced yet. It shows here as soon as ${airline} posts it.`)
-      : tileBtn("Belt", m.belt, m.belt ? `Your bags come out on belt ${m.belt}.` : "Baggage belt: not announced yet. Airports post it around landing.", BELT_ARROW);
-    const parts = meta.flatMap((x, i) => (i ? [" · ", x] : [x]));
-    return h(
-      "div",
-      { class: `fb-end ${side}` },
-      h("p", { class: "fb-place" }, svg(isDep ? ARROW_UP : ARROW_DOWN), h("b", { text: m.code }), ` · ${m.name && m.name !== m.city ? m.name : m.city || ""}`),
-      h(
-        "div",
-        { class: "fb-row" },
-        h(
-          "div",
-          { class: "fb-when" },
-          h(
-            "p",
-            { class: "fb-time" },
-            h("span", { class: cls, "data-k": `${side}-t` }, time ? timeNode(time, tz, { shift: dayShift(time, baseDate, tz) }) : "--:--"),
-            moved ? h("s", { text: t12(m.sched, tz) }) : null
-          ),
-          h("p", { class: "fb-meta" }, parts)
-        ),
-        h("div", { class: "fb-side" }, tile, h("small", { class: "fb-term" }, "Terminal ", h("b", { text: m.terminal || "--" })))
-      )
-    );
-  };
-  const blockMins = depTime && arrTime ? Date.parse(arrTime) - Date.parse(depTime) : null;
-  const overnight = arrTime && dateKey(arrTime, arrTz) !== baseDate;
-  const mid = h(
-    "div",
-    { class: "fb-mid" },
-    h(
-      "p",
-      { class: "fb-facts tn" },
-      blockMins ? [svg(icons.clock), duration(blockMins)] : null,
-      f.distanceKm ? [blockMins ? " · " : "", `${f.distanceKm.toLocaleString("en-IN")} km`] : null,
-      overnight ? [" · ", svg(icons.moon), "Overnight"] : null
-    ),
-    phase === "air" || phase === "landed" ? h("div", { class: `fb-line${phase === "air" ? " live" : ""}`, "aria-hidden": "true" }, h("i"), h("b", {}, svg(icons.plane))) : h("i", { class: "fb-rule", "aria-hidden": "true" })
-  );
-  if (phase === "air" || phase === "landed") {
-    mid.querySelector(".fb-line i").style.width = `${fraction * 100}%`;
-    mid.querySelector(".fb-line b").style.left = `${fraction * 100}%`;
-  }
-  if (phase === "air")
-    mid.append(h("p", { class: "fb-progress tn", text: `${duration(now - Date.parse(takeoff))} flown · ${Math.round(fraction * 100)}% of the way` }));
-
-  blocks.banner = h(
-    "section",
-    { class: "card fboard" },
-    banner,
-    endRow("dep", dep, depTz, depTime, f.status.delayDep, true),
-    mid,
-    endRow("arr", arr, arrTz, arrTime, f.status.delayArr, false),
-    tip
-  );
-
-  /* ---------------- yours: booking code and seat, on this device only ---------------- */
-  blocks.mine = mineCard(f);
+  blocks.banner = banner;
 
   /* ---------------- after landing ---------------- */
   if (phase === "landed" && arr.belt) {
@@ -340,6 +264,94 @@ export function renderFlight(f) {
       "Tell someone you've landed"
     );
   }
+
+  /* ---------------- route card ---------------- */
+  // A detail not announced yet can be tapped: it says when it usually appears.
+  const tip = h("p", { class: "leg-tip", hidden: true, role: "status" });
+  const later = (label, explain) =>
+    h(
+      "button",
+      {
+        type: "button",
+        class: "chip quiet leg-later",
+        "aria-label": `${label}: not announced yet`,
+        on: {
+          click: () => {
+            const same = !tip.hidden && tip.textContent === explain;
+            tip.hidden = same;
+            tip.textContent = explain;
+          },
+        },
+      },
+      `${label} soon`
+    );
+  const legBlock = (side, m, tz, time, delay, isDep) => {
+    const late = delayChip(delay);
+    const changed = m.sched && time && Math.abs(Date.parse(time) - Date.parse(m.sched)) >= 60000;
+    let note = late ? late.text : "Scheduled";
+    let neutral = false;
+    if (isDep && phase !== "pre") {
+      note = dep.runway ? `Took off ${t12(dep.runway, tz)}` : "Departed";
+      neutral = true;
+    }
+    if (!isDep && phase === "landed") note = late ? `Landed ${late.text.toLowerCase()}` : "Landed";
+    // A model's guess at the arrival, kept apart from anything the airline said
+    if (!late && phase === "pre") neutral = true; // "Scheduled" isn't good news, just the plan
+    if (!isDep && !late && m.predicted && phase === "pre") note = `Scheduled. A model estimates ${t12(m.predicted, tz)}`;
+    if (isDep && !reported0 && phase === "pre") note = "Scheduled, no update yet";
+    // How long until, ticking
+    const inText =
+      (isDep && phase === "pre") || (!isDep && (phase === "pre" || phase === "air"))
+        ? Date.parse(time) > now
+          ? h("span", { class: "leg-in" }, ` · ${isDep ? "leaves" : "lands"} in `, tickText(time, (ms) => duration(Math.max(0, ms))))
+          : null
+        : null;
+    // The time itself in colour once someone has reported on it
+    const known = reported0 && delay != null;
+    const tcls = !known ? "" : late?.cls === "late" ? "t-late" : "t-early";
+    const chips = [];
+    if (m.gate) chips.push(h("span", { class: "gate-chip" }, svg(icons.gate), m.gate, h("small", { text: "Gate" })));
+    else if (isDep && phase === "pre") chips.push(later("Gate", `The gate isn't announced yet. It shows here as soon as ${f.airline.name} posts it.`));
+    if (m.terminal) chips.push(h("span", { class: "chip quiet", text: `Terminal ${m.terminal}` }));
+    if (!isDep && m.belt && phase !== "landed") chips.push(h("span", { class: "gate-chip" }, svg(icons.belt), m.belt, h("small", { text: "Belt" })));
+    else if (!isDep && !m.belt && phase !== "landed" && phase !== "cancelled") chips.push(later("Belt", "The baggage belt isn't announced yet. Airports post it around landing."));
+    return h(
+      "div",
+      { class: "leg" },
+      h(
+        "div",
+        {},
+        h("p", { class: "leg-place", text: `${m.code}, ${m.name}` }),
+        h(
+          "p",
+          { class: "leg-time" },
+          h("span", { class: tcls, "data-k": `${side}-t` }, time ? timeNode(time, tz, { shift: dayShift(time, baseDate, tz) }) : "--:--"),
+          changed ? h("s", { text: t12(m.sched, tz) }) : null
+        ),
+        h("p", { class: `leg-note ${neutral ? "neutral" : late && late.cls === "late" ? "t-late" : "t-early"}` }, note, inText)
+      ),
+      h("div", { class: "leg-chips" }, chips)
+    );
+  };
+  const blockMins = depTime && arrTime ? Date.parse(arrTime) - Date.parse(depTime) : null;
+  const overnight = arrTime && dateKey(arrTime, arrTz) !== baseDate;
+  blocks.route = h(
+    "section",
+    { class: "card" },
+    legBlock("dep", dep, depTz, depTime, f.status.delayDep, true),
+    h(
+      "div",
+      { class: "leg-mid" },
+      h("span", { class: "tn", text: [blockMins ? duration(blockMins) : null, f.distanceKm ? `${f.distanceKm.toLocaleString("en-IN")} km` : null, overnight ? "Overnight" : null].filter(Boolean).join(" · ") }),
+      h("i")
+    ),
+    legBlock("arr", arr, arrTz, arrTime, f.status.delayArr, false),
+    tip
+  );
+
+  /* ---------------- yours: booking code and seat, on this device only ---------------- */
+  blocks.mine = mineCard(f);
+
 
   /** A section that folds, with what it would say shown on the closed line. */
   const fold = (key, title, preview, body, open = false) => {
@@ -504,7 +516,7 @@ export function renderFlight(f) {
       chain,
       /^[A-Z0-9]{2}\d+$/.test(ibNo) ? h("a", { class: "link-quiet ib-open", href: `?m=flight&no=${ibNo}&d=${ibDate}`, text: `Track ${ib.number} →` }) : null,
     ];
-    blocks.inbound = fold("inbound", "Where's your plane", verdict || now1, body, false);
+    blocks.inbound = fold("inbound", "Where's your plane", verdict || now1, body, true);
     blocks.inbound.classList.add("inbound-card");
   }
 
@@ -554,15 +566,23 @@ export function renderFlight(f) {
 
   /* ---------------- good to know: icon tiles ---------------- */
   const gtkTitle = h("h2", { class: "section-title display", text: "Good to know" });
-  const facts = h("section", { class: "card gtk-list", "aria-label": "Good to know" });
-  // Good to know reads as a list: the fact itself first, then what it is.
-  const tile = (icon, tint, label, value, small) =>
-    h(
-      "div",
-      { class: "gtk-row" },
-      h("span", { class: `fact-icon ${tint}` }, svg(icon)),
-      h("div", {}, h("strong", { text: value }), h("small", { text: [label, small].filter(Boolean).join(" · ") }))
-    );
+  const facts = h("section", { class: "facts", "aria-label": "Good to know" });
+  const tile = (icon, tint, label, value, small, wide = false) =>
+    wide
+      ? h(
+          "div",
+          { class: "card fact wide" },
+          h("span", { class: `fact-icon ${tint}` }, svg(icon)),
+          h("div", {}, h("span", { text: label }), h("strong", { text: value }), small ? h("small", { text: small }) : null)
+        )
+      : h(
+          "div",
+          { class: "card fact" },
+          h("span", { class: `fact-icon ${tint}` }, svg(icon)),
+          h("span", { text: label }),
+          h("strong", { text: value }),
+          small ? h("small", { text: small }) : null
+        );
 
   const fixed = [];
   const body = bodyType(f.aircraft?.model);
@@ -573,8 +593,10 @@ export function renderFlight(f) {
   if (seats?.length) fixed.push(tile(icons.seat || icons.desk, "lav", "Seats", seats.join(", "), null));
   if (phase === "landed" && dep.actual && arr.actual) {
     fixed.push(tile(icons.timer, "", "Time in the air", duration(Date.parse(arr.actual) - Date.parse(dep.actual)), "Runway to runway"));
+  } else if (blockMins) {
+    fixed.push(tile(icons.timer, "", "Flight time", duration(blockMins), "Gate to gate"));
   }
-  // Flight time and distance are on the board already, so they aren't repeated here.
+  if (f.distanceKm) fixed.push(tile(icons.route, "", "Distance", `${f.distanceKm.toLocaleString("en-IN")} km`, "As the crow flies"));
   if (phase === "pre" && dep.checkIn) fixed.push(tile(icons.desk, "lav", "Check-in", `Desks ${dep.checkIn}`, `At ${dep.code}`));
   if (dep.terminal || arr.terminal)
     fixed.push(tile(icons.terminal, "lav", "Terminals", `${dep.terminal ? `T${dep.terminal}` : dep.code} to ${arr.terminal ? `T${arr.terminal}` : arr.code}`, null));
@@ -598,9 +620,10 @@ export function renderFlight(f) {
   const slots = { arr: null, dep: null, sun: null };
   function paint() {
     const all = [slots.arr, slots.dep, ...fixed].filter(Boolean);
+    // an odd tile out stretches across instead of leaving a hole
+    all.forEach((el, i) => el.classList.toggle("stretch", all.length % 2 === 1 && i === all.length - 1));
     facts.replaceChildren(...all, ...wide, ...(slots.sun ? [slots.sun] : []));
     gtkTitle.hidden = !facts.childElementCount;
-    facts.hidden = !facts.childElementCount;
   }
   paint();
 
@@ -693,12 +716,12 @@ export function renderFlight(f) {
   /* ---------------- order by phase ---------------- */
   const order =
     {
-      pre: ["head", "banner", "mine", "inbound", "times", "map", "history"],
-      air: ["head", "map", "stats", "profile", "banner", "mine", "times"],
-      landed: ["head", "banner", "belt", "share", "mine", "times", "map", "history"],
-      cancelled: ["head", "banner", "times", "map"],
-      diverted: ["head", "banner", "map", "times"],
-    }[phase] || ["head", "banner", "times", "map"];
+      pre: ["head", "banner", "inbound", "route", "mine", "times", "map", "history"],
+      air: ["head", "map", "stats", "profile", "banner", "route", "mine", "times"],
+      landed: ["head", "banner", "belt", "share", "route", "mine", "times", "map", "history"],
+      cancelled: ["head", "banner", "route", "times", "map"],
+      diverted: ["head", "banner", "map", "route", "times"],
+    }[phase] || ["head", "banner", "route", "times", "map"];
 
   // Shown when the budget kept us from a fresh lookup: honest about how old this is.
   if (f.status.servedStale) {
@@ -855,7 +878,7 @@ const VALID = { code: (v) => /^[A-Z0-9]{5,8}$/.test(v), seat: (v) => /^\d{1,2}[A
 function mineCard(f) {
   const mine = flightMine(f);
   const slot = (kind, icon, title, hint) => {
-    const value = h("small", { class: "fm-value", text: mine[kind] || "Tap to add" });
+    const value = h("strong", { class: "fm-value", text: mine[kind] || "Add" });
     const input = h("input", {
       class: "fm-input",
       hidden: true,
@@ -868,7 +891,7 @@ function mineCard(f) {
       placeholder: hint,
     });
     const note = h("small", { class: "fm-note", hidden: true, role: "status" });
-    const btn = h("button", { type: "button", class: `fm-slot${mine[kind] ? " set" : ""}`, "aria-label": `${title}: ${mine[kind] || "not added"}` }, svg(icon), h("strong", { text: title }), value);
+    const btn = h("button", { type: "button", class: `card fact fm-slot${mine[kind] ? " set" : ""}`, "aria-label": `${title}: ${mine[kind] || "not added"}` }, h("span", { class: "fact-icon lav" }, svg(icon)), h("span", { text: title }), value);
     const box = h("div", { class: "fm-box" }, btn, input, note);
     const commit = () => {
       const v = CLEAN[kind](input.value);
@@ -880,7 +903,7 @@ function mineCard(f) {
       }
       saveMine(f, { [kind]: v || null });
       mine[kind] = v || null;
-      value.textContent = v || "Tap to add";
+      value.textContent = v || "Add";
       btn.classList.toggle("set", !!v);
       btn.setAttribute("aria-label", `${title}: ${v || "not added"}`);
       note.hidden = true;
@@ -901,7 +924,7 @@ function mineCard(f) {
     input.addEventListener("blur", commit);
     // Paste straight from the airline's email or app
     if (kind === "code" && navigator.clipboard?.readText) {
-      const paste = h("button", { type: "button", class: "fm-paste", text: "Paste" });
+      const paste = h("button", { type: "button", class: "chip quiet fm-paste", text: "Paste" });
       paste.addEventListener("click", async (e) => {
         e.stopPropagation();
         const text = (await navigator.clipboard.readText().catch(() => "")) || "";
