@@ -1295,6 +1295,13 @@ await test("flights: the airline's estimate, the plane flying in, and how this f
   assert.match(await text(".hist-lead"), /Usually leaves 11 min early/);
   assert.equal(await p.locator(".hist-col").count(), 11);
   assert.match(await text(".data-credit"), /FlightAware/);
+  // The original time above, struck through; the new one big, saying what it is
+  assert.equal(await p.locator(".leg").first().locator(".leg-was s").textContent(), "10:30 PM");
+  assert.match(await p.locator(".leg").first().locator(".leg-time").textContent(), /^10:45 PM/);
+  assert.match(await p.locator(".leg").first().locator(".leg-note").textContent(), /^Leaves the gate, 15m late · in \d+ min$/);
+  assert.match(await p.locator(".leg").nth(1).locator(".leg-note").textContent(), /^At the gate, 10m late · in /);
+  // This phone keeps a different clock (UTC here) from the airports: its own time is given too
+  assert.match(await p.locator(".leg").first().locator(".leg-yours").textContent(), /^5:15 PM your time \((UTC|GMT)\)$/);
   // Every time on the route card says its zone; tapping one shows it around the world
   assert.equal(await p.locator(".leg .tz-chip").first().textContent(), "IST›");
   assert.match(await p.locator(".tz-hint").textContent(), /Tap IST beside a time to see it in another city/, "a tip says the label can be tapped");
@@ -1343,7 +1350,7 @@ await test("flights: with nothing reported, the schedule is the schedule, not 'o
   await p.goto(`${SITE}?m=flight&no=6E6254&d=${addDays(day, 1)}`);
   await p.locator(".phase-banner .sub").waitFor();
   assert.equal(await p.locator(".phase-banner .sub").textContent(), "No live update yet. Scheduled 10:30 PM");
-  assert.match(await p.locator(".leg-note").first().textContent(), /^Scheduled, no update yet · Departs in \d+h \d+m$/);
+  assert.match(await p.locator(".leg-note").first().textContent(), /^Scheduled, no update yet · in \d+h \d+m$/);
   assert.match(await p.locator(".leg-note").nth(1).textContent(), /A model estimates 1:03 AM/);
   assert.equal(await p.locator(".leg-time .t-late, .leg-time .t-early").count(), 0, "no colour: nothing's known either way");
   // Every tile from before is still there

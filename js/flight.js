@@ -1,7 +1,7 @@
 import { h, svg, clock, dayLabel, dateKey, duration, ago, delayChip, fmtMin, tzOffset, greatCircle, bearing, timeNode, dayShift } from "./util.js";
 import { icons, weatherLook, bodyType } from "./icons.js";
 import { endBadge, tripFacts, signal } from "./marks.js";
-import { zoneChip, zoneName, offsetMin, tzHintSeen } from "./tz.js";
+import { zoneChip, zoneName, offsetMin, tzHintSeen, deviceZone } from "./tz.js";
 import { conditions, forecastAt, rough, wxWords, skyWords } from "./airwx.js";
 import { flightTrips, addJourney, updateJourney, flightJourney } from "./journeys.js";
 import { historySummary, turnaround, inboundAtGate, ON_TIME_MIN } from "./flight-insights.js";
@@ -319,26 +319,26 @@ export function renderFlight(f) {
   const legBlock = (side, m, tz, time, delay, isDep) => {
     const late = delayChip(delay);
     const changed = m.sched && time && Math.abs(Date.parse(time) - Date.parse(m.sched)) >= 60000;
-    let note = late ? late.text : "Scheduled";
-    let neutral = false;
-    if (isDep && phase !== "pre") {
-      note = dep.runway ? `Took off ${t12(dep.runway, tz)}` : "Departed";
-      neutral = true;
-    }
-    if (!isDep && phase === "landed") note = late ? `Landed ${late.text.toLowerCase()}` : "Landed";
-    // A model's guess at the arrival, kept apart from anything the airline said
-    if (!late && phase === "pre") neutral = true; // "Scheduled" isn't good news, just the plan
-    if (!isDep && !late && m.predicted && phase === "pre") note = `Scheduled. A model estimates ${t12(m.predicted, tz)}`;
-    if (isDep && !reported0 && phase === "pre") note = "Scheduled, no update yet";
+    const known = reported0 && delay != null;
+    // How it compares, in words: ", 37m late", ", 5m early", or nothing when on time or unknown
+    const vs = known && late?.cls === "late" ? `, ${fmtMin(delay)} late` : known && late?.cls === "early" ? `, ${fmtMin(-delay)} early` : known ? ", on time" : "";
+    // Say exactly what the big time is: the gate, the runway, or just the plan
+    let note;
+    if (isDep) {
+      if (phase === "pre") note = !reported0 ? "Scheduled, no update yet" : `Leaves the gate${vs}`;
+      else note = `Left the gate${vs}${dep.runway ? ` · took off ${t12(dep.runway, tz)}` : ""}`;
+    } else if (phase === "landed") note = `Landed${vs}`;
+    else if (phase === "cancelled" || phase === "diverted") note = "Scheduled";
+    else note = !reported0 ? (m.predicted ? `Scheduled. A model estimates ${t12(m.predicted, tz)}` : "Scheduled") : `At the gate${vs}`;
+    const neutral = !known || late?.cls === "ok";
     // How long until, ticking
     const inText =
       (isDep && phase === "pre") || (!isDep && (phase === "pre" || phase === "air"))
         ? Date.parse(time) > now
-          ? h("span", { class: "leg-in" }, ` · ${isDep ? "Departs" : "Arrives"} in `, tickText(time, (ms) => duration(Math.max(0, ms))))
+          ? h("span", { class: "leg-in" }, " · in ", tickText(time, (ms) => duration(Math.max(0, ms))))
           : null
         : null;
     // The time itself in colour once someone has reported on it
-    const known = reported0 && delay != null;
     const tcls = !known ? "" : late?.cls === "late" ? "t-late" : "t-early";
     const chips = [];
     // A gate at both ends: the number once it's known, "--" until then (tap to see why)
@@ -349,6 +349,9 @@ export function renderFlight(f) {
     if (m.terminal) chips.push(h("span", { class: "chip quiet", text: `Terminal ${m.terminal}` }));
     if (!isDep && m.belt && phase !== "landed") chips.push(h("span", { class: "gate-chip" }, svg(icons.belt), m.belt, h("small", { text: "Belt" })));
     else if (!isDep && !m.belt && phase !== "landed" && phase !== "cancelled") chips.push(later("Belt", "The baggage belt isn't announced yet. Airports post it around landing."));
+    // Your own clock, when your phone keeps a different one from this airport
+    const mine = deviceZone();
+    const yours = time && offsetMin(time, mine) !== offsetMin(time, tz) ? `${clock(time, mine)} your time (${zoneName(time, mine)})${dateKey(time, mine) !== dateKey(time, tz) ? `, ${dayLabel(time, mine)}` : ""}` : null;
     return h(
       "div",
       { class: "leg" },
@@ -356,13 +359,15 @@ export function renderFlight(f) {
         "div",
         {},
         h("p", { class: "leg-place" }, endBadge(isDep ? "leave" : "arrive"), `${m.code}, ${m.name}`),
+        // The original time first, struck through, when there's a new one; else only the original, big
+        changed ? h("p", { class: "leg-was" }, h("s", { "aria-label": `Originally ${t12(m.sched, tz)}`, text: t12(m.sched, tz) })) : null,
         h(
           "p",
           { class: "leg-time" },
           h("span", { class: tcls, "data-k": `${side}-t` }, time ? timeNode(time, tz, { shift: dayShift(time, baseDate, tz) }) : "--:--"),
-          time ? chip(time, tz) : null,
-          changed ? h("s", { text: t12(m.sched, tz) }) : null
+          time ? chip(time, tz) : null
         ),
+        yours ? h("p", { class: "leg-yours tn", text: yours }) : null,
         h("p", { class: `leg-note ${neutral ? "neutral" : late && late.cls === "late" ? "t-late" : "t-early"}` }, note, inText)
       ),
       h("div", { class: "leg-chips" }, chips)

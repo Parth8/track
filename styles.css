@@ -7296,3 +7296,23 @@ textarea.jn-input {
   width: 16px;
   height: 16px;
 }
+/* The original time sits above the new one, struck through */
+.leg-was {
+  margin: 2px 0 -2px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.leg-yours {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--lav-ink);
+}
+.signal,
+.gate-chip {
+  white-space: nowrap;
+}
+.leg-chips {
+  flex: none;
+}
