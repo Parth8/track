@@ -24,7 +24,7 @@ export async function api(path, params = {}, { timeout = 20000, retries = 1 } = 
     try {
       const res = await fetch(url, { signal: ctrl.signal, credentials: "omit", referrerPolicy: "no-referrer" });
       const body = await res.json().catch(() => ({}));
-      if (res.ok) return path === "/api/flight" ? withCities(body) : body;
+      if (res.ok) return path === "/api/flight" || path === "/api/aircraft" ? withCities(body) : body;
       last = new ApiError(body.error || "http_error", body.message || "Something went wrong.", res.status);
       if (res.status < 500) throw last;
     } catch (err) {
@@ -58,6 +58,7 @@ async function withCities(f) {
     fix(f?.arrival);
     fix(f?.inbound?.from);
     fix(f?.inbound?.prev?.from);
+    for (const x of f?.flights || []) (fix(x.from), fix(x.to)); // a plane's day
   } catch {
     /* the flight's own names stand */
   }
@@ -88,5 +89,18 @@ export function airportWeather(icao) {
     throw e;
   });
   airMemo.set(icao, { at: Date.now(), promise });
+  return promise;
+}
+
+/** A plane's details and photo, once per registration per 30 minutes per session. */
+const planeMemo = new Map();
+export function planeInfo(reg) {
+  const hit = planeMemo.get(reg);
+  if (hit && Date.now() - hit.at < 30 * 60000) return hit.promise;
+  const promise = api("/api/aircraft", { reg }, { timeout: 15000, retries: 0 }).catch((e) => {
+    planeMemo.delete(reg);
+    throw e;
+  });
+  planeMemo.set(reg, { at: Date.now(), promise });
   return promise;
 }

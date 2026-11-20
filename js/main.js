@@ -1,11 +1,12 @@
 import { h, svg, $, todayIn, addDays, longDate, dayLabel, relativeDay, prefersReducedMotion, isDarkTheme, ago, IST, timeNode, clock } from "./util.js";
 import { icons, art } from "./icons.js";
-import { api, weatherAt, airportWeather, ApiError } from "./api.js";
+import { api, weatherAt, airportWeather, planeInfo, ApiError } from "./api.js";
 import { createFlipDate } from "./flip.js";
 import { createLoader } from "./loader.js";
 import { renderShareImage } from "./share-card.js";
 import { renderTrain, trainCadence } from "./train.js";
 import { renderFlight } from "./flight.js";
+import { renderPlanePage } from "./aircraft.js";
 import { installWay, installPlace, appleGuide, canOpenSafari, onInstallChange, promptInstall } from "./install.js";
 import { guideArt } from "./guide.js";
 import { createRoutePanel, createResults, routeRange } from "./finder.js";
@@ -51,18 +52,22 @@ const MODES = {
   },
   flight: {
     title: "Which flight?",
-    label: "Flight number",
-    placeholder: "6E 6252",
-    hint: "Airline code and number, like 6E 6252. The space is optional.",
+    label: "Flight number or plane",
+    placeholder: "6E 6252 or VT-IIK",
+    hint: "A flight number like 6E 6252, or a plane's registration like VT-IIK to see that plane.",
     inputmode: "text",
     maxlength: 8,
     // "6e6252" becomes "6E 6252" as you type
     clean: (v) => {
-      const x = v.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 7);
+      const raw = v.toUpperCase().replace(/[^A-Z0-9-]/g, "");
+      const x = raw.replace(/-/g, "").slice(0, 7);
+      // A plane's registration (VT-IIK, N784AV) stays as typed; a flight number gets its space
+      if (raw.includes("-") || (x.length > 2 && !/^[A-Z0-9]{2}\d/.test(x))) return raw.slice(0, 8);
       return x.length > 2 ? `${x.slice(0, 2)} ${x.slice(2)}` : x;
     },
     check: (v) => {
       const x = v.replace(/\s/g, "");
+      if (isReg(x)) return null;
       if (!x) return "Enter a flight number, like 6E 6252.";
       if (/^\d+$/.test(x)) return "Add the airline's 2-character code first. For example 6E 6252 or AI 101.";
       if (!/^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(x)) return "That doesn't look like a flight number. Try something like 6E 6252 or AI 101.";
@@ -467,7 +472,9 @@ form.addEventListener("submit", (e) => {
     qInput.focus();
     return;
   }
-  navigate({ m: mode, no: qInput.value.replace(/\s/g, ""), d: flip.value });
+  const typed = qInput.value.replace(/\s/g, "");
+  if (mode === "flight" && isReg(typed)) return navigate({ m: "flight", reg: typed });
+  navigate({ m: mode, no: typed, d: flip.value });
 });
 
 document.addEventListener("click", (e) => {
@@ -639,6 +646,13 @@ function syncThemeUI() {
 /* Routing: the URL is the only state                                  */
 /* ------------------------------------------------------------------ */
 
+/** A plane's registration (VT-IIK, A6-EUA, N784AV, or VTIIK typed without its dash), never a flight number. */
+function isReg(v) {
+  const r = String(v || "").toUpperCase();
+  if (r.length < 4 || r.length > 8 || /^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(r)) return false;
+  return /^[A-Z0-9]{1,3}-[A-Z0-9]{1,5}$/.test(r) || /^N\d{1,5}[A-Z]{0,2}$/.test(r) || /^[A-Z][A-Z0-9]{3,6}$/.test(r);
+}
+
 function current() {
   const p = new URLSearchParams(location.search);
   const m = p.get("m");
@@ -653,6 +667,7 @@ function current() {
     to: code("to"),
     time: /^\d{2}:\d{2}$/.test(p.get("t") || "") ? p.get("t") : "",
     view: (m === "train" || m === "flight") && p.get("v") === "journeys" ? "journeys" : null,
+    reg: m === "flight" && isReg(p.get("reg") || "") ? (p.get("reg") || "").toUpperCase() : "",
   };
 }
 
@@ -673,7 +688,7 @@ function backToSearch() {
 function route(opts = {}) {
   const r = current();
   const isResults = !!(r.mode && r.from && r.to && r.by !== "route");
-  const target = !r.mode ? "home" : r.no ? "status" : r.view === "journeys" ? "journeys" : isResults ? "results" : "search";
+  const target = !r.mode ? "home" : r.no || r.reg ? "status" : r.view === "journeys" ? "journeys" : isResults ? "results" : "search";
   const apply = () => {
     for (const [name, el] of Object.entries(views)) el.hidden = name !== target;
     document.body.dataset.mode = r.mode || "home";
@@ -811,7 +826,35 @@ function stopSession() {
   session = null;
 }
 
+/** A plane's own page, by registration: what it is, its photo, where it is, its day. */
+async function openPlane(r) {
+  stopSession();
+  session = null;
+  // Pin and share are a flight's; on a plane's page, Refresh looks the plane up again
+  $("#status-pin").hidden = true;
+  $("#status-share").hidden = true;
+  $("#status-title").textContent = r.reg;
+  $("#status-sub").textContent = "Aircraft";
+  document.title = `Plane ${r.reg}`;
+  statusRoot.setAttribute("aria-busy", "true");
+  statusRoot.replaceChildren(h("div", { class: "jn-live-skel", "aria-hidden": "true" }, h("span", { class: "skel", vars: { width: "100%", height: "220px" } }), h("span", { class: "skel", vars: { width: "70%", height: "26px" } }), h("span", { class: "skel", vars: { width: "100%", height: "160px" } })));
+  try {
+    const a = await api("/api/aircraft", { reg: r.reg }, { timeout: 25000, retries: 1 });
+    if (current().reg !== r.reg) return;
+    $("#status-title").textContent = a.reg;
+    $("#status-sub").textContent = [a.maker, a.model?.replace(new RegExp(`^${a.maker} `), "")].filter(Boolean).join(" ") || "Aircraft";
+    statusRoot.replaceChildren(renderPlanePage(a, { onOpenFlight: (no, d) => navigate({ m: "flight", no, d }) }), h("footer", { class: "status-foot" }, h("button", { type: "button", class: "link-quiet", "data-open": "sources", text: "Sources and credits" })));
+  } catch (e) {
+    statusRoot.replaceChildren(h("div", { class: "empty compact" }, h("h2", { class: "display", text: e instanceof ApiError && e.code === "not_found" ? `No plane found as ${r.reg}` : "Couldn't look this plane up" }), h("p", { text: e instanceof ApiError && e.code === "not_found" ? "Check the registration: it's painted near the tail, like VT-IIK or N784AV." : "Try again in a moment." })));
+  } finally {
+    statusRoot.setAttribute("aria-busy", "false");
+  }
+}
+
 function openStatus(r) {
+  if (r.reg) return openPlane(r);
+  $("#status-pin").hidden = false;
+  $("#status-share").hidden = false;
   const same = session && session.mode === r.mode && session.no === r.no && session.date === r.date;
   if (same) {
     session.stop = r.stop;
@@ -831,7 +874,7 @@ $("#status-back").addEventListener("click", (e) => {
   if (history.state?.from === "results" || history.state?.from === "journeys") history.back();
   else backToSearch();
 });
-$("#status-refresh").addEventListener("click", () => (session?.data ? load({ manual: true }) : retryNow()));
+$("#status-refresh").addEventListener("click", () => (current().reg ? openPlane(current()) : session?.data ? load({ manual: true }) : retryNow()));
 $("#status-pin").addEventListener("click", () => togglePin("topbar"));
 $("#status-share").addEventListener("click", share);
 jumpBtn.addEventListener("click", () => session?.currentRow?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "center" }));
@@ -988,6 +1031,7 @@ function paint() {
 
   for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
     for (const w of view.airwx || []) airportWeather(w.icao).then(w.apply).catch(() => {});
+    if (view.plane) planeInfo(view.plane.reg).then(view.plane.apply).catch(() => {});
 
   // Draw the share card in the background so tapping Share is instant.
   s.share = view.share;
@@ -1119,6 +1163,7 @@ function mountLive(el, j) {
     el.replaceChildren(freshBar(), view.node, h("div", { class: "jn-live-foot" }, full));
     for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
     for (const w of view.airwx || []) airportWeather(w.icao).then(w.apply).catch(() => {});
+    if (view.plane) planeInfo(view.plane.reg).then(view.plane.apply).catch(() => {});
   };
   /** When this was last checked, when it checks next, and a way to check now. */
   function freshBar() {
@@ -1194,6 +1239,7 @@ function mountFlightLive(el, j) {
     el.replaceChildren(freshBar(), view.node, h("div", { class: "jn-live-foot" }, full));
     for (const w of view.weather || []) weatherAt(w.lat, w.lon).then(w.apply).catch(() => {});
     for (const w of view.airwx || []) airportWeather(w.icao).then(w.apply).catch(() => {});
+    if (view.plane) planeInfo(view.plane.reg).then(view.plane.apply).catch(() => {});
   };
   function freshBar() {
     const next = s.nextAt ? Math.max(1, Math.round((s.nextAt - Date.now()) / 60000)) : null;

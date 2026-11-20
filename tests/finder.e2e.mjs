@@ -56,6 +56,13 @@ function seatAnswer(u) {
 }
 const upstream = async (url) => {
   const u = new URL(url);
+  // A plane: VT-IIK's identity (hexdb), its photo (Planespotters) and its own FlightAware page, moved to today
+  if (u.hostname === "hexdb.io") return new Response(u.pathname.startsWith("/reg-hex") ? "80149A" : JSON.stringify({ ModeS: "80149A", Registration: "VT-IIK", Manufacturer: "Airbus", ICAOTypeCode: "A20N", Type: "A320 251NSL", RegisteredOwners: "IndiGo", OperatorFlagCode: "IGO" }));
+  if (u.hostname === "api.planespotters.net") return new Response(JSON.stringify({ photos: [{ thumbnail_large: { src: "https://t.plnspttrs.net/15888/1917602_50ec0958dd_280.jpg" }, link: "https://www.planespotters.net/photo/1917602", photographer: "Mohit Purswani" }] }));
+  if (u.hostname === "www.flightaware.com" && u.pathname === "/live/flight/VTIIK") {
+    const shift = (Date.parse(`${istToday()}T00:00:00Z`) - Date.parse("2026-11-19T00:00:00Z")) / 1000;
+    return new Response(rec("fa-page-tail.html").replace(/"(scheduled|estimated|actual|timestamp)":(\d{10})/g, (_, k, v) => `"${k}":${Number(v) + shift}`));
+  }
   // FlightAware: 6E 6254 and the plane flying in, hand-built from FlightAware's numbers, moved to today
   if (u.hostname === "aeroapi.flightaware.com") return new Response(JSON.stringify(faDay(u.pathname.includes("IGO724") ? "aeroapi-6e724.json" : "aeroapi-6e6254.json")), { headers: { "Content-Type": "application/json" } });
   if (u.hostname.includes("aerodatabox") && /\/airports\/iata\/(IXC|HYD)$/.test(u.pathname)) {
@@ -1407,6 +1414,60 @@ await test("my trips: add a flight by its number, and trains and flights sit in 
   await settle(p, 400);
   assert.equal(await p.locator(".jcard").count(), 1);
   assert.match(await p.locator(".jcard .jc-meta").textContent(), /Seat 14C/);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("planes: a registration in the flight box opens that plane: what it is, its photo, its day", async () => {
+  const p = await page({ env: { flightStatus: true } });
+  await p.goto(`${SITE}?m=flight`);
+  await settle(p, 400);
+  await p.locator("#q").fill("vt-iik");
+  await p.locator("#search-form").evaluate((f) => f.requestSubmit());
+  await p.waitForURL(/reg=VT-IIK/);
+  await p.locator(".plane-page").waitFor();
+  assert.equal(await p.locator(".plane-make .maker").textContent(), "Airbus");
+  assert.equal(await p.locator(".plane-make strong").textContent(), "Airbus A320neo");
+  assert.match(await p.locator(".plane-facts").first().textContent(), /Narrow-body jet · 2 jet engines · usually 150–194 seats · type first flew 2014/);
+  assert.match(await p.locator(".plane-dl").textContent(), /Exact modelA320 251NSL.*OwnerIndiGo/);
+  assert.match(await p.locator(".plane-photo figcaption").textContent(), /Mohit Purswani \/ Planespotters\.net/);
+  assert.ok((await p.locator(".pf-row").count()) >= 3, "its flights around today");
+  assert.match(await p.locator(".pf-row").first().textContent(), /6E \d+/);
+  assert.deepEqual(p.errors, []);
+});
+
+await test("planes: flight search shows each plane's maker, and can show only Airbus or only Boeing", async () => {
+  const p = await page();
+  await p.goto(`${SITE}?m=flight&from=DEL&to=BLR&d=${addDays(istToday(), 2)}`);
+  await p.locator(".maker-filter").waitFor();
+  const all = await p.locator(".fcard").count();
+  assert.ok((await p.locator(".fcard .maker", { hasText: "Boeing" }).count()) >= 1);
+  await p.locator('.maker-filter [role="radio"]', { hasText: "Airbus" }).click();
+  await settle(p, 300);
+  const airbus = await p.locator(".fcard").count();
+  assert.ok(airbus < all && airbus > 0);
+  assert.equal(await p.locator(".fcard .maker", { hasText: "Boeing" }).count(), 0);
+  assert.match(await p.locator(".maker-note").textContent(), new RegExp(`^${airbus} of ${all} flights use Airbus planes`));
+  // Remembered next time
+  await p.reload();
+  await p.locator(".maker-filter").waitFor();
+  assert.equal(await p.locator('.maker-filter [aria-checked="true"]').textContent(), "Airbus");
+  assert.deepEqual(p.errors, []);
+});
+
+await test("planes: a flight shows its plane, and says so when it changed since you saved the trip", async () => {
+  const p = await page({ env: { flightStatus: true, FA_KEY: "fa-test" } });
+  const day = istToday();
+  // Saved when a Boeing was planned; it's an Airbus A320neo now
+  const trip = { id: "jsw", kind: "flight", no: "6E6254", name: "IndiGo", startDate: day, from: { code: "IXC", name: "Chandigarh" }, to: { code: "HYD", name: "Hyderabad" }, dep: `${day}T17:00:00Z`, arr: `${day}T19:30:00Z`, aircraft: "Boeing 737-800", createdAt: new Date().toISOString() };
+  await p.addInitScript((t) => localStorage.setItem("journeys", JSON.stringify([t])), trip);
+  await p.clock.install({ time: new Date(`${day}T16:21:00Z`) });
+  await p.goto(`${SITE}?m=flight&no=6E6254&d=${day}`);
+  await p.locator(".plane-sec").waitFor();
+  assert.equal(await p.locator(".plane-sec .maker").first().textContent(), "Airbus");
+  assert.equal(await p.locator(".plane-sec .plane-make strong").textContent(), "A320neo");
+  assert.match(await p.locator(".plane-sec .plane-facts").first().textContent(), /Narrow-body jet/);
+  assert.match(await p.locator(".plane-swap").textContent(), /it was Boeing 737-800, it's now Airbus A320neo/);
+  assert.match(await p.locator(".phase-banner").textContent(), /Plane changed: now Airbus A320neo, was Boeing 737-800/);
   assert.deepEqual(p.errors, []);
 });
 

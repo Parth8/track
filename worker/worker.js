@@ -6,6 +6,8 @@
  *   /api/train?no=12786&date=2026-09-29
  *   /api/flight?no=6E6252&date=2026-09-29
  *   /api/weather?lat=17.39&lon=78.50
+ *   /api/aircraft?reg=VT-IIK  (a plane: what it is, a photo of it, where it is and what it flies
+ *                              over a few days; or ?hex=80149a, its transponder code)
  *   /api/airwx?icao=VOHS      (an airport's own weather: its latest observation, METAR, and its
  *                              forecast, TAF, from the US National Weather Service's aviation
  *                              weather service; worldwide, free)
@@ -108,6 +110,8 @@ export default {
           return reply(await flightRoute(url, env, ctx, request), 200, cors, TTL.flight, env);
         case "/api/weather":
           return reply(await weatherRoute(url, ctx), 200, cors, TTL.weather, env);
+        case "/api/aircraft":
+          return reply(await aircraftRoute(url, ctx, env), 200, cors, 120, env);
         case "/api/airwx":
           return reply(await airWeatherRoute(url, ctx), 200, cors, 600, env);
         case "/api/between":
@@ -1350,6 +1354,9 @@ export function faPageHistory(rows, date) {
         in: si && inn ? { sched: si, actual: inn } : null,
         depDelay: so && out ? Math.round((Date.parse(out) - Date.parse(so)) / 60000) : null,
         arrDelay: si && inn ? Math.round((Date.parse(inn) - Date.parse(si)) / 60000) : null,
+        // Which plane flew it that day: its type always, its registration when published
+        type: r.aircraft?.type || r.aircraftType || null,
+        reg: r.aircraft?.tail || null,
       };
     })
     .sort((a, b) => (a.date < b.date ? 1 : -1))
@@ -1411,7 +1418,7 @@ export function faPageFlight(data, raw, date) {
     arrival: { ...arr, sched: t.in.sched || t.on.sched, revised: inBest || null, runway: t.on.actual, terminal: e.destination?.terminal || null, gate: e.destination?.gate || null, checkIn: null, belt: null, actual: t.on.actual || t.in.actual || null },
     times: t,
     distanceKm: gc ?? (Number.isFinite(main.flightPlan?.directDistance) ? Math.round(main.flightPlan.directDistance * 1.609) : null),
-    aircraft: { model: aircraftName(typeCode), code: typeCode, reg: null, hex: null },
+    aircraft: { model: aircraftName(typeCode), code: typeCode, reg: (full && main.aircraft?.tail) || e.aircraft?.tail || null, hex: null, maker: main.aircraft?.typeDetails?.manufacturer || null },
     plan: full
       ? {
           eteMin: Number.isFinite(main.flightPlan?.ete) ? Math.round(main.flightPlan.ete / 60) : null,
@@ -2351,6 +2358,116 @@ async function weatherRoute(url, ctx) {
       daily: { date: w.daily?.time || [], sunrise: w.daily?.sunrise || [], sunset: w.daily?.sunset || [] },
     };
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* /api/aircraft: one plane, by registration or transponder code        */
+/* ------------------------------------------------------------------ */
+
+// Who identifies us to Planespotters, as their API asks: the app and where to reach it.
+const PS_UA = "Track/1.0 (+https://parth8.github.io/track/)";
+
+/** "VT-IIK", "VTIIK", "N123AB", "G-EUUA", "A6-EDA" → the registration, upper case; else null. */
+export function cleanReg(v) {
+  const r = String(v || "").toUpperCase().replace(/\s+/g, "");
+  if (r.length < 4 || r.length > 8) return null;
+  if (/^[A-Z0-9]{1,3}-[A-Z0-9]{1,5}$/.test(r)) return r; // with its dash: VT-IIK, A6-EUA
+  if (/^N\d{1,5}[A-Z]{0,2}$/.test(r)) return r; // US registrations have none: N784AV
+  if (/^[A-Z][A-Z0-9]{3,6}$/.test(r) && !/^[A-Z0-9]{2}\d{1,4}[A-Z]?$/.test(r)) return r; // typed without it: VTIIK
+  return null;
+}
+
+/** Ways a registration typed without its dash may be written: VTIIK → VT-IIK, then V-TIIK. */
+export const regGuesses = (r) => (r.includes("-") || /^N\d/.test(r) ? [r] : [r, `${r.slice(0, 2)}-${r.slice(2)}`, `${r.slice(0, 1)}-${r.slice(1)}`]);
+
+/** The plane's day from its own FlightAware page: what it flies from yesterday to two days ahead. */
+export function tailFlights(data, now = Date.now()) {
+  const main = Object.values(data?.flights || {})[0];
+  if (!main || main.unknown) return [];
+  // The page's own flight gives the airline's IATA code for its ICAO one (IGO → 6E)
+  const icao = String(main.displayIdent || main.ident || "").match(/^[A-Z]{3}/)?.[0];
+  const iata = String(main.iataIdent || "").match(/^[A-Z0-9]{2}/)?.[0];
+  const rows = [main, ...(main.activityLog?.flights || [])];
+  const seen = new Set();
+  return rows
+    .filter((r) => r?.gateDepartureTimes?.scheduled)
+    .map((r) => {
+      const t = { out: faSet(r.gateDepartureTimes), off: faSet(r.takeoffTimes), on: faSet(r.landingTimes), in: faSet(r.gateArrivalTimes) };
+      const ident = r.displayIdent || r.ident || "";
+      const num = ident.replace(/^[A-Z]{3}/, "");
+      const code = icao && iata && ident.startsWith(icao) ? iata : Object.entries(AIRLINE_ICAO).find(([, v]) => ident.startsWith(v))?.[0];
+      return {
+        number: code ? `${code} ${num}` : ident,
+        ident,
+        from: { code: r.origin?.iata || r.origin?.altIdent || "", city: String(r.origin?.friendlyLocation || "").split(",")[0], tz: faTz(r.origin) },
+        to: { code: r.destination?.iata || r.destination?.altIdent || "", city: String(r.destination?.friendlyLocation || "").split(",")[0], tz: faTz(r.destination) },
+        phase: faPhase(r),
+        times: t,
+        date: faDay(r),
+      };
+    })
+    .filter((f) => {
+      const k = `${f.ident}|${f.times.out.sched}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      const at = Date.parse(f.times.out.sched);
+      return at > now - 30 * 3600000 && at < now + 54 * 3600000;
+    })
+    .sort((a, b) => Date.parse(a.times.out.sched) - Date.parse(b.times.out.sched));
+}
+
+async function aircraftRoute(url, ctx, env) {
+  let reg = cleanReg(url.searchParams.get("reg"));
+  let hex = (url.searchParams.get("hex") || "").toLowerCase();
+  if (hex && !/^[0-9a-f]{6}$/.test(hex)) throw new ApiError(400, "invalid_hex", "A transponder code has 6 letters and numbers.");
+  if (!reg && !hex) throw new ApiError(400, "invalid_reg", "Registrations look like VT-IIK, N12345 or G-EUUA.");
+  const getJson = (u, ua = UA) =>
+    getWithRetry(u, { headers: { "User-Agent": ua, Accept: "application/json" } }, { timeout: 6000, retries: 0 })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+  // Transponder code from the registration (kept a month)
+  if (!hex && reg) {
+    const hx = await cached(ctx, `reghex/${reg}`, 30 * 86400, async () => {
+      for (const g of regGuesses(reg)) {
+        const r = await getWithRetry(`https://hexdb.io/reg-hex?reg=${encodeURIComponent(g)}`, { headers: { "User-Agent": UA } }, { timeout: 6000, retries: 0 }).catch(() => null);
+        const t = r?.ok ? (await r.text()).trim() : "";
+        if (/^[0-9A-F]{6}$/i.test(t)) return { hex: t.toLowerCase(), status: {} };
+      }
+      return { hex: null, status: {} };
+    }).catch(() => null);
+    hex = hx?.hex || "";
+  }
+  // What it is (kept a month): maker, exact variant, owner
+  const id = hex ? await cached(ctx, `acid/${hex}`, 30 * 86400, async () => ({ ...((await getJson(`https://hexdb.io/api/v1/aircraft/${hex}`)) || {}), status: {} })).catch(() => null) : null;
+  if (id?.Registration && (!reg || !reg.includes("-"))) reg = cleanReg(id.Registration) || reg;
+  if (!reg) throw new ApiError(404, "not_found", "No plane found with that code.");
+  // A photo of this very plane, with its photographer (kept a day)
+  const ph = await cached(ctx, `acphoto/${reg}`, 86400, async () => {
+    const d = await getJson(`https://api.planespotters.net/pub/photos/reg/${encodeURIComponent(reg)}`, PS_UA);
+    const p = d?.photos?.[0];
+    return { photo: p ? { src: p.thumbnail_large?.src || p.thumbnail?.src, link: p.link, by: p.photographer || null } : null, status: {} };
+  }).catch(() => null);
+  // What it flies, from its own FlightAware page (a minute's copy, shared)
+  const tailIdent = reg.replace(/-/g, "");
+  const page = env.FA_PAGE !== "off" ? await faPage(ctx, tailIdent, url.searchParams.get("fresh") === "1").catch(() => null) : null;
+  const main = Object.values(page?.flights || {})[0];
+  const flights = page ? tailFlights(page) : [];
+  const type = id?.ICAOTypeCode || main?.aircraft?.type || null;
+  const position = await livePosition(ctx, { callsign: null, aircraft: { hex: hex || null, reg } }).catch(() => null);
+  return {
+    reg,
+    hex: hex || null,
+    maker: id?.Manufacturer || main?.aircraft?.typeDetails?.manufacturer || null,
+    model: aircraftName(type) || main?.aircraft?.friendlyType || null,
+    variant: id?.Type || null,
+    icaoType: type,
+    owner: id?.RegisteredOwners || null,
+    operator: id?.OperatorFlagCode || null,
+    photo: ph?.photo || null,
+    flights,
+    position: position && ((position.altFt ?? 0) > 1500 || (position.speedKmh ?? 0) > 220) ? position : null,
+    status: { checkedAt: new Date().toISOString() },
+  };
 }
 
 /* ------------------------------------------------------------------ */

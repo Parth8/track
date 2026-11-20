@@ -4,7 +4,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import worker, { extractPnr, trackOf, airportDelaysOf, faPageData, faPageFlight, faPageInbound, boardRow, icaoFromSearch } from "../worker/worker.js";
+import worker, { extractPnr, trackOf, airportDelaysOf, faPageData, faPageFlight, faPageInbound, boardRow, icaoFromSearch, cleanReg, regGuesses, tailFlights } from "../worker/worker.js";
 import { fidsAnswer, flightAnswer, MemoryKV } from "./fids.mjs";
 
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"));
@@ -1271,4 +1271,22 @@ test("flightaware page: a flight that doesn't operate that day is a plain 'not f
   } finally {
     Date.now = realNow;
   }
+});
+
+/* ---------- planes ---------- */
+
+test("planes: registrations are told apart from flight numbers", () => {
+  for (const r of ["VT-IIK", "A6-EUA", "N784AV", "G-EUUA", "VTIIK"]) assert.ok(cleanReg(r), r);
+  for (const r of ["6E6254", "AI101", "EK500", "QP1381", "", "AB"]) assert.equal(cleanReg(r), null, r);
+  assert.deepEqual(regGuesses("VTIIK"), ["VTIIK", "VT-IIK", "V-TIIK"]);
+  assert.deepEqual(regGuesses("N784AV"), ["N784AV"]);
+});
+
+test("planes: a plane's day from its own FlightAware page, with familiar flight numbers", () => {
+  const data = faPageData(readFileSync(new URL("./fixtures/fa-page-tail.html", import.meta.url), "utf8"));
+  const list = tailFlights(data, Date.parse("2026-11-20T00:00:00Z"));
+  assert.ok(list.length >= 4);
+  assert.ok(list.every((f) => /^6E \d+$/.test(f.number)), "IndiGo's code, not IGO");
+  assert.ok(list.every((f, i) => !i || Date.parse(list[i - 1].times.out.sched) <= Date.parse(f.times.out.sched)), "in order");
+  assert.ok(list.every((f) => f.from.code && f.to.code && f.date));
 });

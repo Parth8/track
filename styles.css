@@ -7316,3 +7316,180 @@ textarea.jn-input {
 .leg-chips {
   flex: none;
 }
+
+/* ============================================================
+   Planes: maker badges, the plane card and page
+   ============================================================ */
+.maker {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: var(--hair);
+  color: var(--ink);
+}
+.maker-airbus {
+  background: #dfe9fb;
+  color: #12387a;
+}
+.maker-boeing {
+  background: #dfe4ee;
+  color: #1c2a4a;
+}
+.maker-atr,
+.maker-dehavilland {
+  background: #e3f2ea;
+  color: #1f5a40;
+}
+.maker-embraer,
+.maker-bombardier {
+  background: #f3e6dc;
+  color: #7a3f12;
+}
+:root[data-theme="dark"] .maker-airbus,
+:root[data-theme="dark"] .maker-boeing {
+  background: #24324d;
+  color: #d6e2ff;
+}
+.plane-make {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 22px;
+}
+.plane-make strong {
+  font-weight: 800;
+}
+.plane-facts {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: var(--ink-soft);
+  line-height: 1.45;
+}
+.plane-dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 16px;
+  margin: 14px 0 0;
+  font-size: 14px;
+}
+.plane-dl dt {
+  color: var(--muted);
+}
+.plane-dl dd {
+  margin: 0;
+  font-weight: 700;
+  text-align: right;
+  color: var(--ink);
+}
+.plane-now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 0;
+  font-weight: 700;
+  color: var(--deep);
+}
+.plane-photo {
+  margin: 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--hair);
+}
+.plane-photo img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  object-fit: cover;
+}
+.plane-photo figcaption {
+  padding: 6px 12px 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--card);
+}
+.plane-photo figcaption a {
+  color: inherit;
+}
+.plane-flights {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pf-row a {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  text-decoration: none;
+  color: inherit;
+}
+.pf-row + .pf-row a {
+  border-top: 1px solid var(--hair);
+}
+.pf-row.landed {
+  opacity: 0.7;
+}
+.pf-when b,
+.pf-route b {
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.pf-when small,
+.pf-route small {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plane-sec .plane-make {
+  font-size: 18px;
+}
+.plane-usual {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--lav-tint);
+  color: var(--lav-ink);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.plane-swap {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--apricot-tint);
+  color: var(--apricot-ink);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.plane-link {
+  display: inline-block;
+  margin-top: 12px;
+  font-weight: 700;
+}
+.maker-filter {
+  margin: 0 0 10px;
+}
+.maker-note {
+  margin: -2px 0 12px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.fc-meta .maker {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  vertical-align: 1px;
+}

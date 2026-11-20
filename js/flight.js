@@ -3,6 +3,7 @@ import { icons, weatherLook, bodyType } from "./icons.js";
 import { endBadge, tripFacts, signal } from "./marks.js";
 import { zoneChip, zoneName, offsetMin, tzHintSeen, deviceZone } from "./tz.js";
 import { conditions, forecastAt, rough, wxWords, skyWords } from "./airwx.js";
+import { TYPES, makerOf, makerBadge, typeLine, usualType, planePhoto } from "./aircraft.js";
 import { flightTrips, addJourney, updateJourney, flightJourney } from "./journeys.js";
 import { historySummary, turnaround, inboundAtGate, ON_TIME_MIN } from "./flight-insights.js";
 
@@ -562,6 +563,50 @@ export function renderFlight(f) {
     blocks.inbound.classList.add("inbound-card");
   }
 
+  /* ---------------- your plane: what it is, which one usually flies this, the exact one when known ---------------- */
+  const code = (f.aircraft?.code || "").toUpperCase();
+  const typeName = (c) => (TYPES[c] ? `${TYPES[c].maker} ${TYPES[c].name}` : null);
+  const modelName = typeName(code) || f.aircraft?.model || null;
+  const maker = f.aircraft?.maker || makerOf(code) || makerOf(f.aircraft?.model);
+  const usual = usualType(f.history, typeName);
+  // A plane swap since you saved the trip: for someone who chose this flight for its plane, that's the news
+  const trip = flightTrips(f.number, f.date)[0];
+  // Same maker and model counts as the same plane, however precisely each source names it (A320 / A320neo)
+  const family = (n) => String(n || "").toLowerCase().replace(/^(airbus|boeing|atr|embraer)\s+/, "").replace(/\s*(neo|ceo)$/, "").trim();
+  const swapped = !!(trip?.aircraft && modelName && makerOf(trip.aircraft) && (makerOf(trip.aircraft) !== maker || family(trip.aircraft) !== family(modelName)));
+  let plane = null;
+  if (modelName || f.aircraft?.reg) {
+    const reg = f.aircraft?.reg || null;
+    const regSlot = h("div", { class: "plane-reg" });
+    const body = [
+      swapped ? h("p", { class: "plane-swap", text: `The plane has changed since you saved this trip: it was ${trip.aircraft}, it's now ${modelName}.` }) : null,
+      h("p", { class: "plane-make" }, makerBadge(maker), h("strong", { text: modelName ? modelName.replace(new RegExp(`^${maker} `), "") : "Plane to be confirmed" })),
+      typeLine(code) ? h("p", { class: "plane-facts", text: typeLine(code) }) : null,
+      usual ? h("p", { class: "plane-usual", text: `This flight lately: ${usual.text}.${usual.makers.length > 1 ? " The airline doesn't always use the same maker on it." : ""}` }) : null,
+      regSlot,
+    ];
+    regSlot.append(
+      reg
+        ? h("p", { class: "plane-facts" }, "Tonight's plane: ", h("strong", { class: "tn", text: reg }), ". ", h("a", { class: "plane-link", href: `?m=flight&reg=${reg}`, text: `See ${reg} and its day ›` }))
+        : h("p", { class: "plane-facts", text: "The airline picks the exact plane on the day. Its registration, photo and where it's been show here once it's assigned." })
+    );
+    blocks.plane = fold("plane", "Your plane", [maker, modelName ? modelName.replace(new RegExp(`^${maker} `), "") : null, reg].filter(Boolean).join(" · "), body, true);
+    blocks.plane.classList.add("plane-sec");
+    if (swapped) blocks.banner.append(sub(`Plane changed: now ${modelName}, was ${trip.aircraft}.`));
+    if (reg)
+      plane = {
+        reg,
+        apply: (a) => {
+          if (!a) return;
+          const facts = [a.variant ? `exact model ${a.variant}` : null, a.owner ? `owned by ${a.owner}` : null].filter(Boolean).join(", ");
+          regSlot.replaceChildren(
+            planePhoto(a.photo, a.reg) || "",
+            h("p", { class: "plane-facts" }, "Tonight's plane: ", h("strong", { class: "tn", text: a.reg }), facts ? `, ${facts}.` : ".", " ", h("a", { class: "plane-link", href: `?m=flight&reg=${a.reg}`, text: `See ${a.reg} and its day ›` }))
+          );
+        },
+      };
+  }
+
   /* ---------------- the last two weeks of this flight ---------------- */
   const hist = historySummary(f.history);
   if (hist && phase !== "air") {
@@ -807,9 +852,9 @@ export function renderFlight(f) {
   /* ---------------- order by phase ---------------- */
   const order =
     {
-      pre: ["head", "banner", "inbound", "route", "mine", "times", "map", "history"],
-      air: ["head", "map", "stats", "profile", "banner", "route", "mine", "times"],
-      landed: ["head", "banner", "belt", "share", "route", "mine", "times", "map", "history"],
+      pre: ["head", "banner", "inbound", "route", "mine", "plane", "times", "map", "history"],
+      air: ["head", "map", "stats", "profile", "banner", "route", "mine", "plane", "times"],
+      landed: ["head", "banner", "belt", "share", "route", "mine", "plane", "times", "map", "history"],
       cancelled: ["head", "banner", "route", "times", "map"],
       diverted: ["head", "banner", "map", "route", "times"],
     }[phase] || ["head", "banner", "route", "times", "map"];
@@ -930,7 +975,7 @@ export function renderFlight(f) {
       for (const t of ticks) t.el.textContent = t.fmt(Date.parse(t.target) - Date.now());
     }, 20000);
   }
-  return { node, map, currentRow: null, weather, airwx, share, island, anchor: blocks.banner };
+  return { node, map, currentRow: null, weather, airwx, plane, share, island, anchor: blocks.banner };
 }
 
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);

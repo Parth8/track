@@ -6,6 +6,7 @@ import { h, svg, hm, timeNode, addDays, todayIn, IST, longDate, duration, fmtMin
 import { icons, art } from "./icons.js";
 import { api, ApiError } from "./api.js";
 import { loadAirports, airportByCode } from "./airports.js";
+import { makerOf, makerBadge } from "./aircraft.js";
 import { shortDay, weekday, nameSize, errIcon } from "./finder.js";
 
 const today = () => todayIn(IST);
@@ -160,7 +161,7 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
         h("span", { class: "tc-codes" }, h("span", { text: [r.from, f.dep.terminal ? `T${f.dep.terminal}` : null].filter(Boolean).join(" · ") }), h("span", { text: r.to })),
         arrShift > 0 ? h("span", { class: "tc-night" }, svg(icons.moon), "Overnight") : null,
         h("span", { class: "tc-name" }, h("span", { class: "tc-no tn", text: f.number }), h("span", { text: f.airline.name })),
-        f.aircraft ? h("span", { class: "fc-meta", text: f.aircraft }) : null
+        f.aircraft ? h("span", { class: "fc-meta" }, makerBadge(makerOf(f.aircraft)), " ", f.aircraft) : null
       ),
       h("span", { class: "tc-foot", "aria-hidden": "true" }, h("span", { class: "tc-go" }, "Track live", svg(icons.next)))
     );
@@ -172,7 +173,7 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
   function paint() {
     const { r, data } = current;
     const nodes = [head(r, data)];
-    const flights = data.flights || [];
+    let flights = data.flights || [];
     const tMin = minutesOf(r.time);
     const isToday = r.date === today();
 
@@ -202,6 +203,39 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
         if (timed.filter((f) => f.durationMin === fastest.durationMin).length === 1) add(fastest, { cls: "info", text: "Shortest" });
       }
 
+      // Which maker's planes: for anyone who'd rather fly an Airbus, or a Boeing. Kept on this device.
+      const makers = [...new Set(flights.map((f) => makerOf(f.aircraft)).filter(Boolean))];
+      let pref = makerPref();
+      if (pref && !makers.includes(pref)) pref = null;
+      const all = flights;
+      if (pref) flights = flights.filter((f) => makerOf(f.aircraft) === pref);
+      if (makers.length >= 2) {
+        const opts = [["", "Any plane"], ...makers.filter((m) => ["Airbus", "Boeing", "ATR", "Embraer"].includes(m)).map((m) => [m, m])];
+        nodes.push(
+          h(
+            "div",
+            { class: "segmented maker-filter", role: "radiogroup", "aria-label": "Planes made by" },
+            opts.map(([k, label]) =>
+              h(
+                "button",
+                {
+                  type: "button",
+                  role: "radio",
+                  "aria-checked": String((pref || "") === k),
+                  on: {
+                    click: () => {
+                      setMakerPref(k || null);
+                      paint();
+                    },
+                  },
+                },
+                label
+              )
+            )
+          )
+        );
+        if (pref) nodes.push(h("p", { class: "maker-note", text: flights.length ? `${flights.length} of ${all.length} flights use ${pref} planes, going by the type each one is planned with. Airlines can swap planes; the flight's own page says if they do.` : `None of these ${all.length} flights is planned with ${pref === "ATR" ? "an" : "a"} ${pref} plane. Tap Any plane to see them all.` }));
+      }
       const earlier = tMin == null ? [] : flights.filter((f) => minutesOf(f.dep.local) < tMin);
       const later = flights.filter((f) => !earlier.includes(f));
       const showEarlier = current.expanded || !later.length;
@@ -380,4 +414,21 @@ export function createFlightResults({ root, title, sub, navigate, toast, footer 
       toast("Showing the return journey");
     },
   };
+}
+
+/** Which maker's planes you prefer to see, kept on this device. */
+function makerPref() {
+  try {
+    return localStorage.getItem("planeMaker") || null;
+  } catch {
+    return null;
+  }
+}
+function setMakerPref(v) {
+  try {
+    if (v) localStorage.setItem("planeMaker", v);
+    else localStorage.removeItem("planeMaker");
+  } catch {
+    /* not kept */
+  }
 }
